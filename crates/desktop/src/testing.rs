@@ -16,8 +16,9 @@ use chrono::{DateTime, Utc};
 use client_core::session::Connection;
 use client_core::testing::{FakeGit, FakeGitDiffServer};
 use gpui::{
-    App, AppContext, Bounds, Entity, Modifiers, MouseButton, Pixels, ScrollDelta, ScrollWheelEvent, Size,
-    SystemNotificationResponse, TestAppContext, VisualTestContext, WindowHandle, point, px, size,
+    App, AppContext, Bounds, Entity, KeyUpEvent, Keystroke, Modifiers, MouseButton, Pixels, ScrollDelta,
+    ScrollWheelEvent, Size, SystemNotificationResponse, TestAppContext, VisualTestContext, WindowHandle, point, px,
+    size,
 };
 use std::collections::{HashMap, VecDeque};
 use std::io;
@@ -333,6 +334,14 @@ impl DesktopHarness {
         self.draw(cx);
     }
 
+    /// Presses and releases one key, including the keyup that activates focused buttons.
+    pub fn press_key(&self, cx: &mut TestAppContext, key: &str) {
+        self.simulate_keystrokes(cx, key);
+        VisualTestContext::from_window(*self.window, cx)
+            .simulate_event(KeyUpEvent { keystroke: Keystroke::parse(key).expect("a valid test keystroke") });
+        self.draw(cx);
+    }
+
     pub fn simulate_input(&self, cx: &mut TestAppContext, text: &str) {
         cx.simulate_input(*self.window, text);
         self.draw(cx);
@@ -342,6 +351,18 @@ impl DesktopHarness {
     pub fn click(&self, cx: &mut TestAppContext, selector: &'static str) -> Result<(), HarnessError> {
         let bounds = self.bounds(cx, selector).ok_or(HarnessError::MissingElement(selector))?;
         VisualTestContext::from_window(*self.window, cx).simulate_click(bounds.center(), Modifiers::default());
+        self.draw(cx);
+        Ok(())
+    }
+
+    /// Moves the pointer over the centre of the element tagged with `selector`.
+    pub fn hover(&self, cx: &mut TestAppContext, selector: &'static str) -> Result<(), HarnessError> {
+        let bounds = self.bounds(cx, selector).ok_or(HarnessError::MissingElement(selector))?;
+        VisualTestContext::from_window(*self.window, cx).simulate_mouse_move(
+            bounds.center(),
+            None,
+            Modifiers::default(),
+        );
         self.draw(cx);
         Ok(())
     }

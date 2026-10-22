@@ -111,6 +111,7 @@ impl Transcript {
         let id = item.id();
         let expanded = self.expanded.contains(&id);
         let toggle = cx.listener(move |this, _, _, cx| this.toggle(id, index, cx));
+        let is_tool = matches!(item.content(), ConversationContent::Tool(_));
         let content = match item.content() {
             ConversationContent::User(_) => div()
                 .px_3()
@@ -138,7 +139,7 @@ impl Transcript {
             .debug_selector(move || format!("transcript-row-{index}"))
             .w_full()
             .px_4()
-            .py_2()
+            .when(!is_tool, Styled::py_2)
             .child(div().w_full().max_w(rem(CONTENT_MAX_WIDTH)).mx_auto().child(content))
             .into_any_element()
     }

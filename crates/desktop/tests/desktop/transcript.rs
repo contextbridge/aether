@@ -3,7 +3,7 @@ use acp_utils::testing::FakeAgent;
 use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder, FakeConnector};
 use aether_desktop::threads::{Thread, ThreadStatus};
 use agent_client_protocol::schema::v2 as acp;
-use gpui::{Entity, TestAppContext};
+use gpui::{Entity, TestAppContext, px};
 
 #[gpui::test]
 fn a_code_block_in_a_reply_copies_its_code(cx: &mut TestAppContext) {
@@ -50,7 +50,55 @@ fn a_tool_card_unfolds_its_input_and_output(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn a_tool_card_shows_the_file_changes_its_tool_made(cx: &mut TestAppContext) {
+fn a_tool_disclosure_reserves_a_trailing_slot_without_shifting_on_hover(cx: &mut TestAppContext) {
+    let tool = acp::ToolCallUpdate::new("call-1")
+        .title("Read file")
+        .status(acp::ToolCallStatus::Completed)
+        .content(vec![acp::ToolCallContent::from("file contents")]);
+    let harness = harness_with(cx, updating("alpha-session", vec![acp::SessionUpdate::ToolCallUpdate(tool)]));
+    let thread = start_thread(&harness, cx, "project-alpha-new-thread");
+    send(&harness, cx, &thread, "read it");
+    harness.hover(cx, "sidebar").unwrap();
+
+    let row = harness.bounds(cx, "tool-card-1").unwrap();
+    let slot = harness.bounds(cx, "tool-disclosure-1").expect("the disclosure has a reserved slot");
+    let title = harness.bounds(cx, "tool-title-1").unwrap();
+    assert!(slot.origin.x > row.center().x, "the disclosure is on the right, not the leading edge");
+    assert!(slot.right() <= row.right());
+
+    harness.hover(cx, "tool-card-1").unwrap();
+    assert_eq!(harness.bounds(cx, "tool-disclosure-1").unwrap(), slot);
+    assert_eq!(harness.bounds(cx, "tool-title-1").unwrap(), title, "hovering does not shift the label");
+
+    harness.click(cx, "tool-card-1").unwrap();
+    harness.hover(cx, "sidebar").unwrap();
+    assert!(harness.bounds(cx, "tool-details-1").is_some());
+    let expanded_slot = harness.bounds(cx, "tool-disclosure-1").unwrap();
+    assert_eq!(expanded_slot.origin.x, slot.origin.x);
+    assert_eq!(expanded_slot.size, slot.size);
+}
+
+#[gpui::test]
+fn a_focused_tool_row_can_be_toggled_with_the_keyboard(cx: &mut TestAppContext) {
+    let tool = acp::ToolCallUpdate::new("call-1")
+        .title("Read file")
+        .status(acp::ToolCallStatus::Completed)
+        .content(vec![acp::ToolCallContent::from("file contents")]);
+    let harness = harness_with(cx, updating("alpha-session", vec![acp::SessionUpdate::ToolCallUpdate(tool)]));
+    let thread = start_thread(&harness, cx, "project-alpha-new-thread");
+    send(&harness, cx, &thread, "read it");
+    harness.click(cx, "tool-card-1").unwrap();
+    harness.hover(cx, "sidebar").unwrap();
+
+    harness.press_key(cx, "space");
+    assert!(harness.bounds(cx, "tool-details-1").is_none(), "Space folds the focused row");
+
+    harness.press_key(cx, "enter");
+    assert!(harness.bounds(cx, "tool-details-1").is_some(), "Enter unfolds the focused row");
+}
+
+#[gpui::test]
+fn a_tool_row_summarizes_changes_and_only_unfolds_the_patch_on_demand(cx: &mut TestAppContext) {
     let patch = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1 +1 @@\n-old\n+new\n";
     let diff = acp::Diff::patch(patch, vec![acp::DiffChange::modify("/alpha/src/lib.rs")]);
     let edit = acp::ToolCallUpdate::new("call-1")
@@ -64,8 +112,88 @@ fn a_tool_card_shows_the_file_changes_its_tool_made(cx: &mut TestAppContext) {
 
     send(&harness, cx, &thread, "edit it");
 
-    assert!(harness.bounds(cx, "tool-changes-1").is_some(), "the edit shows its patch while folded");
-    assert!(harness.bounds(cx, "tool-changes-2").is_none(), "a tool that changed nothing shows no changes");
+    assert!(harness.bounds(cx, "tool-change-summary-1").is_some(), "the edit summarizes its changes while folded");
+    assert!(harness.bounds(cx, "tool-changes-1").is_none(), "patches start folded");
+    assert!(harness.bounds(cx, "tool-change-summary-2").is_none(), "a read has no change summary");
+
+    harness.click(cx, "tool-card-1").unwrap();
+    assert!(harness.bounds(cx, "tool-changes-1").is_some(), "expanding reveals the patch");
+
+    harness.click(cx, "tool-card-1").unwrap();
+    assert!(harness.bounds(cx, "tool-changes-1").is_none(), "folding hides the patch again");
+}
+
+#[gpui::test]
+fn consecutive_tool_rows_are_compact_and_scale_with_the_interface(cx: &mut TestAppContext) {
+    let updates = (1..=2)
+        .map(|id| {
+            acp::SessionUpdate::ToolCallUpdate(
+                acp::ToolCallUpdate::new(format!("call-{id}"))
+                    .title("Read file")
+                    .status(acp::ToolCallStatus::Completed),
+            )
+        })
+        .collect();
+    let harness = harness_with(cx, updating("alpha-session", updates));
+    let thread = start_thread(&harness, cx, "project-alpha-new-thread");
+    send(&harness, cx, &thread, "read both");
+
+    for _ in 0..2 {
+        let row = harness.bounds(cx, "tool-card-1").unwrap();
+        let next = harness.bounds(cx, "tool-card-2").unwrap();
+        let scale = harness.rem_size(cx) / px(16.0);
+        assert!(
+            (row.size.height - px(28.0 * scale)).abs() <= px(0.5),
+            "the row scales to 28px, snapped to a physical pixel"
+        );
+        assert_eq!(next.origin.y - row.bottom(), px(0.0), "consecutive calls form one activity flow");
+        harness.simulate_keystrokes(cx, "secondary-=");
+    }
+}
+
+#[gpui::test]
+fn long_tool_titles_leave_change_counts_inside_a_narrow_transcript(cx: &mut TestAppContext) {
+    let diff = acp::Diff::patch(
+        "+++ b/src/lib.rs\n@@ -1 +1 @@\n-old\n+new\n",
+        vec![acp::DiffChange::modify("/alpha/src/lib.rs")],
+    );
+    let edit = acp::ToolCallUpdate::new("call-1")
+        .title("Update a very long file name and verify the changes throughout the entire workspace".repeat(4))
+        .status(acp::ToolCallStatus::Completed)
+        .content(vec![acp::ToolCallContent::from(diff)]);
+    let harness = harness_with(cx, updating("alpha-session", vec![acp::SessionUpdate::ToolCallUpdate(edit)]));
+    let thread = start_thread(&harness, cx, "project-alpha-new-thread");
+    harness.resize(cx, 640.0, 600.0);
+    send(&harness, cx, &thread, "edit it");
+
+    let row = harness.bounds(cx, "tool-card-1").unwrap();
+    let summary = harness.bounds(cx, "tool-change-summary-1").unwrap();
+    let transcript = harness.bounds(cx, "transcript").unwrap();
+    assert!(row.right() <= transcript.right(), "the tool row fits the transcript");
+    assert!(summary.right() <= row.right(), "change counts are not pushed out by the title");
+    assert!(summary.size.width > px(0.0), "change counts stay visible");
+    harness.click(cx, "tool-card-1").unwrap();
+    assert!(harness.bounds(cx, "tool-changes-1").is_some());
+}
+
+#[gpui::test]
+fn an_expanded_tool_row_shows_the_entire_patch(cx: &mut TestAppContext) {
+    let additions = "+new line\n".repeat(24);
+    let patch = format!("+++ b/src/lib.rs\n@@ -0,0 +1,24 @@\n{additions}");
+    let diff = acp::Diff::patch(patch, vec![acp::DiffChange::modify("/alpha/src/lib.rs")]);
+    let edit = acp::ToolCallUpdate::new("call-1")
+        .title("Edit file")
+        .status(acp::ToolCallStatus::Completed)
+        .content(vec![acp::ToolCallContent::from(diff)]);
+    let harness = harness_with(cx, updating("alpha-session", vec![acp::SessionUpdate::ToolCallUpdate(edit)]));
+    let thread = start_thread(&harness, cx, "project-alpha-new-thread");
+    send(&harness, cx, &thread, "edit it");
+
+    harness.click(cx, "tool-card-1").unwrap();
+
+    let changes = harness.bounds(cx, "tool-changes-1").expect("the patch is visible");
+    let scale = harness.rem_size(cx) / px(16.0);
+    assert!(changes.size.height >= px(26.0 * 16.0 * scale), "all patch lines are shown");
 }
 
 #[gpui::test]

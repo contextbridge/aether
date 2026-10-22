@@ -66,7 +66,10 @@ impl StatusDot {
                 .bg(colors.positive)
                 .with_animation(
                     selector.clone(),
-                    Animation::new(PULSE_PERIOD).repeat_synced().with_easing(pulsating_between(0.4, 1.0)),
+                    Animation::new(PULSE_PERIOD)
+                        .repeat_synced()
+                        .with_max_fps(10.0)
+                        .with_easing(pulsating_between(0.4, 1.0)),
                     Styled::opacity,
                 )
                 .into_any_element(),

@@ -6,8 +6,25 @@ use aether_desktop::threads::ThreadStatus;
 use aether_sessions::testing::TestStore;
 use agent_client_protocol::schema::v2::SessionId;
 use chrono::{Duration, Utc};
-use gpui::TestAppContext;
+use gpui::{AppContext, TestAppContext};
 use std::path::{Path, PathBuf};
+
+#[gpui::test]
+fn a_busy_status_dot_does_not_request_every_display_frame(cx: &mut TestAppContext) {
+    let harness = DesktopHarnessBuilder::default().project("/alpha").build(cx);
+    harness.click(cx, "project-alpha-new-thread").unwrap();
+    assert!(harness.bounds(cx, "thread-row-0-status-running").is_some());
+    let window = cx.windows()[0];
+    cx.update_window(window, |_, window, cx| window.simulate_next_frame(cx)).unwrap();
+    cx.run_until_parked();
+
+    for _ in 0..3 {
+        let callbacks = cx.update_window(window, |_, window, cx| window.simulate_next_frame(cx)).unwrap();
+        assert_eq!(callbacks, 0, "the pulse should be timer-driven, not display-frame-driven");
+        cx.executor().advance_clock(std::time::Duration::from_millis(105));
+        cx.run_until_parked();
+    }
+}
 
 #[gpui::test]
 fn added_projects_list_their_saved_sessions_and_projects_only_history_knows_about_are_hidden(cx: &mut TestAppContext) {

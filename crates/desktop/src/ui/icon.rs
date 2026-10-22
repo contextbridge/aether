@@ -1,5 +1,10 @@
 use super::tokens::{ICON_SIZE, rem};
-use gpui::{App, Hsla, IntoElement, RenderOnce, SharedString, Styled, Window, prelude::*, svg};
+use gpui::{
+    Animation, AnimationExt, App, Hsla, IntoElement, RenderOnce, SharedString, Styled, Transformation, Window,
+    prelude::*, radians, svg,
+};
+use std::f32::consts::TAU;
+use std::time::Duration;
 
 /// The Lucide icons the app uses, bundled into the binary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,17 +77,30 @@ impl IconName {
 pub struct Icon {
     name: IconName,
     size: f32,
-    color: Hsla,
+    color: Option<Hsla>,
     hover: Option<(SharedString, Hsla)>,
+    spin: Option<SharedString>,
 }
 
 impl Icon {
     pub fn new(name: IconName, color: Hsla) -> Self {
-        Self { name, size: ICON_SIZE, color, hover: None }
+        Self { name, size: ICON_SIZE, color: Some(color), hover: None, spin: None }
     }
 
     pub fn size(mut self, size: f32) -> Self {
         self.size = size;
+        self
+    }
+
+    /// Uses the parent's text color, including its hover and keyboard-focus styles.
+    pub fn inherit_color(mut self) -> Self {
+        self.color = None;
+        self
+    }
+
+    /// Continuously rotates the icon, with `id` identifying its animation in the parent view.
+    pub fn spin(mut self, id: impl Into<SharedString>) -> Self {
+        self.spin = Some(id.into());
         self
     }
 
@@ -94,12 +112,20 @@ impl Icon {
 }
 
 impl RenderOnce for Icon {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        svg()
+    fn render(self, window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        let icon = svg()
             .data(self.name.svg())
             .flex_none()
             .size(rem(self.size))
-            .text_color(self.color)
-            .when_some(self.hover, |icon, (group, color)| icon.group_hover(group, move |icon| icon.text_color(color)))
+            .text_color(self.color.unwrap_or_else(|| window.text_style().color))
+            .when_some(self.hover, |icon, (group, color)| icon.group_hover(group, move |icon| icon.text_color(color)));
+        if let Some(id) = self.spin {
+            icon.with_animation(id, Animation::new(Duration::from_millis(1200)).repeat_synced(), |icon, delta| {
+                icon.with_transformation(Transformation::rotate(radians(delta * TAU)))
+            })
+            .into_any_element()
+        } else {
+            icon.into_any_element()
+        }
     }
 }
