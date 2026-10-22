@@ -1,11 +1,10 @@
 use crate::theme::DesktopTheme;
 use crate::threads::{PromptSearchEvent, Thread};
 use crate::ui::tokens::{RADIUS_CONTAINER, RADIUS_CONTROL, rem};
-use crate::ui::{ListItem, Typography, TypographyExt};
+use crate::ui::{ListRow, Typography, TypographyExt};
 use acp_utils::notifications::PromptSearchResult;
 use client_core::composer::prompt_search::PromptSearchState;
 use gpui::{ClickEvent, Context, Entity, EventEmitter, Subscription, Window, div, prelude::*};
-use gpui_base::Selectable as _;
 use gpui_base::input::{Enter, Escape, Input, InputEvent, InputState, MoveDown, MoveUp};
 
 /// A search through every prompt the agent has been sent, in any session, to send one again.
@@ -117,7 +116,7 @@ impl Render for PromptSearch {
             div().id("prompt-search-results").max_h(rem(RESULTS_HEIGHT)).overflow_y_scroll().flex().flex_col();
         for (position, result) in self.results.iter().enumerate() {
             let prompt = result.prompt.lines().next().unwrap_or_default().to_owned();
-            let row = ListItem::new(format!("prompt-search-result-{position}"), theme)
+            let row = ListRow::new(format!("prompt-search-result-{position}"), theme)
                 .selected(position == self.highlighted)
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.choose(position, cx)))
                 .child(div().flex_1().min_w_0().truncate().child(prompt));

@@ -7,7 +7,6 @@ use crate::threads::{ReviewEvent, Thread};
 use crate::ui::tokens::{BAR_HEIGHT, rem};
 use crate::ui::{Button, ButtonVariant, Typography, TypographyExt};
 use gpui::{App, AppContext, Context, Entity, StyleRefinement, Subscription, Window, div, prelude::*};
-use gpui_base::Selectable as _;
 
 /// One thread's main area: a header naming the thread and its project, above either its chat
 /// (with any question its agent waits on) or the changes it made to the working tree.

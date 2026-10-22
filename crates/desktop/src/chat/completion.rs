@@ -1,12 +1,11 @@
 use super::composer::Composer;
 use crate::fuzzy;
+use crate::ui::UiTheme;
 use crate::ui::tokens::{RADIUS_CONTAINER, rem};
-use crate::ui::{ListItem, Typography, TypographyExt};
-use clankerdiff_gpui::ui::prelude::UiTheme;
+use crate::ui::{ListRow, Typography, TypographyExt};
 use client_core::command_entry::CommandEntry;
 use client_core::composer::attachment::PromptAttachment;
 use gpui::{AnyElement, ClickEvent, Context, div, prelude::*};
-use gpui_base::Selectable as _;
 use gpui_base::input::InlineTokenSpan;
 use std::ops::Range;
 
@@ -119,7 +118,7 @@ impl CompletionMenu {
                 CompletionItem::Command(command) => (format!("/{}", command.name), command.description.clone()),
                 CompletionItem::File(file) => (file.display_name.clone(), String::new()),
             };
-            let row = ListItem::new(format!("completion-item-{position}"), *theme)
+            let row = ListRow::new(format!("completion-item-{position}"), *theme)
                 .selected(position == self.highlighted)
                 .on_click(cx.listener(move |composer, _: &ClickEvent, window, cx| {
                     composer.accept_completion(position, window, cx);

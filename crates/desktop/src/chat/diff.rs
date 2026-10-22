@@ -1,9 +1,9 @@
 use super::code::{span_styles, styled_text};
+use crate::ui::color;
 use clankerdiff_core::{
     DiffDocument, DiffError, DiffPresentation, DiffTone, PresentationOptions, RepoPath, RowKind, ViewMode,
     parse_git_diff_with_path_mapper,
 };
-use clankerdiff_gpui::style::color;
 use clankerdiff_syntax::{Fingerprint, LanguageHint, SyntaxHighlighter};
 use clankerdiff_theme::ReviewTheme;
 use gpui::{AnyElement, div, prelude::*};

@@ -4,11 +4,11 @@ use acp_utils::notifications::{SubAgentEvent, SubAgentProgressParams};
 use acp_utils::testing::FakeAgent;
 use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder, FakeConnector};
 use aether_desktop::threads::{Thread, ThreadStatus};
+use aether_desktop::ui::color;
 use aether_desktop::{DesktopTheme, ThemePair};
 use agent_client_protocol::schema::v2 as acp;
 use agent_client_protocol::{Client, ConnectionTo, JsonRpcNotification};
 use clankerdiff_core::git_patch_from_texts;
-use clankerdiff_gpui::style::color;
 use gpui::{Entity, TestAppContext, WindowAppearance, px};
 
 #[gpui::test]
@@ -484,7 +484,8 @@ fn an_expanded_tool_row_shows_the_entire_patch(cx: &mut TestAppContext) {
 
     let changes = harness.bounds(cx, "tool-changes-1").expect("the patch is visible");
     let scale = harness.rem_size(cx) / px(16.0);
-    assert!(changes.size.height >= px(26.0 * 16.0 * scale), "all patch lines are shown");
+    // The file header above the 24 added lines.
+    assert!(changes.size.height >= px(25.0 * 16.0 * scale), "all patch lines are shown");
 }
 
 #[gpui::test]

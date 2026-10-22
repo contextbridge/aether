@@ -1,6 +1,6 @@
 use crate::threads::ThreadStatus;
+use crate::ui::UiTheme;
 use crate::ui::tokens::{DOT_SIZE, rem};
-use clankerdiff_gpui::ui::prelude::UiTheme;
 use gpui::{
     Animation, AnimationExt, AnyElement, IntoElement, ParentElement, Styled, div, prelude::*, pulsating_between,
 };

@@ -23,19 +23,15 @@ mod theme;
 mod thread_view;
 pub mod threads;
 pub mod ui;
-mod window_chrome;
 
 pub use app::{
-    DEFAULT_INTERFACE_SIZE, DecreaseInterfaceSize, DesktopApp, DesktopConfig, IncreaseInterfaceSize,
-    MAX_INTERFACE_SIZE, MIN_INTERFACE_SIZE, OpenThreadSwitcher, ResetInterfaceSize, SelectNextThread,
-    SelectPreviousThread, ShowChanges, ShowChat,
+    DesktopApp, DesktopConfig, OpenThreadSwitcher, SelectNextThread, SelectPreviousThread, ShowChanges, ShowChat,
 };
 pub use menus::{About, Hide, HideOthers, Minimize, Quit, ShowAll, Zoom};
-pub use sidebar::SIDEBAR_WIDTH;
 pub use theme::{DesktopTheme, ThemePair};
 
 use aether_sessions::SessionStore;
-use clankerdiff_gpui::{DiffViewer, load_default_fonts};
+use clankerdiff_gpui::DiffViewer;
 use cli::Cli;
 use clock::SystemClock;
 use gpui::{App, AppContext, Bounds, Entity, Pixels, Size, TitlebarOptions, WindowBounds, WindowOptions, px, size};
@@ -53,8 +49,7 @@ pub fn run(cli: Cli) {
     let handle = runtime.handle().clone();
     gpui_platform::application().run(move |cx: &mut App| {
         runtime::install(cx, handle);
-        load_default_fonts(cx).expect("failed to load the bundled fonts");
-        ui::load_fonts(cx).expect("failed to load the bundled interface fonts");
+        ui::load_fonts(cx).expect("failed to load the bundled fonts");
         init(cx);
         run_loop::install(cx);
         let state_file = default_state_file();
@@ -87,6 +82,7 @@ const MIN_WINDOW_SIZE: Size<Pixels> = size(px(640.0), px(480.0));
 fn init(cx: &mut App) {
     cx.set_app_identity(APP_ID, menus::APP_NAME);
     gpui_base::init(cx);
+    ui::InterfaceSize::init(ui::interface_size::DEFAULT_INTERFACE_SIZE, cx);
     DiffViewer::bind_keys(cx);
     // Bound before the menus are installed so that the menus can show the shortcuts.
     DesktopApp::bind_keys(cx);

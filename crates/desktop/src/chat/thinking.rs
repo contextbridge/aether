@@ -1,6 +1,6 @@
+use crate::ui::UiTheme;
 use crate::ui::tokens::ICON_SIZE_SMALL;
 use crate::ui::{Icon, IconName, Typography, TypographyExt};
-use clankerdiff_gpui::ui::prelude::UiTheme;
 use gpui::{AnyElement, App, ClickEvent, Window, div, prelude::*};
 
 /// The agent's reasoning, folded into one line that says whether it is still thinking. Clicking

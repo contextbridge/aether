@@ -1,5 +1,5 @@
+use crate::ui::UiTheme;
 use crate::ui::{Icon, IconName, Typography, TypographyExt};
-use clankerdiff_gpui::ui::prelude::UiTheme;
 use gpui::{AnyElement, div, prelude::*};
 
 /// Something the app, not the agent, says in the transcript, such as a compaction, a cleared

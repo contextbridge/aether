@@ -1,4 +1,4 @@
-use clankerdiff_gpui::ui::prelude::UiTheme;
+use crate::ui::UiTheme;
 use clankerdiff_theme::ReviewTheme;
 use gpui::{App, Global, SharedString, WindowAppearance};
 use gpui_base::input::InputEditorStyle;

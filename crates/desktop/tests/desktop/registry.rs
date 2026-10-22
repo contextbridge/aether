@@ -1,7 +1,7 @@
 use aether_desktop::ThemePair;
 use aether_desktop::registry::{Disclosure, Registry, STATE_FILE, ThreadMeta};
 use agent_client_protocol::schema::v2::SessionId;
-use gpui::{AppContext, Entity, TestAppContext, px, size};
+use gpui::{AppContext, Entity, TestAppContext, px, rems, size};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -22,6 +22,7 @@ fn the_registry_reads_back_everything_it_saved(cx: &mut TestAppContext) {
         registry.set_last_selected(Some(SessionId::new("renamed")), cx);
         registry.set_theme_override(Some(theme.clone()), cx);
         registry.set_interface_size(Some(19.0), cx);
+        registry.set_sidebar_width(Some(rems(20.0)), cx);
     });
     cx.run_until_parked();
     let loaded = load(cx, dir.path());
@@ -40,6 +41,7 @@ fn the_registry_reads_back_everything_it_saved(cx: &mut TestAppContext) {
         assert_eq!(registry.last_selected(), Some(&SessionId::new("renamed")));
         assert_eq!(registry.theme_override(), Some(&theme));
         assert_eq!(registry.interface_size(), Some(19.0));
+        assert_eq!(registry.sidebar_width(), Some(rems(20.0)));
     });
 }
 

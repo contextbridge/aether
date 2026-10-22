@@ -17,9 +17,9 @@ use client_core::session::Connection;
 use client_core::testing::{FakeGit, FakeGitDiffServer};
 use gpui::{
     AnyWindowHandle, App, AppContext, Bounds, Element, ElementId, Entity, Global, GlobalElementId, HighlightStyle,
-    Hsla, InspectorElementId, IntoElement, KeyUpEvent, Keystroke, LayoutId, Modifiers, MouseButton, Pixels,
-    ScrollDelta, ScrollWheelEvent, SharedString, Size, StyledText, SystemNotificationResponse, TestAppContext,
-    VisualTestContext, Window, WindowHandle, WindowId, point, px, size,
+    Hsla, InspectorElementId, IntoElement, KeyUpEvent, Keystroke, LayoutId, Modifiers, MouseButton, MouseDownEvent,
+    MouseUpEvent, Pixels, ScrollDelta, ScrollWheelEvent, SharedString, Size, StyledText, SystemNotificationResponse,
+    TestAppContext, VisualTestContext, Window, WindowHandle, WindowId, point, px, size,
 };
 use std::collections::{HashMap, VecDeque};
 use std::io;
@@ -373,6 +373,39 @@ impl DesktopHarness {
     pub fn click(&self, cx: &mut TestAppContext, selector: &'static str) -> Result<(), HarnessError> {
         let bounds = self.bounds(cx, selector).ok_or(HarnessError::MissingElement(selector))?;
         VisualTestContext::from_window(*self.window, cx).simulate_click(bounds.center(), Modifiers::default());
+        self.draw(cx);
+        Ok(())
+    }
+
+    /// Double-clicks the centre of the element tagged with `selector`.
+    pub fn double_click(&self, cx: &mut TestAppContext, selector: &'static str) -> Result<(), HarnessError> {
+        let position = self.bounds(cx, selector).ok_or(HarnessError::MissingElement(selector))?.center();
+        let mut window = VisualTestContext::from_window(*self.window, cx);
+        for click_count in 1..=2 {
+            let modifiers = Modifiers::default();
+            window.simulate_event(MouseDownEvent {
+                position,
+                modifiers,
+                button: MouseButton::Left,
+                click_count,
+                first_mouse: false,
+            });
+            window.simulate_event(MouseUpEvent { position, modifiers, button: MouseButton::Left, click_count });
+        }
+        self.draw(cx);
+        Ok(())
+    }
+
+    /// Drags the element tagged with `selector` sideways, from its centre to `x`.
+    pub fn drag(&self, cx: &mut TestAppContext, selector: &'static str, x: Pixels) -> Result<(), HarnessError> {
+        let from = self.bounds(cx, selector).ok_or(HarnessError::MissingElement(selector))?.center();
+        let to = point(x, from.y);
+        let mut window = VisualTestContext::from_window(*self.window, cx);
+        window.simulate_mouse_down(from, MouseButton::Left, Modifiers::default());
+        // A drag starts only once the pointer has moved some way from where it was pressed.
+        window.simulate_mouse_move(from + point(px(4.0), px(0.0)), MouseButton::Left, Modifiers::default());
+        window.simulate_mouse_move(to, MouseButton::Left, Modifiers::default());
+        window.simulate_mouse_up(to, MouseButton::Left, Modifiers::default());
         self.draw(cx);
         Ok(())
     }

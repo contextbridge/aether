@@ -1,5 +1,6 @@
+use aether_desktop::sidebar::DEFAULT_SIDEBAR_WIDTH;
 use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder};
-use aether_desktop::{DEFAULT_INTERFACE_SIZE, MAX_INTERFACE_SIZE, SIDEBAR_WIDTH};
+use aether_desktop::ui::interface_size::{DEFAULT_INTERFACE_SIZE, MAX_INTERFACE_SIZE};
 use gpui::{TestAppContext, px};
 
 #[gpui::test]
@@ -51,5 +52,5 @@ fn the_interface_size_is_kept_across_launches(first: &mut TestAppContext, second
 
 fn assert_sidebar_scales(harness: &DesktopHarness, cx: &mut TestAppContext) {
     let sidebar = harness.bounds(cx, "sidebar").expect("the sidebar is painted");
-    assert_eq!(sidebar.size.width, SIDEBAR_WIDTH.to_pixels(harness.rem_size(cx)));
+    assert_eq!(sidebar.size.width, DEFAULT_SIDEBAR_WIDTH.to_pixels(harness.rem_size(cx)));
 }

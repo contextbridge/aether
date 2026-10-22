@@ -3,17 +3,16 @@
 
 use crate::theme::DesktopTheme;
 use crate::threads::Thread;
+use crate::ui::UiTheme;
 use crate::ui::tokens::{CONTENT_MAX_WIDTH, RADIUS_CONTAINER, RADIUS_CONTROL, rem};
 use crate::ui::{Button, ButtonVariant, Typography, TypographyExt};
 use acp_utils::elicitation::{FieldInput, FormError, FormField, FormFieldKind, accept_content, form_fields};
 use agent_client_protocol::schema::v2::ElicitationMode;
-use clankerdiff_gpui::ui::prelude::UiTheme;
 use client_core::elicitation::ElicitationResponder;
 use client_core::session_core::Elicitation;
 use gpui::{
     AnyElement, App, ClickEvent, Context, Entity, MouseButton, SharedString, Subscription, Window, div, prelude::*,
 };
-use gpui_base::Selectable as _;
 use gpui_base::input::{Enter, Input, InputState};
 
 /// Shows the question a thread's agent waits on, above the composer, and sends the user's answer.
@@ -264,6 +263,7 @@ impl Render for ElicitationCard {
             Draft::Unsupported => None,
         };
         let decline = Button::new("elicitation-decline", "Decline", theme)
+            .variant(ButtonVariant::Secondary)
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.decline(cx)));
         let actions = div().flex().justify_end().gap_2().children(primary).child(decline);
         let card = div()

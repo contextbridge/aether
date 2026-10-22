@@ -1,10 +1,10 @@
 use super::code::{highlight, styled_text};
 use super::diff::DiffCache;
+use crate::ui::UiTheme;
 use crate::ui::tokens::{ICON_SIZE_SMALL, RADIUS_CONTROL, ROW_HEIGHT, rem};
 use crate::ui::{CODE_FONT, Icon, IconName, Typography, TypographyExt};
 use acp_utils::conversation::{SubAgentState, ToolCall, ToolStatus};
 use agent_client_protocol::schema::v2 as acp;
-use clankerdiff_gpui::ui::prelude::UiTheme;
 use clankerdiff_syntax::{LanguageHint, SyntaxHighlighter};
 use clankerdiff_theme::ReviewTheme;
 use gpui::{AnyElement, App, ClickEvent, Role, Window, div, prelude::*};

@@ -4,10 +4,9 @@ use crate::fuzzy;
 use crate::theme::DesktopTheme;
 use crate::threads::ThreadId;
 use crate::ui::tokens::{BAR_HEIGHT, GROUP_HEIGHT, RADIUS_CONTAINER, rem};
-use crate::ui::{Icon, IconName, ListItem, Typography, TypographyExt};
+use crate::ui::{Icon, IconName, ListRow, Typography, TypographyExt};
 use agent_client_protocol::schema::v2::SessionId;
 use gpui::{AnyElement, ClickEvent, Context, Entity, EventEmitter, MouseButton, Subscription, Window, div, prelude::*};
-use gpui_base::Selectable as _;
 use gpui_base::input::{Enter, Escape, Input, InputEvent, InputState, MoveDown, MoveUp};
 use std::path::PathBuf;
 
@@ -100,7 +99,7 @@ impl ThreadSwitcher {
             SwitchTarget::Live(id) => format!("switcher-thread-{id}"),
             SwitchTarget::Saved { session_id, .. } => format!("switcher-session-{}", session_id.0),
         };
-        ListItem::new(selector, theme)
+        ListRow::new(selector, theme)
             .selected(position == self.highlighted)
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.choose(position, cx)))
             .child(div().flex_1().min_w_0().truncate().child(entry.title.clone()))

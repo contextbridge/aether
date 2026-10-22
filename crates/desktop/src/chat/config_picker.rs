@@ -1,13 +1,12 @@
 use crate::fuzzy;
 use crate::theme::DesktopTheme;
 use crate::ui::tokens::{BAR_HEIGHT, RADIUS_CONTAINER, rem};
-use crate::ui::{Icon, IconName, ListItem, Typography, TypographyExt};
+use crate::ui::{Icon, IconName, ListRow, Typography, TypographyExt};
 use client_core::session_config_view::LocalConfigValue;
 use gpui::{
     ClickEvent, Context, Entity, EventEmitter, FocusHandle, KeyBinding, NoAction, ScrollHandle, Subscription, Window,
     div, prelude::*,
 };
-use gpui_base::Selectable as _;
 use gpui_base::input::{Enter, Escape, Input, InputEvent, InputState, MoveDown, MoveUp};
 
 /// The values of one of the session's options, such as its models, to choose one from.
@@ -144,11 +143,11 @@ impl ConfigPicker {
         }
     }
 
-    fn render_value(&self, position: usize, value: &LocalConfigValue, cx: &mut Context<Self>) -> ListItem {
+    fn render_value(&self, position: usize, value: &LocalConfigValue, cx: &mut Context<Self>) -> ListRow {
         let theme = DesktopTheme::global(cx).ui();
         let colors = theme.colors;
         let current = value.value == self.current;
-        ListItem::new(format!("{}-{}", self.selector, value.value), theme)
+        ListRow::new(format!("{}-{}", self.selector, value.value), theme)
             .selected(position == self.highlighted)
             .when(!value.is_disabled, |row| {
                 row.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.choose(position, cx)))
@@ -182,7 +181,7 @@ impl Render for ConfigPicker {
         }
         let theme = DesktopTheme::global(cx).ui();
         let colors = theme.colors;
-        let rows: Vec<ListItem> = self
+        let rows: Vec<ListRow> = self
             .matches
             .clone()
             .into_iter()

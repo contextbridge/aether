@@ -1,8 +1,8 @@
 use super::config_picker::ConfigPicker;
+use crate::ui::UiTheme;
 use crate::ui::tokens::{ICON_SIZE_SMALL, RADIUS_CONTROL, ROW_HEIGHT, rem};
 use crate::ui::{Icon, IconName, Typography, TypographyExt};
 use agent_client_protocol::schema::v2 as acp;
-use clankerdiff_gpui::ui::prelude::UiTheme;
 use client_core::session_config_view::LocalConfigOption;
 use client_core::session_core::QueuedPrompt;
 use gpui::{Anchor, AnyElement, App, Div, Entity, SharedString, Window, div, prelude::*};

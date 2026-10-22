@@ -1,8 +1,8 @@
 use super::ClickHandler;
 use crate::registry::Disclosure;
+use crate::ui::UiTheme;
 use crate::ui::tokens::{DOT_SLOT, GROUP_HEIGHT, ICON_SIZE, ICON_SIZE_SMALL, RADIUS_CONTROL, rem};
-use crate::ui::{Icon, IconButton, IconName, ListItem, MenuItem, Typography, TypographyExt, with_menu};
-use clankerdiff_gpui::ui::prelude::UiTheme;
+use crate::ui::{Icon, IconButton, IconName, ListRow, MenuItem, Typography, TypographyExt, with_menu};
 use gpui::{
     AnyElement, App, ClickEvent, IntoElement, MouseButton, ParentElement, RenderOnce, SharedString, Window, div,
     prelude::*,
@@ -100,7 +100,7 @@ impl RenderOnce for ProjectSection {
         let theme = self.theme;
         let colors = theme.colors;
         let selector = format!("project-{}", self.name);
-        let hover_group = ListItem::hover_group(&selector);
+        let hover_group = ListRow::hover_group(&selector);
         let expanded = self.disclosure == Disclosure::Expanded;
         let toggle_selector = format!("{selector}-toggle");
         let toggle = div()
@@ -160,14 +160,14 @@ impl RenderOnce for ProjectSection {
                     .child(new_thread),
             );
         let show_more = self.show_more.map(|(hidden, handler)| {
-            ListItem::new(format!("{selector}-show-more"), theme).on_click(handler).child(slot()).child(
+            ListRow::new(format!("{selector}-show-more"), theme).on_click(handler).child(slot()).child(
                 div().typography(Typography::Small).text_color(colors.text_muted).child(format!("Show {hidden} more")),
             )
         });
         let archived = self.archived.map(|group| {
             let count = group.rows.len();
             let rows = if group.disclosure == Disclosure::Expanded { group.rows } else { Vec::new() };
-            let header = ListItem::new(format!("{selector}-archived"), theme)
+            let header = ListRow::new(format!("{selector}-archived"), theme)
                 .on_click(group.on_toggle)
                 .child(div().flex_none().w(rem(DOT_SLOT * 2.0)).flex().justify_center().child(chevron(
                     group.disclosure,

@@ -1,9 +1,7 @@
-use crate::app::{
-    DecreaseInterfaceSize, IncreaseInterfaceSize, OpenThreadSwitcher, ResetInterfaceSize, SelectNextThread,
-    SelectPreviousThread, ShowChanges, ShowChat,
-};
+use crate::app::{OpenThreadSwitcher, SelectNextThread, SelectPreviousThread, ShowChanges, ShowChat};
 use crate::run_loop;
 use crate::sidebar::NewThread;
+use crate::ui::interface_size::{DecreaseInterfaceSize, IncreaseInterfaceSize, ResetInterfaceSize};
 use gpui::{App, Menu, MenuItem, OsAction, PromptLevel, SystemMenuType, Window, actions};
 use gpui_base::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
 

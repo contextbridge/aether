@@ -1,9 +1,9 @@
 use super::ClickHandler;
 use super::status_dot::StatusDot;
+use crate::ui::UiTheme;
 use crate::ui::tokens::{DOT_SLOT, rem};
-use crate::ui::{IconButton, IconName, ListItem, Typography, TypographyExt};
+use crate::ui::{IconButton, IconName, ListRow, Typography, TypographyExt};
 use chrono::{DateTime, Utc};
-use clankerdiff_gpui::ui::prelude::UiTheme;
 use gpui::{
     AnyElement, App, ClickEvent, IntoElement, ParentElement, RenderOnce, SharedString, Window, div, prelude::*,
 };
@@ -143,7 +143,7 @@ impl RenderOnce for ThreadRow {
         let selector = self.selector.to_string();
         let theme = self.theme;
         let colors = theme.colors;
-        let hover_group = ListItem::hover_group(&selector);
+        let hover_group = ListRow::hover_group(&selector);
         let editing = self.editor.is_some();
         let dot = self.dot.map(|dot| dot.render(&selector, &theme));
         let button = |action: &str, icon, label: &'static str, handler: ClickHandler| {
@@ -193,9 +193,9 @@ impl RenderOnce for ThreadRow {
             None => div().min_w_0().truncate().child(self.title).into_any_element(),
         };
         let on_click = self.on_click.filter(|_| !editing);
-        ListItem::new(self.selector, theme)
+        ListRow::new(self.selector, theme)
             .selected(highlighted)
-            .when_some(on_click, ListItem::on_click)
+            .when_some(on_click, ListRow::on_click)
             .child(div().flex_none().w(rem(DOT_SLOT * 2.0)).flex().justify_center().children(dot))
             .child(div().flex_1().min_w_0().child(title))
             .child(trailing)

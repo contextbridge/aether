@@ -1,9 +1,10 @@
 use crate::support::{save_session, wait_for_history};
 use acp_utils::testing::FakeAgent;
+use aether_desktop::ThemePair;
 use aether_desktop::registry::{Registry, STATE_FILE};
+use aether_desktop::sidebar::DEFAULT_SIDEBAR_WIDTH;
 use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder, FakeConnector};
 use aether_desktop::threads::ThreadStatus;
-use aether_desktop::{SIDEBAR_WIDTH, ThemePair};
 use aether_sessions::testing::TestStore;
 use agent_client_protocol::schema::v2::SessionId;
 use clankerdiff_theme::ThemeId;
@@ -92,7 +93,7 @@ fn the_window_opens_at_the_size_it_last_had(first: &mut TestAppContext, second: 
     let relaunched = DesktopHarnessBuilder::default().state_dir(state.path()).build(second);
 
     let main = relaunched.bounds(second, "main").expect("main region is painted");
-    let sidebar_width = SIDEBAR_WIDTH.to_pixels(relaunched.rem_size(second));
+    let sidebar_width = DEFAULT_SIDEBAR_WIDTH.to_pixels(relaunched.rem_size(second));
     assert_eq!(main.size, size(px(900.0) - sidebar_width, px(700.0)));
 }
 

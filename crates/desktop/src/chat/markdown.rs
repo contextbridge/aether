@@ -1,8 +1,8 @@
 use super::code::{highlight, styled_text};
+use crate::ui::UiTheme;
+use crate::ui::color;
 use crate::ui::tokens::{GROUP_HEIGHT, RADIUS_CONTAINER, rem};
 use crate::ui::{Button, ButtonVariant, CODE_FONT, IconName, Typography, TypographyExt};
-use clankerdiff_gpui::style::color;
-use clankerdiff_gpui::ui::prelude::UiTheme;
 use clankerdiff_markdown::{
     MarkdownBlock, MarkdownBlockKind, MarkdownCodeBlock, MarkdownInline, MarkdownListItem, MarkdownStream,
     MarkdownTable,

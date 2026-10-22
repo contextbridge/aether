@@ -1,18 +1,21 @@
 use crate::chat::{SearchPrompts, bind_config_picker_keys};
 use crate::clock::Clock;
 use crate::history::History;
+use crate::menus::{APP_NAME, Quit};
 use crate::registry::Registry;
-use crate::sidebar::{NewThread, SIDEBAR_WIDTH, Sidebar};
+use crate::sidebar::{NewThread, Sidebar};
 use crate::switcher::{SwitchTarget, SwitcherEvent, ThreadSwitcher};
 use crate::target::{AgentCommandLine, Connector};
 use crate::thread_view::{ThreadTab, ThreadView};
 use crate::threads::{Attention, ThreadEvent, ThreadId, ThreadManager};
-use crate::ui::{EmptyState, Typography, TypographyExt, UI_FONT};
-use crate::{menus::Quit, notification, theme::DesktopTheme, window_chrome};
+use crate::ui::interface_size::DEFAULT_INTERFACE_SIZE;
+use crate::ui::window_chrome;
+use crate::ui::{EmptyState, InterfaceSize, NoticeTone, Typography, TypographyExt, UI_FONT};
+use crate::{notification, theme::DesktopTheme};
 use aether_sessions::SessionStore;
 use agent_client_protocol::schema::v2::SessionId;
 use gpui::{
-    App, Context, Entity, FocusHandle, KeyBinding, StyleRefinement, Subscription, Window, actions, div, prelude::*, px,
+    App, Context, Entity, FocusHandle, KeyBinding, StyleRefinement, Subscription, Window, actions, div, prelude::*,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -30,20 +33,8 @@ actions!(
         ShowChat,
         /// Shows the changes the selected thread's agent made to the working tree.
         ShowChanges,
-        /// Makes the whole interface one step larger.
-        IncreaseInterfaceSize,
-        /// Makes the whole interface one step smaller.
-        DecreaseInterfaceSize,
-        /// Puts the interface back at the platform's default size.
-        ResetInterfaceSize,
     ]
 );
-
-/// The interface size, in pixels per rem, the app starts at. Linux desktops set interface text
-/// larger than macOS does, and render it lighter.
-pub const DEFAULT_INTERFACE_SIZE: f32 = if cfg!(target_os = "macos") { 16.0 } else { 18.0 };
-pub const MIN_INTERFACE_SIZE: f32 = 12.0;
-pub const MAX_INTERFACE_SIZE: f32 = 24.0;
 
 /// The root view of the main window: a thread sidebar beside the selected thread.
 pub struct DesktopApp {
@@ -85,6 +76,9 @@ impl DesktopApp {
     pub fn new(config: DesktopConfig, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let DesktopConfig { connector, clock, agent, sessions, registry } = config;
         install_theme(&registry, window, cx);
+        if let Some(size) = registry.read(cx).interface_size() {
+            InterfaceSize::set(size, cx);
+        }
         let window_active = window.is_window_active();
         let threads = cx.new(|cx| {
             let mut threads = ThreadManager::new(connector, agent);
@@ -115,6 +109,9 @@ impl DesktopApp {
                 this.registry.update(cx, |registry, cx| registry.set_window_size(size, cx));
             }),
             cx.observe_in(&threads, window, |this, _, window, cx| this.sync_views(window, cx)),
+            cx.observe_global::<InterfaceSize>(|this, cx| this.remember_interface_size(cx)),
+            // The sidebar is laid out at its width before it renders, so its width is the app's to set.
+            cx.observe(&sidebar, |_, _, cx| cx.notify()),
             cx.observe(&history, |this, _, cx| this.restore_selection(cx)),
             cx.subscribe(&threads, |this, _, attention: &Attention, cx| this.announce(attention, cx)),
         ];
@@ -155,10 +152,6 @@ impl DesktopApp {
             KeyBinding::new("secondary-[", SelectPreviousThread, None),
             KeyBinding::new("secondary-1", ShowChat, None),
             KeyBinding::new("secondary-2", ShowChanges, None),
-            KeyBinding::new("secondary-=", IncreaseInterfaceSize, None),
-            KeyBinding::new("secondary-+", IncreaseInterfaceSize, None),
-            KeyBinding::new("secondary--", DecreaseInterfaceSize, None),
-            KeyBinding::new("secondary-0", ResetInterfaceSize, None),
             // Text fields bind these keys to indenting, and are focused most of the time. Bound
             // later in the same context, these take precedence.
             KeyBinding::new("secondary-]", SelectNextThread, Some(INPUT_CONTEXT)),
@@ -284,19 +277,12 @@ impl DesktopApp {
         }
     }
 
-    /// The size the user set the interface to, or else the platform's default.
-    fn interface_size(&self, cx: &App) -> f32 {
-        self.registry.read(cx).interface_size().unwrap_or(DEFAULT_INTERFACE_SIZE)
-    }
-
-    /// Steps the interface size by `by` pixels per rem, within its bounds. Landing on the default
-    /// forgets the choice, so the app follows the platform's default again.
-    fn resize_interface(&self, by: f32, window: &mut Window, cx: &mut App) {
-        let size = (self.interface_size(cx) + by).clamp(MIN_INTERFACE_SIZE, MAX_INTERFACE_SIZE);
+    /// Remembers the interface size, forgetting it at the default so the app follows the
+    /// platform's default again.
+    fn remember_interface_size(&self, cx: &mut App) {
+        let size = InterfaceSize::get(cx);
         let chosen = (size != DEFAULT_INTERFACE_SIZE).then_some(size);
         self.registry.update(cx, |registry, cx| registry.set_interface_size(chosen, cx));
-        // Every cached view lays its text out again at the new rem size.
-        window.refresh();
     }
 
     /// Remembers the selected thread's session, for the next run to select again.
@@ -346,13 +332,15 @@ impl DesktopApp {
 
 impl Render for DesktopApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        window.set_rem_size(px(self.interface_size(cx)));
+        InterfaceSize::apply(window, cx);
         let theme = DesktopTheme::global(cx).ui();
+        let sidebar_width = self.sidebar.read(cx).width(cx);
         let selected = self.threads.read(cx).selected().and_then(|id| self.thread_view(id));
         let main = div().debug_selector(|| "main".to_owned()).flex_1().min_w_0().h_full().child(match selected {
             Some(view) => view.clone().cached(StyleRefinement::default().size_full()).into_any_element(),
             None => {
-                EmptyState::new("No thread selected", "Select a thread, or start a new one", theme).into_any_element()
+                EmptyState::new("No thread selected", "Select a thread, or start a new one", NoticeTone::Neutral, theme)
+                    .into_any_element()
             }
         });
         let content = div()
@@ -363,16 +351,6 @@ impl Render for DesktopApp {
             .on_action(cx.listener(|this, _: &OpenThreadSwitcher, window, cx| this.open_switcher(window, cx)))
             .on_action(cx.listener(|this, _: &ShowChat, window, cx| this.show_tab(ThreadTab::Chat, window, cx)))
             .on_action(cx.listener(|this, _: &ShowChanges, window, cx| this.show_tab(ThreadTab::Changes, window, cx)))
-            .on_action(
-                cx.listener(|this, _: &IncreaseInterfaceSize, window, cx| this.resize_interface(1.0, window, cx)),
-            )
-            .on_action(
-                cx.listener(|this, _: &DecreaseInterfaceSize, window, cx| this.resize_interface(-1.0, window, cx)),
-            )
-            .on_action(cx.listener(|this, _: &ResetInterfaceSize, window, cx| {
-                this.registry.update(cx, |registry, cx| registry.set_interface_size(None, cx));
-                window.refresh();
-            }))
             .relative()
             .size_full()
             .flex()
@@ -380,12 +358,12 @@ impl Render for DesktopApp {
             .text_color(theme.colors.text)
             .font_family(UI_FONT)
             .typography(Typography::Body)
-            .child(self.sidebar.clone().cached(StyleRefinement::default().flex_none().w(SIDEBAR_WIDTH).h_full()))
+            .child(self.sidebar.clone().cached(StyleRefinement::default().flex_none().w(sidebar_width).h_full()))
             .child(main)
             .children(self.switcher.as_ref().map(|(switcher, _)| switcher.clone()))
             .into_any_element();
 
-        window_chrome::decorate(content, &theme, window, cx)
+        window_chrome::decorate(content, APP_NAME, &theme, window, cx)
     }
 }
 

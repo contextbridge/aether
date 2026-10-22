@@ -18,14 +18,14 @@ use crate::theme::DesktopTheme;
 use crate::threads::{Thread, ThreadId, ThreadManager, ThreadStatus};
 use crate::ui::tokens::{BAR_HEIGHT, RADIUS_CONTROL, rem};
 use crate::ui::{
-    Button, ButtonVariant, EmptyState, IconButton, IconName, MenuItem, Typography, TypographyExt, tokens, with_menu,
+    ActionBar, Button, ButtonVariant, EmptyState, IconButton, IconName, MenuItem, NoticeTone, PanelSide,
+    ResizablePanel, Typography, TypographyExt, UiTheme, tokens, with_menu,
 };
 use agent_client_protocol::schema::v2::SessionId;
 use chrono::Duration;
-use clankerdiff_gpui::ui::prelude::UiTheme;
 use gpui::{
     AnyElement, App, ClickEvent, Context, Entity, EntityId, MouseButton, PathPromptOptions, Rems, Subscription, Window,
-    actions, div, prelude::*,
+    actions, div, prelude::*, rems,
 };
 use gpui_base::Selectable as _;
 use gpui_base::input::{Enter, Escape, Input, InputState};
@@ -35,8 +35,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use thread_row::ThreadRow;
 
-/// Width of the thread sidebar, which stays fixed as the window resizes.
-pub const SIDEBAR_WIDTH: Rems = tokens::rem(tokens::SIDEBAR_WIDTH);
+/// Width of the thread sidebar until the user drags its edge. It stays fixed as the window
+/// resizes.
+pub const DEFAULT_SIDEBAR_WIDTH: Rems = tokens::rem(272.0);
+pub const MIN_SIDEBAR_WIDTH: Rems = tokens::rem(200.0);
+pub const MAX_SIDEBAR_WIDTH: Rems = tokens::rem(480.0);
+/// The narrowest dragging the sidebar wider squeezes the selected thread to.
+pub const MIN_MAIN_WIDTH: Rems = tokens::rem(320.0);
 
 /// How old a saved session may be and still be listed, unless it is pinned. Older ones are found
 /// through the thread switcher.
@@ -121,6 +126,11 @@ impl Sidebar {
         }
     }
 
+    /// The width the user dragged the sidebar to, or else its default width.
+    pub(crate) fn width(&self, cx: &App) -> Rems {
+        self.registry.read(cx).sidebar_width().unwrap_or(DEFAULT_SIDEBAR_WIDTH)
+    }
+
     /// The title of the listed row tagged `selector`, if a listed row is.
     pub fn row_title(&self, selector: &str) -> Option<String> {
         self.sections
@@ -178,6 +188,19 @@ impl Sidebar {
             })
         });
         live.chain(saved).collect()
+    }
+
+    /// Drags the sidebar to `width`, leaving the selected thread at least [`MIN_MAIN_WIDTH`].
+    fn resize(&mut self, width: Rems, window: &Window, cx: &mut Context<Self>) {
+        let available = window.viewport_size().width / window.rem_size();
+        let widest = rems(available - MIN_MAIN_WIDTH.0).0.clamp(MIN_SIDEBAR_WIDTH.0, MAX_SIDEBAR_WIDTH.0);
+        self.set_width(Some(rems(width.0.min(widest))), cx);
+    }
+
+    /// Remembers `width`, or forgets the dragged width so the sidebar takes its default again.
+    fn set_width(&mut self, width: Option<Rems>, cx: &mut Context<Self>) {
+        self.registry.update(cx, |registry, cx| registry.set_sidebar_width(width, cx));
+        cx.notify();
     }
 
     fn new_thread_in(&self, root: PathBuf, cx: &mut Context<Self>) {
@@ -442,15 +465,7 @@ impl Sidebar {
             .icon(IconName::Plus)
             .variant(ButtonVariant::Ghost)
             .full_width();
-        div()
-            .flex_none()
-            .h(rem(BAR_HEIGHT))
-            .px_2()
-            .flex()
-            .items_center()
-            .border_t_1()
-            .border_color(theme.colors.border)
-            .child(with_menu("add-project", trigger, MouseButton::Left, items, theme).w_full())
+        ActionBar::new(*theme).child(with_menu("add-project", trigger, MouseButton::Left, items, theme).w_full())
     }
 
     fn render_section(&self, section: &Section, theme: &UiTheme, cx: &mut Context<Self>) -> ProjectSection {
@@ -624,6 +639,8 @@ impl Render for Sidebar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = DesktopTheme::global(cx).ui();
         let has_projects = !self.sections.is_empty();
+        let sidebar = cx.entity().downgrade();
+        let reset = sidebar.clone();
         let sections: Vec<ProjectSection> =
             self.sections.iter().map(|section| self.render_section(section, &theme, cx)).collect();
         let projects = if has_projects {
@@ -643,19 +660,20 @@ impl Render for Sidebar {
             div().flex_1().min_h_0().child(EmptyState::new(
                 "No projects",
                 "Add a project to start a thread in it",
+                NoticeTone::Neutral,
                 theme,
             ))
         };
-        div()
-            .debug_selector(|| "sidebar".to_owned())
-            .flex_none()
-            .w(SIDEBAR_WIDTH)
-            .h_full()
-            .flex()
-            .flex_col()
+        ResizablePanel::new("sidebar", PanelSide::Left, self.width(cx), theme)
+            .min_width(MIN_SIDEBAR_WIDTH)
+            .max_width(MAX_SIDEBAR_WIDTH)
+            .on_resize(move |width, window, cx| {
+                let _ = sidebar.update(cx, |sidebar, cx| sidebar.resize(width, window, cx));
+            })
+            .on_reset(move |_, cx| {
+                let _ = reset.update(cx, |sidebar, cx| sidebar.set_width(None, cx));
+            })
             .bg(theme.colors.surface)
-            .border_r_1()
-            .border_color(theme.colors.border)
             .child(Self::render_header(has_projects, &theme, cx))
             .child(projects)
             .child(self.render_footer(&theme, cx))

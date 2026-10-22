@@ -3,7 +3,7 @@
 
 use crate::theme::ThemePair;
 use agent_client_protocol::schema::v2::SessionId;
-use gpui::{AppContext, Context, Pixels, Size, Subscription, px, size};
+use gpui::{AppContext, Context, Pixels, Rems, Size, Subscription, px, rems, size};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -202,6 +202,19 @@ impl Registry {
         }
     }
 
+    /// The width the user dragged the sidebar to, if they dragged it.
+    pub fn sidebar_width(&self) -> Option<Rems> {
+        self.state.preferences.sidebar_width.map(rems)
+    }
+
+    pub fn set_sidebar_width(&mut self, width: Option<Rems>, cx: &mut Context<Self>) {
+        let width = width.map(|width| width.0);
+        if self.state.preferences.sidebar_width != width {
+            self.state.preferences.sidebar_width = width;
+            self.changed(cx);
+        }
+    }
+
     /// Applies `update` to the thread's metadata, forgetting the thread once nothing is left to
     /// remember about it.
     fn update_thread(&mut self, session_id: &SessionId, update: impl FnOnce(&mut ThreadMeta), cx: &mut Context<Self>) {
@@ -290,6 +303,8 @@ struct WindowSize {
 struct Preferences {
     theme: Option<ThemePair>,
     interface_size: Option<f32>,
+    /// In rems, so it scales with the interface size.
+    sidebar_width: Option<f32>,
 }
 
 /// Writes snapshots of the state to its file, newest wins.
