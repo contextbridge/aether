@@ -1,5 +1,6 @@
 //! Native desktop client for running and managing many concurrent Aether agent threads.
 
+pub mod agents;
 mod app;
 mod changes;
 mod chat;
@@ -31,20 +32,24 @@ pub use menus::{About, Hide, HideOthers, Minimize, Quit, ShowAll, Zoom};
 pub use theme::{DesktopTheme, ThemePair};
 
 use aether_sessions::SessionStore;
+use agents::{Agents, default_agents_file};
 use clankerdiff_gpui::DiffViewer;
 use cli::Cli;
 use clock::SystemClock;
 use gpui::{App, AppContext, Bounds, Entity, Pixels, Size, TitlebarOptions, WindowBounds, WindowOptions, px, size};
 use registry::{Registry, default_state_file};
+use rustls::crypto::aws_lc_rs;
 use std::sync::Arc;
-use target::{AgentCommandLine, LocalConnector};
+use target::AgentConnector;
 
 /// Runs the desktop app until its last window closes or it is quit.
 ///
 /// # Panics
 ///
-/// Panics if the bundled fonts cannot be loaded or the main window cannot open.
+/// Panics if the TLS crypto provider cannot be installed, the bundled fonts cannot be loaded or
+/// the main window cannot open.
 pub fn run(cli: Cli) {
+    aws_lc_rs::default_provider().install_default().expect("failed to install the Rustls AWS-LC crypto provider");
     let runtime = runtime::build();
     let handle = runtime.handle().clone();
     gpui_platform::application().run(move |cx: &mut App| {
@@ -59,9 +64,9 @@ pub fn run(cli: Cli) {
         let registry = cx.new(|cx| Registry::load(state_file, cx));
         let bounds = Bounds::centered(None, window_size(&registry, cx), cx);
         let config = DesktopConfig {
-            connector: Arc::new(LocalConnector),
+            connector: Arc::new(AgentConnector),
             clock: Arc::new(SystemClock),
-            agent: AgentCommandLine::new(cli.agent),
+            agents: Agents::new(cli.agent, default_agents_file()),
             sessions: SessionStore::new().inspect_err(|error| tracing::warn!(%error, "showing no history")).ok(),
             registry,
         };

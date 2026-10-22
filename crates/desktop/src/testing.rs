@@ -1,19 +1,20 @@
 //! Integration-test support: opens the production [`DesktopApp`] in a gpui test window, with
 //! in-memory agents in place of agent processes.
 
+use crate::agents::{AgentCommand, Agents};
 use crate::clock::Clock;
-use crate::history::History;
+use crate::history::{History, git_root};
 use crate::registry::{Registry, STATE_FILE};
-use crate::target::{
-    AgentCommandLine, ConnectError, ConnectFuture, ConnectMode, Connector, SessionTarget, client_info,
-};
+use crate::target::{ConnectError, ConnectMode, Connector, ConnectorFuture, InstanceId, SessionTarget, client_info};
 use crate::threads::{Thread, ThreadManager};
-use crate::{DesktopApp, DesktopConfig, DesktopTheme, cli::DEFAULT_AGENT, init, runtime, window_options, window_size};
+use crate::{
+    DesktopApp, DesktopConfig, DesktopTheme, cli::DEFAULT_AGENT_COMMAND, init, runtime, window_options, window_size,
+};
 use acp_utils::testing::{Channel, FakeAgent};
 use aether_sessions::SessionStore;
 use aether_sessions::testing::TestStore;
 use chrono::{DateTime, Utc};
-use client_core::session::Connection;
+use client_core::session::{Connection, Session};
 use client_core::testing::{FakeGit, FakeGitDiffServer};
 use gpui::{
     AnyWindowHandle, App, AppContext, Bounds, Element, ElementId, Entity, Global, GlobalElementId, HighlightStyle,
@@ -77,13 +78,17 @@ impl Clock for FakeClock {
 }
 
 /// A [`Connector`] that serves each thread an in-memory [`FakeAgent`] instead of starting a
-/// process.
+/// process, whatever agent the thread runs.
 ///
 /// Agents are scripted per working directory, and every thread connecting in a directory takes
 /// the next one scripted for it. A thread with no agent left to take fails to connect, as if its
 /// agent could not be started. Like the real agent, each one also serves the git diff of its
 /// directory, from a [`FakeGit`] repository that is clean unless one is given with
-/// [`git`](Self::git). Clones share their scripts, repositories and connection counts.
+/// [`git`](Self::git).
+///
+/// An agent with a `launch` command gets an instance of its own, named `instance-<n>` in launch
+/// order, which its connections need and its `terminate` command ends. Clones share their
+/// scripts, repositories, connection counts and instances.
 #[derive(Clone, Default)]
 pub struct FakeConnector {
     state: Arc<Mutex<FakeConnectorState>>,
@@ -171,7 +176,10 @@ impl DesktopHarnessBuilder {
         let config = DesktopConfig {
             connector: Arc::new(self.connector),
             clock: Arc::new(FakeClock(self.now)),
-            agent: AgentCommandLine::new(DEFAULT_AGENT),
+            agents: Agents::new(
+                AgentCommand::parse(DEFAULT_AGENT_COMMAND).expect("the default agent command parses"),
+                None,
+            ),
             sessions: Some(SessionStore::from_path(self.sessions.path().to_path_buf())),
             registry,
         };
@@ -212,6 +220,16 @@ impl FakeConnector {
         self.lock().live.get(cwd.as_ref()).map_or(0, Vec::len)
     }
 
+    /// The instances launched and not yet terminated, in launch order.
+    pub fn instances(&self) -> Vec<InstanceId> {
+        self.lock().instances.clone()
+    }
+
+    /// How many instances were launched, terminated or not.
+    pub fn launches(&self) -> usize {
+        self.lock().launches
+    }
+
     /// Ends every agent served in `cwd`, as if its process died, which closes its connection.
     pub fn kill_agents(&self, cwd: impl AsRef<Path>) {
         let agents = self.lock().live.remove(cwd.as_ref()).unwrap_or_default();
@@ -243,17 +261,45 @@ impl FakeConnector {
 }
 
 impl Connector for FakeConnector {
-    fn connect<'a>(&'a self, target: &'a SessionTarget, mode: ConnectMode) -> ConnectFuture<'a> {
+    fn launch<'a>(&'a self, target: &'a SessionTarget) -> ConnectorFuture<'a, Option<InstanceId>> {
         Box::pin(async move {
-            let SessionTarget::Local { cwd, agent: command } = target;
-            let agent = self.lock().take(cwd).ok_or_else(|| ConnectError::Spawn {
-                command: command.clone(),
-                source: io::Error::new(io::ErrorKind::NotFound, "no fake agent is scripted for this directory"),
-            })?;
+            if target.agent.config.launch().is_none() {
+                return Ok(None);
+            }
+            let mut state = self.lock();
+            let instance = InstanceId::new(format!("instance-{}", state.launches));
+            state.launches += 1;
+            state.instances.push(instance.clone());
+            Ok(Some(instance))
+        })
+    }
+
+    fn connect<'a>(&'a self, target: &'a SessionTarget, mode: ConnectMode) -> ConnectorFuture<'a, Session> {
+        Box::pin(async move {
+            let SessionTarget { cwd, agent, instance } = target;
+            let missing = |reason: &'static str| ConnectError::Spawn {
+                program: agent.name.clone(),
+                source: io::Error::new(io::ErrorKind::NotFound, reason),
+            };
+            let launched = instance.as_ref().is_some_and(|instance| self.lock().instances.contains(instance));
+            if agent.config.launch().is_some() && !launched {
+                return Err(missing("the agent's instance is not running"));
+            }
+            let script =
+                self.lock().take(cwd).ok_or_else(|| missing("no fake agent is scripted for this directory"))?;
             let (agent_transport, client_transport) = Channel::duplex();
-            self.serve(cwd, agent, agent_transport);
+            self.serve(cwd, script, agent_transport);
             let connection = Connection::connect_to(client_info(), client_transport, cwd.clone()).await?;
             Ok(mode.open(connection).await?)
+        })
+    }
+
+    fn terminate<'a>(&'a self, target: &'a SessionTarget) -> ConnectorFuture<'a, ()> {
+        Box::pin(async move {
+            if let Some(instance) = target.instance.as_ref().filter(|_| target.agent.config.terminate().is_some()) {
+                self.lock().instances.retain(|live| live != instance);
+            }
+            Ok(())
         })
     }
 }
@@ -270,6 +316,18 @@ impl DesktopHarness {
             let threads = self.app(cx).threads().read(cx);
             threads.selected().and_then(|id| threads.thread(id, cx)).cloned()
         })
+    }
+
+    /// Starts a thread in `cwd` with its project's default agent, and selects it.
+    pub fn new_thread(&self, cx: &mut TestAppContext, cwd: impl Into<PathBuf>) -> Entity<Thread> {
+        let cwd = cwd.into();
+        let (threads, agents) = cx.read(|cx| (self.app(cx).threads().clone(), self.app(cx).agents().clone()));
+        let agent = cx.read(|cx| agents.read(cx).catalog(&git_root(&cwd)).default_agent().clone());
+        threads.update(cx, |threads, cx| threads.new_thread(cwd, agent, cx))
+    }
+
+    pub fn agents(&self, cx: &TestAppContext) -> Entity<Agents> {
+        cx.read(|cx| self.app(cx).agents().clone())
     }
 
     pub fn history(&self, cx: &TestAppContext) -> Entity<History> {
@@ -539,6 +597,9 @@ struct FakeConnectorState {
     /// The agents serving a client in each directory.
     live: HashMap<PathBuf, Vec<ServedAgent>>,
     next_agent: u64,
+    /// The instances launched and not yet terminated.
+    instances: Vec<InstanceId>,
+    launches: usize,
 }
 
 struct ServedAgent {

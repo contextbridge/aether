@@ -7,9 +7,9 @@
 
 pub use clankerdiff_gpui::ui::tokens::*;
 
-/// The slot in front of a row's title that holds its status dot.
-pub const DOT_SLOT: f32 = 8.0;
-pub const DOT_SIZE: f32 = 8.0;
+/// The fixed leading slot for thread activity and project disclosure icons.
+pub const STATUS_SLOT: f32 = 16.0;
+pub const UNREAD_DOT_SIZE: f32 = 8.0;
 
 /// The width a chat transcript and composer grow to, centred in wider windows.
 pub const CONTENT_MAX_WIDTH: f32 = 768.0;

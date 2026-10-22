@@ -98,7 +98,7 @@ fn escape_closes_the_switcher_and_keeps_the_selection(cx: &mut TestAppContext) {
 
 /// Starts a thread in `cwd` and waits for its agent to connect.
 fn idle_thread(harness: &DesktopHarness, cx: &mut TestAppContext, cwd: &str) -> Entity<Thread> {
-    let thread = harness.threads(cx).update(cx, |threads, cx| threads.new_thread(cwd.into(), cx));
+    let thread = harness.new_thread(cx, cwd);
     harness.run_until(cx, |cx| thread.read(cx).status() == ThreadStatus::Idle);
     thread
 }

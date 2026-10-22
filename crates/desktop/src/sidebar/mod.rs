@@ -3,13 +3,14 @@
 //! the bottom.
 
 mod project_section;
-mod status_dot;
+mod status_indicator;
 mod thread_row;
 
-pub use status_dot::{Seen, StatusDot};
+pub use status_indicator::StatusIndicator;
 pub use thread_row::relative_time;
 
 use crate::OpenThreadSwitcher;
+use crate::agents::{AgentProfile, Agents};
 use crate::clock::Clock;
 use crate::history::{History, HistoryEntry, git_root};
 use crate::registry::{Disclosure, Registry, ThreadMeta};
@@ -64,6 +65,7 @@ pub struct Sidebar {
     threads: Entity<ThreadManager>,
     history: Entity<History>,
     registry: Entity<Registry>,
+    agents: Entity<Agents>,
     clock: Arc<dyn Clock>,
     /// How many saved sessions each project lists, for those whose "Show more" was clicked.
     shown: HashMap<PathBuf, usize>,
@@ -75,7 +77,7 @@ pub struct Sidebar {
     /// What each live thread's row showed when the sections were last built.
     listed: HashMap<EntityId, Listed>,
     thread_subscriptions: Vec<Subscription>,
-    _subscriptions: [Subscription; 3],
+    _subscriptions: [Subscription; 4],
 }
 
 impl Sidebar {
@@ -83,6 +85,7 @@ impl Sidebar {
         threads: Entity<ThreadManager>,
         history: Entity<History>,
         registry: Entity<Registry>,
+        agents: Entity<Agents>,
         clock: Arc<dyn Clock>,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -100,11 +103,13 @@ impl Sidebar {
             }),
             cx.observe(&history, |this, _, cx| this.rebuild(cx)),
             cx.observe(&registry, |this, _, cx| this.rebuild(cx)),
+            cx.observe(&agents, |_, _, cx| cx.notify()),
         ];
         let mut sidebar = Self {
             threads,
             history,
             registry,
+            agents,
             clock,
             shown: HashMap::new(),
             archive_expanded: HashSet::new(),
@@ -203,10 +208,48 @@ impl Sidebar {
         cx.notify();
     }
 
+    /// Starts a thread in `root` with the agent last chosen from its new-thread menu, or else its
+    /// default agent.
     fn new_thread_in(&self, root: PathBuf, cx: &mut Context<Self>) {
+        let catalog = self.agents.read(cx).catalog(&root);
+        let last = self.registry.read(cx).last_agent(&root).and_then(|name| catalog.get(name));
+        let agent = last.unwrap_or_else(|| catalog.default_agent()).clone();
         self.threads.update(cx, |threads, cx| {
-            threads.new_thread(root, cx);
+            threads.new_thread(root, agent, cx);
         });
+    }
+
+    /// Starts a thread in `root` with `agent`, which later new threads there start with too.
+    fn new_thread_with(&self, root: PathBuf, agent: AgentProfile, cx: &mut Context<Self>) {
+        let name = agent.name.clone();
+        self.registry.update(cx, |registry, cx| registry.set_last_agent(root.clone(), name, cx));
+        self.threads.update(cx, |threads, cx| {
+            threads.new_thread(root, agent, cx);
+        });
+    }
+
+    /// What a project's `+` offers when it has more than its default agent to choose from, or
+    /// files that could not be read: an entry for each agent, then one that opens each such file.
+    fn new_thread_menu(&self, root: &Path, cx: &mut Context<Self>) -> Vec<MenuItem> {
+        let catalog = self.agents.read(cx).catalog(root);
+        if catalog.agents().len() < 2 && catalog.problems().is_empty() {
+            return Vec::new();
+        }
+        let sidebar = cx.entity();
+        let agents = catalog.agents().iter().map(|agent| {
+            let (sidebar, root, agent) = (sidebar.clone(), root.to_path_buf(), agent.clone());
+            MenuItem::new(format!("new-thread-agent-{}", agent.name), agent.name.clone(), move |_, cx| {
+                sidebar.update(cx, |sidebar, cx| sidebar.new_thread_with(root.clone(), agent.clone(), cx));
+            })
+        });
+        let problems = catalog.problems().iter().enumerate().map(|(index, problem)| {
+            let file = problem.path().to_path_buf();
+            MenuItem::new(format!("new-thread-problem-{index}"), problem.to_string(), move |_, cx| {
+                cx.open_with_system(&file);
+            })
+            .icon(IconName::CircleX)
+        });
+        agents.chain(problems).collect()
     }
 
     fn default_project(&self, cx: &App) -> Option<PathBuf> {
@@ -505,6 +548,7 @@ impl Sidebar {
         ];
         let toggled = root.clone();
         let new_thread_root = root.clone();
+        let new_thread_menu = self.new_thread_menu(root, cx);
         ProjectSection::new(project_name(root), theme)
             .disclosure(disclosure)
             .on_toggle(cx.listener(move |this, _: &ClickEvent, _, cx| {
@@ -513,6 +557,7 @@ impl Sidebar {
             .on_new_thread(
                 cx.listener(move |this, _: &ClickEvent, _, cx| this.new_thread_in(new_thread_root.clone(), cx)),
             )
+            .new_thread_menu(new_thread_menu)
             .actions(actions)
             .when_some(more, |section, (hidden, handler)| section.on_show_more(hidden, handler))
             .when_some(archived, ProjectSection::archived)
@@ -545,11 +590,12 @@ impl Sidebar {
                 let thread = thread.read(cx);
                 let id = thread.id();
                 let status = thread.status();
-                let seen = if manager.is_unread(id) { Seen::Unread } else { Seen::Read };
+                let unread = manager.is_unread(id);
                 let (select, stop, reconnect, menu_stop) =
                     (self.threads.clone(), self.threads.clone(), self.threads.clone(), self.threads.clone());
                 thread_row = thread_row
-                    .dot(StatusDot::of(&status, seen))
+                    .status(&status)
+                    .unread(unread)
                     .started_at(Some(thread.opened_at()))
                     .selected(manager.selected() == Some(id))
                     .on_click(move |_, _, cx| select.update(cx, |threads, cx| threads.select(id, cx)))
@@ -568,7 +614,7 @@ impl Sidebar {
                 let threads = self.threads.clone();
                 let (session_id, cwd) = (session_id.clone(), cwd.clone());
                 thread_row =
-                    thread_row.dot(Some(StatusDot::Dormant)).started_at(*created_at).on_click(move |_, _, cx| {
+                    thread_row.status(&ThreadStatus::Dormant).started_at(*created_at).on_click(move |_, _, cx| {
                         let session_id = SessionId::new(session_id.as_str());
                         threads.update(cx, |threads, cx| threads.resume(session_id, cwd.clone(), cx));
                     });

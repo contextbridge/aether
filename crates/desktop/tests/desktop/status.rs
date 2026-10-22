@@ -1,5 +1,5 @@
 use acp_utils::testing::running_notification;
-use aether_desktop::sidebar::{Seen, StatusDot};
+use aether_desktop::sidebar::StatusIndicator;
 use aether_desktop::threads::{ConnectionPhase, ThreadStatus};
 use agent_client_protocol::schema::v2::{
     CreateElicitationRequest, ElicitationFormMode, ElicitationSchema, ElicitationSessionScope,
@@ -81,40 +81,32 @@ fn only_a_thread_whose_connection_failed_or_closed_can_reconnect() {
 }
 
 #[test]
-fn each_status_shows_its_dot() {
+fn activity_indicators_distinguish_busy_waiting_and_broken_from_quiet_threads() {
     let cases = [
-        (ThreadStatus::Connecting, Some(StatusDot::Running)),
+        (ThreadStatus::Connecting, Some(StatusIndicator::Connecting)),
         (ThreadStatus::Idle, None),
-        (ThreadStatus::Running, Some(StatusDot::Running)),
-        (ThreadStatus::NeedsInput, Some(StatusDot::NeedsInput)),
-        (ThreadStatus::Errored("agent not found".into()), Some(StatusDot::Errored)),
-        (ThreadStatus::Disconnected, Some(StatusDot::Errored)),
-        (ThreadStatus::Dormant, Some(StatusDot::Dormant)),
+        (ThreadStatus::Running, Some(StatusIndicator::Running)),
+        (ThreadStatus::NeedsInput, Some(StatusIndicator::NeedsInput)),
+        (ThreadStatus::Errored("agent not found".into()), Some(StatusIndicator::Errored)),
+        (ThreadStatus::Disconnected, Some(StatusIndicator::Disconnected)),
+        (ThreadStatus::Dormant, None),
     ];
 
-    for (status, dot) in cases {
-        assert_eq!(StatusDot::of(&status, Seen::Read), dot, "{status:?}");
+    for (status, indicator) in cases {
+        assert_eq!(StatusIndicator::of(&status), indicator, "{status:?}");
     }
 }
 
 #[test]
-fn an_idle_thread_with_an_unseen_turn_shows_the_unread_dot() {
-    assert_eq!(StatusDot::of(&ThreadStatus::Idle, Seen::Unread), Some(StatusDot::Unread));
-}
-
-#[test]
-fn a_thread_that_is_busy_or_broken_shows_its_status_over_an_unseen_turn() {
-    let statuses = [
-        ThreadStatus::Connecting,
-        ThreadStatus::Running,
-        ThreadStatus::NeedsInput,
-        ThreadStatus::Errored("agent not found".into()),
-        ThreadStatus::Disconnected,
-        ThreadStatus::Dormant,
-    ];
-
-    for status in statuses {
-        assert_eq!(StatusDot::of(&status, Seen::Unread), StatusDot::of(&status, Seen::Read), "{status:?}");
+fn activity_labels_explain_what_the_agent_needs() {
+    for (indicator, label) in [
+        (StatusIndicator::Connecting, "Starting agent"),
+        (StatusIndicator::Running, "Agent working"),
+        (StatusIndicator::NeedsInput, "Waiting for your answer"),
+        (StatusIndicator::Errored, "Unable to connect — reconnect to try again"),
+        (StatusIndicator::Disconnected, "Disconnected — reconnect to continue"),
+    ] {
+        assert_eq!(indicator.label(), label);
     }
 }
 

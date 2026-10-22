@@ -141,7 +141,9 @@ impl Render for ThreadView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = DesktopTheme::global(cx).ui();
         let title = self.header.title.clone();
-        let project = self.thread.read(cx).project().display().to_string();
+        let thread = self.thread.read(cx);
+        let project = thread.project().display().to_string();
+        let agent = thread.target().agent.name.clone();
         let header = div()
             .debug_selector(|| "thread-header".to_owned())
             .flex_none()
@@ -167,6 +169,14 @@ impl Render for ThreadView {
                             .typography(Typography::Small)
                             .text_color(theme.colors.text_muted)
                             .child(project),
+                    )
+                    .child(
+                        div()
+                            .debug_selector(|| "thread-agent".to_owned())
+                            .flex_none()
+                            .typography(Typography::Small)
+                            .text_color(theme.colors.text_muted)
+                            .child(agent),
                     ),
             )
             .child(self.render_tabs(cx));

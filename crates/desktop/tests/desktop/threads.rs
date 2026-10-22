@@ -76,7 +76,7 @@ fn stopping_a_thread_ends_its_agent_and_returns_its_session_to_history(cx: &mut 
     assert!(harness.selected_thread(cx).is_none());
     assert_eq!(thread.read_with(cx, |thread, _| thread.status()), ThreadStatus::Dormant);
     assert!(harness.bounds(cx, "thread-row-0").is_none());
-    assert!(harness.bounds(cx, "history-row-alpha-session-status-dormant").is_some(), "the session is back in history");
+    assert!(harness.bounds(cx, "history-row-alpha-session").is_some(), "the session is back in history");
 
     harness.click(cx, "history-row-alpha-session").unwrap();
     let resumed = harness.selected_thread(cx).expect("the resumed thread is selected");
@@ -202,7 +202,7 @@ fn a_thread_whose_agent_died_reconnects_and_replays_its_session_without_duplicat
 
     connector.kill_agents("/alpha");
     harness.run_until(cx, |cx| thread.read(cx).status() == ThreadStatus::Disconnected);
-    assert!(harness.bounds(cx, "thread-row-0-status-errored").is_some());
+    assert!(harness.bounds(cx, "thread-row-0-status-disconnected").is_some());
 
     harness.click(cx, "thread-row-0-reconnect").unwrap();
     harness.run_until(cx, |cx| thread.read(cx).status() == ThreadStatus::Idle);
@@ -227,5 +227,5 @@ fn a_thread_whose_agent_could_not_start_reconnects_once_it_can(cx: &mut TestAppC
 }
 
 fn new_thread(harness: &DesktopHarness, cx: &mut TestAppContext, cwd: &str) -> Entity<Thread> {
-    harness.threads(cx).update(cx, |threads, cx| threads.new_thread(cwd.into(), cx))
+    harness.new_thread(cx, cwd)
 }

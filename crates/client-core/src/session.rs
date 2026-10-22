@@ -36,21 +36,8 @@ impl Session {
         requested_session: Option<SessionId>,
     ) -> Result<Self, ClientError> {
         let client = connect_acp_client(transport, initialize_request(client_info)).await?;
-        let remote = RemoteServerInfo::from_meta(client.initialize_response.meta.as_ref())
-            .ok_or(ClientError::MissingRemoteContract)?;
-        let (selected, working_dir) = match (requested_session, remote.session_id) {
-            (Some(requested), live) if live.as_ref() != Some(&requested) => {
-                let cwd = client.handle.request(SessionPreviewParams { session_id: requested.to_string() }).await?.cwd;
-                (Some(requested), cwd)
-            }
-            (requested, live) => (requested.or(live), remote.cwd),
-        };
-        let response = match selected {
-            Some(id) => resume(&client, id, &working_dir).await?,
-            None => client.handle.request(NewSessionRequest::new(working_dir.clone())).await?,
-        };
-        let workspace_status = initial_workspace_status(&working_dir);
-        Ok(Self { client, response, working_dir, workspace_status, workspace_access: WorkspaceAccess::Remote })
+        let (response, working_dir) = open_remote(&client, requested_session).await?;
+        Ok(Self::remote(client, response, working_dir))
     }
 
     /// Spawn `agent_command` in the current directory and open a new session.
@@ -66,6 +53,11 @@ impl Session {
         working_dir: PathBuf,
     ) -> Result<Self, ClientError> {
         Connection::connect_to(client_info, agent, working_dir).await?.new_session().await
+    }
+
+    fn remote(client: AcpClient, response: NewSessionResponse, working_dir: PathBuf) -> Self {
+        let workspace_status = initial_workspace_status(&working_dir);
+        Self { client, response, working_dir, workspace_status, workspace_access: WorkspaceAccess::Remote }
     }
 }
 
@@ -99,6 +91,42 @@ impl Connection {
         let response = resume(&client, session_id, &working_dir).await?;
         Ok(Session { client, response, working_dir, workspace_status, workspace_access: WorkspaceAccess::Local })
     }
+
+    /// Whether the agent advertised the Aether remote-server contract, so that it owns its
+    /// sessions' working directory and may already have one live.
+    pub fn is_remote_server(&self) -> bool {
+        RemoteServerInfo::from_meta(self.client.initialize_response.meta.as_ref()).is_some()
+    }
+
+    /// Open a session on an Aether remote server: `requested_session` if given, or else the
+    /// server's live session, or else a new one in the server's workspace. The connection's own
+    /// working directory is not used.
+    pub async fn open_remote(self, requested_session: Option<SessionId>) -> Result<Session, ClientError> {
+        let (response, working_dir) = open_remote(&self.client, requested_session).await?;
+        Ok(Session::remote(self.client, response, working_dir))
+    }
+}
+
+/// Opens `requested_session`, or else the server's live session, or else a new one, answering
+/// with the session and the server's working directory for it.
+async fn open_remote(
+    client: &AcpClient,
+    requested_session: Option<SessionId>,
+) -> Result<(NewSessionResponse, PathBuf), ClientError> {
+    let remote = RemoteServerInfo::from_meta(client.initialize_response.meta.as_ref())
+        .ok_or(ClientError::MissingRemoteContract)?;
+    let (selected, working_dir) = match (requested_session, remote.session_id) {
+        (Some(requested), live) if live.as_ref() != Some(&requested) => {
+            let cwd = client.handle.request(SessionPreviewParams { session_id: requested.to_string() }).await?.cwd;
+            (Some(requested), cwd)
+        }
+        (requested, live) => (requested.or(live), remote.cwd),
+    };
+    let response = match selected {
+        Some(id) => resume(client, id, &working_dir).await?,
+        None => client.handle.request(NewSessionRequest::new(working_dir.clone())).await?,
+    };
+    Ok((response, working_dir))
 }
 
 /// Resumes `session_id` with its history replayed from the start, answering as a new session

@@ -6,21 +6,22 @@ use aether_desktop::threads::ThreadStatus;
 use aether_sessions::testing::TestStore;
 use agent_client_protocol::schema::v2::SessionId;
 use chrono::{Duration, Utc};
-use gpui::{AppContext, TestAppContext};
+use gpui::{AppContext, TestAppContext, px};
 use std::path::{Path, PathBuf};
 
 #[gpui::test]
-fn a_busy_status_dot_does_not_request_every_display_frame(cx: &mut TestAppContext) {
+fn a_busy_spinner_does_not_request_every_display_frame(cx: &mut TestAppContext) {
     let harness = DesktopHarnessBuilder::default().project("/alpha").build(cx);
     harness.click(cx, "project-alpha-new-thread").unwrap();
-    assert!(harness.bounds(cx, "thread-row-0-status-running").is_some());
+    assert!(harness.bounds(cx, "thread-row-0-status-connecting-spinner").is_some());
+    assert!(harness.bounds(cx, "thread-row-0-conversation-icon").is_none());
     let window = cx.windows()[0];
     cx.update_window(window, |_, window, cx| window.simulate_next_frame(cx)).unwrap();
     cx.run_until_parked();
 
     for _ in 0..3 {
         let callbacks = cx.update_window(window, |_, window, cx| window.simulate_next_frame(cx)).unwrap();
-        assert_eq!(callbacks, 0, "the pulse should be timer-driven, not display-frame-driven");
+        assert_eq!(callbacks, 0, "the spinner should be timer-driven, not display-frame-driven");
         cx.executor().advance_clock(std::time::Duration::from_millis(105));
         cx.run_until_parked();
     }
@@ -138,7 +139,10 @@ fn a_rows_archive_button_archives_it_and_its_unarchive_button_brings_it_back(cx:
     harness.click(cx, "history-row-saved-archive").unwrap();
 
     assert!(harness.bounds(cx, "history-row-saved").is_none());
+    assert!(harness.bounds(cx, "project-alpha-archived-icon").is_some());
     harness.click(cx, "project-alpha-archived").unwrap();
+    assert!(harness.bounds(cx, "project-alpha-archived-icon").is_some());
+    assert!(harness.bounds(cx, "history-row-saved-conversation-icon").is_some());
     harness.click(cx, "history-row-saved-unarchive").unwrap();
     assert!(harness.bounds(cx, "project-alpha-archived").is_none(), "nothing is archived any more");
     assert!(harness.bounds(cx, "history-row-saved").is_some());
@@ -167,12 +171,17 @@ fn an_added_project_starts_expanded(cx: &mut TestAppContext) {
     let harness = DesktopHarnessBuilder::default().history(sessions).project("/alpha").build(cx);
     wait_for_history(&harness, cx);
     assert!(harness.bounds(cx, "history-row-saved").is_some());
+    assert!(harness.bounds(cx, "project-alpha-folder-open").is_some());
+    assert!(harness.bounds(cx, "project-alpha-folder-closed").is_none());
 
     harness.click(cx, "project-alpha-toggle").unwrap();
     assert!(harness.bounds(cx, "history-row-saved").is_none());
+    assert!(harness.bounds(cx, "project-alpha-folder-closed").is_some());
+    assert!(harness.bounds(cx, "project-alpha-folder-open").is_none());
 
     harness.click(cx, "project-alpha-toggle").unwrap();
     assert!(harness.bounds(cx, "history-row-saved").is_some());
+    assert!(harness.bounds(cx, "project-alpha-folder-open").is_some());
 }
 
 #[gpui::test]
@@ -290,6 +299,74 @@ fn adding_a_project_lists_the_picked_folder(cx: &mut TestAppContext) {
     cx.run_until_parked();
 
     assert!(harness.bounds(cx, "project-picked").is_some());
+}
+
+#[gpui::test]
+fn sidebar_icons_and_titles_stay_aligned_when_the_interface_size_changes(cx: &mut TestAppContext) {
+    let harness = DesktopHarnessBuilder::default().history(eight_sessions("/alpha")).project("/alpha").build(cx);
+    wait_for_history(&harness, cx);
+    harness.registry(cx).update(cx, |registry, cx| registry.archive(&SessionId::new("day-1"), cx));
+    harness.click(cx, "project-alpha-archived").unwrap();
+
+    for shortcut in ["secondary-0", "secondary-=", "secondary-- secondary--"] {
+        harness.simulate_keystrokes(cx, shortcut);
+        let folder = harness.bounds(cx, "project-alpha-folder-open").expect("project has a folder icon");
+        let conversation = harness.bounds(cx, "history-row-day-8-conversation-icon").expect("thread has an icon");
+        let archive = harness.bounds(cx, "project-alpha-archived-icon").expect("archive group has an icon");
+        let archived = harness.bounds(cx, "history-row-day-1-conversation-icon").expect("archived thread has an icon");
+        assert_eq!(folder.left(), conversation.left());
+        assert_eq!(archive.left(), conversation.left());
+        assert_eq!(archived.left(), conversation.left());
+        assert_eq!(conversation.size.width, harness.rem_size(cx));
+        assert_eq!(conversation.size.height, harness.rem_size(cx));
+
+        let title = harness.bounds(cx, "history-row-day-8-title").unwrap();
+        for selector in ["project-alpha-title", "project-alpha-archived-title", "project-alpha-show-more-title"] {
+            assert_eq!(harness.bounds(cx, selector).unwrap().left(), title.left(), "{selector} aligns with threads");
+        }
+        let row = harness.bounds(cx, "history-row-day-8").unwrap();
+        let expected_height = px(28.0) * (harness.rem_size(cx) / px(16.0));
+        assert!(
+            (row.size.height - expected_height).abs() <= px(1.0),
+            "row height stays unchanged after pixel snapping"
+        );
+    }
+}
+
+#[gpui::test]
+fn sidebar_icons_leave_room_for_long_titles_at_minimum_width(cx: &mut TestAppContext) {
+    let sessions = TestStore::new();
+    save_session(
+        &sessions,
+        "saved",
+        "/a-project-with-a-long-name",
+        "2026-01-01T00:00:00Z",
+        Some("A very long thread title that should truncate instead of pushing its icon or actions out of the sidebar"),
+    );
+    let harness = DesktopHarnessBuilder::default().history(sessions).project("/a-project-with-a-long-name").build(cx);
+    wait_for_history(&harness, cx);
+    harness.drag(cx, "sidebar-resize-handle", px(10.0)).unwrap();
+
+    let row = harness.bounds(cx, "history-row-saved").unwrap();
+    let icon = harness.bounds(cx, "history-row-saved-conversation-icon").unwrap();
+    let title = harness.bounds(cx, "history-row-saved-title").unwrap();
+    assert!(icon.left() >= row.left());
+    assert!(icon.right() < title.left());
+    assert!(title.size.width > px(0.0));
+    assert!(title.right() <= row.right());
+    assert_eq!(icon.size.width, harness.rem_size(cx));
+
+    let project = harness.bounds(cx, "project-a-project-with-a-long-name").unwrap();
+    let title = harness.bounds(cx, "project-a-project-with-a-long-name-title").unwrap();
+    let new_thread = harness.bounds(cx, "project-a-project-with-a-long-name-new-thread").unwrap();
+    assert!(title.size.width > px(0.0));
+    assert!(title.right() <= new_thread.left());
+    assert!(new_thread.right() <= project.right());
+
+    harness.click(cx, "project-a-project-with-a-long-name-folder-open").unwrap();
+    assert!(harness.bounds(cx, "history-row-saved").is_none());
+    harness.click(cx, "project-a-project-with-a-long-name-folder-closed").unwrap();
+    assert!(harness.bounds(cx, "history-row-saved-conversation-icon").is_some());
 }
 
 #[test]

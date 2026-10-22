@@ -1,14 +1,15 @@
+mod agents;
 mod attention;
 mod changes;
 mod chat;
 mod cli;
 mod composer;
+mod connector;
 mod elicitation;
 mod history;
 mod interface_size;
 mod launch;
 mod layout;
-mod local_connector;
 mod menus;
 mod navigation;
 mod registry;

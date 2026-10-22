@@ -77,7 +77,7 @@ fn agent() -> FakeAgent {
 /// Opens a thread talking to `agent`, prompts it, and waits until it asks its question.
 fn questioned(agent: FakeAgent, cx: &mut TestAppContext) -> (DesktopHarness, Entity<Thread>) {
     let harness = DesktopHarnessBuilder::default().connector(FakeConnector::default().agent("/alpha", agent)).build(cx);
-    let thread = harness.threads(cx).update(cx, |threads, cx| threads.new_thread("/alpha".into(), cx));
+    let thread = harness.new_thread(cx, "/alpha");
     harness.run_until(cx, |cx| thread.read(cx).status() == ThreadStatus::Idle);
     thread.update(cx, |thread, cx| thread.submit("go", cx));
     harness.run_until(cx, |cx| thread.read(cx).status() == ThreadStatus::NeedsInput);

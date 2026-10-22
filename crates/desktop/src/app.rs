@@ -1,3 +1,4 @@
+use crate::agents::Agents;
 use crate::chat::{SearchPrompts, bind_config_picker_keys};
 use crate::clock::Clock;
 use crate::history::History;
@@ -5,7 +6,7 @@ use crate::menus::{APP_NAME, Quit};
 use crate::registry::Registry;
 use crate::sidebar::{NewThread, Sidebar};
 use crate::switcher::{SwitchTarget, SwitcherEvent, ThreadSwitcher};
-use crate::target::{AgentCommandLine, Connector};
+use crate::target::Connector;
 use crate::thread_view::{ThreadTab, ThreadView};
 use crate::threads::{Attention, ThreadEvent, ThreadId, ThreadManager};
 use crate::ui::interface_size::DEFAULT_INTERFACE_SIZE;
@@ -41,6 +42,7 @@ pub struct DesktopApp {
     threads: Entity<ThreadManager>,
     history: Entity<History>,
     registry: Entity<Registry>,
+    agents: Entity<Agents>,
     sidebar: Entity<Sidebar>,
     views: HashMap<ThreadId, ThreadSlot>,
     /// The selected thread when it was last focused, so focus moves only when the
@@ -60,8 +62,8 @@ pub struct DesktopConfig {
     pub connector: Arc<dyn Connector>,
     /// Tells how old saved sessions are.
     pub clock: Arc<dyn Clock>,
-    /// Starts the agent process of a new local thread.
-    pub agent: AgentCommandLine,
+    /// The agents each project offers to start threads with.
+    pub agents: Agents,
     /// Where saved sessions are read from. Without one the app shows no history.
     pub sessions: Option<SessionStore>,
     /// What the app remembers between runs.
@@ -74,14 +76,15 @@ impl DesktopApp {
     /// been read. Clicking one of the app's notifications brings the window back with the
     /// notification's thread selected.
     pub fn new(config: DesktopConfig, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let DesktopConfig { connector, clock, agent, sessions, registry } = config;
+        let DesktopConfig { connector, clock, agents, sessions, registry } = config;
         install_theme(&registry, window, cx);
         if let Some(size) = registry.read(cx).interface_size() {
             InterfaceSize::set(size, cx);
         }
         let window_active = window.is_window_active();
+        let agents = cx.new(|_| agents);
         let threads = cx.new(|cx| {
-            let mut threads = ThreadManager::new(connector, agent);
+            let mut threads = ThreadManager::new(connector, agents.clone());
             threads.set_window_active(window_active, cx);
             threads
         });
@@ -90,7 +93,8 @@ impl DesktopApp {
             history.refresh(cx);
             history
         });
-        let sidebar = cx.new(|cx| Sidebar::new(threads.clone(), history.clone(), registry.clone(), clock, cx));
+        let sidebar =
+            cx.new(|cx| Sidebar::new(threads.clone(), history.clone(), registry.clone(), agents.clone(), clock, cx));
         let subscriptions = vec![
             cx.observe_window_appearance(window, |this, window, cx| {
                 install_theme(&this.registry, window, cx);
@@ -102,6 +106,8 @@ impl DesktopApp {
                 this.threads.update(cx, |threads, cx| threads.set_window_active(active, cx));
                 if active {
                     this.history.update(cx, History::refresh);
+                    // The user may have edited an `acp.json` file while away.
+                    this.agents.update(cx, Agents::reload);
                 }
             }),
             cx.observe_window_bounds(window, |this, window, cx| {
@@ -132,6 +138,7 @@ impl DesktopApp {
             threads,
             history,
             registry,
+            agents,
             sidebar,
             views: HashMap::new(),
             focused: None,
@@ -171,6 +178,10 @@ impl DesktopApp {
 
     pub fn registry(&self) -> &Entity<Registry> {
         &self.registry
+    }
+
+    pub fn agents(&self) -> &Entity<Agents> {
+        &self.agents
     }
 
     pub fn sidebar(&self) -> &Entity<Sidebar> {

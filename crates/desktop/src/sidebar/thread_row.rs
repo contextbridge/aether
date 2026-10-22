@@ -1,11 +1,12 @@
 use super::ClickHandler;
-use super::status_dot::StatusDot;
+use super::status_indicator::{StatusIndicator, render_unread};
+use crate::threads::ThreadStatus;
 use crate::ui::UiTheme;
-use crate::ui::tokens::{DOT_SLOT, rem};
+use crate::ui::tokens::{ICON_SIZE, STATUS_SLOT, rem};
 use crate::ui::{IconButton, IconName, ListRow, Typography, TypographyExt};
 use chrono::{DateTime, Utc};
 use gpui::{
-    AnyElement, App, ClickEvent, IntoElement, ParentElement, RenderOnce, SharedString, Window, div, prelude::*,
+    AnyElement, App, ClickEvent, IntoElement, ParentElement, RenderOnce, SharedString, Window, div, prelude::*, svg,
 };
 use gpui_base::Selectable;
 
@@ -23,7 +24,7 @@ pub fn relative_time(then: DateTime<Utc>, now: DateTime<Utc>) -> String {
     }
 }
 
-/// One thread in a project section: its status dot, its title, and how long ago it started.
+/// One thread in a project section: its conversation or activity icon, title, and age.
 ///
 /// While the pointer is over the row, its actions show in place of the time: archive (or
 /// unarchive), and stop for a live thread. A thread that can reconnect always offers to. A row
@@ -34,7 +35,8 @@ pub(crate) struct ThreadRow {
     title: SharedString,
     /// Shown in place of the title while the title is edited.
     editor: Option<AnyElement>,
-    dot: Option<StatusDot>,
+    status: ThreadStatus,
+    unread: bool,
     started_at: Option<DateTime<Utc>>,
     now: DateTime<Utc>,
     selected: bool,
@@ -54,7 +56,8 @@ impl ThreadRow {
             selector: selector.into(),
             title: title.into(),
             editor: None,
-            dot: None,
+            status: ThreadStatus::Idle,
+            unread: false,
             started_at: None,
             now: Utc::now(),
             selected: false,
@@ -67,8 +70,13 @@ impl ThreadRow {
         }
     }
 
-    pub(crate) fn dot(mut self, dot: Option<StatusDot>) -> Self {
-        self.dot = dot;
+    pub(crate) fn status(mut self, status: &ThreadStatus) -> Self {
+        self.status = status.clone();
+        self
+    }
+
+    pub(crate) fn unread(mut self, unread: bool) -> Self {
+        self.unread = unread;
         self
     }
 
@@ -145,7 +153,9 @@ impl RenderOnce for ThreadRow {
         let colors = theme.colors;
         let hover_group = ListRow::hover_group(&selector);
         let editing = self.editor.is_some();
-        let dot = self.dot.map(|dot| dot.render(&selector, &theme));
+        let icon = StatusIndicator::of(&self.status)
+            .map_or_else(|| conversation_icon(&selector, &theme), |indicator| indicator.render(&selector, &theme));
+        let unread = self.unread.then(|| render_unread(&selector, &theme));
         let button = |action: &str, icon, label: &'static str, handler: ClickHandler| {
             IconButton::new(format!("{selector}-{action}"), icon, label, theme).on_click(handler)
         };
@@ -188,16 +198,40 @@ impl RenderOnce for ThreadRow {
                     .children(stop),
             )
             .children(reconnect);
-        let title = match self.editor {
-            Some(editor) => editor,
-            None => div().min_w_0().truncate().child(self.title).into_any_element(),
+        let title = if let Some(editor) = self.editor {
+            editor
+        } else {
+            let title_selector = format!("{selector}-title");
+            div()
+                .min_w_0()
+                .truncate()
+                .debug_selector(move || title_selector)
+                .when(matches!(self.status, ThreadStatus::Dormant), |title| title.text_color(colors.text_muted))
+                .child(crate::ui::plain_text(self.title))
+                .into_any_element()
         };
         let on_click = self.on_click.filter(|_| !editing);
         ListRow::new(self.selector, theme)
             .selected(highlighted)
             .when_some(on_click, ListRow::on_click)
-            .child(div().flex_none().w(rem(DOT_SLOT * 2.0)).flex().justify_center().children(dot))
-            .child(div().flex_1().min_w_0().child(title))
+            .child(div().flex_none().size(rem(STATUS_SLOT)))
+            .child(div().flex_none().size(rem(STATUS_SLOT)).flex().items_center().justify_center().child(icon))
+            .child(div().flex_1().min_w_0().flex().items_center().gap_1().child(title).children(unread))
             .child(trailing)
     }
+}
+
+fn conversation_icon(row: &str, theme: &UiTheme) -> AnyElement {
+    let selector = format!("{row}-conversation-icon");
+    div()
+        .flex_none()
+        .flex()
+        .debug_selector(move || selector)
+        .child(
+            svg()
+                .data(include_bytes!("../../assets/icons/message-square-text.svg").as_slice())
+                .size(rem(ICON_SIZE))
+                .text_color(theme.colors.text_muted),
+        )
+        .into_any_element()
 }

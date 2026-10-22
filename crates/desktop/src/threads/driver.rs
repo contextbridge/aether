@@ -1,5 +1,5 @@
 use crate::runtime;
-use crate::target::{ConnectError, ConnectMode, Connector, SessionTarget};
+use crate::target::{ConnectError, ConnectMode, Connector, InstanceId, SessionTarget};
 use acp_utils::client::{AcpClient, AcpEvent};
 use client_core::command::{Command, CommandResult};
 use client_core::runtime::{CommandDispatcher, NoHost};
@@ -13,6 +13,8 @@ use tokio::task::JoinError;
 
 /// What a thread's driver reports to the thread, in the order it happened.
 pub(crate) enum DriverMessage {
+    /// The agent's `launch` command started the instance, which later connections reuse.
+    Launched(InstanceId),
     /// The session is open. Every later message concerns it.
     Connected(Box<SessionCoreConfig>),
     ConnectFailed(ConnectError),
@@ -32,8 +34,9 @@ pub(crate) struct ThreadDriverHandle {
 }
 
 impl ThreadDriverHandle {
-    /// Connects to `target` and drives the connection, passing every [`DriverMessage`] to
-    /// `on_message` on the entity `cx` belongs to.
+    /// Connects to `target`, first launching its instance if it needs one and has none, and
+    /// drives the connection, passing every [`DriverMessage`] to `on_message` on the entity `cx`
+    /// belongs to.
     pub(crate) fn spawn<T: 'static>(
         connector: Arc<dyn Connector>,
         target: SessionTarget,
@@ -78,11 +81,26 @@ struct ThreadDriver {
 impl ThreadDriver {
     async fn run(
         connector: Arc<dyn Connector>,
-        target: SessionTarget,
+        mut target: SessionTarget,
         mode: ConnectMode,
         commands: UnboundedReceiver<Command<Infallible>>,
         messages: UnboundedSender<DriverMessage>,
     ) {
+        if target.instance.is_none() {
+            match connector.launch(&target).await {
+                Ok(Some(instance)) => {
+                    target.instance = Some(instance.clone());
+                    if messages.send(DriverMessage::Launched(instance)).is_err() {
+                        return;
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    let _ = messages.send(DriverMessage::ConnectFailed(error));
+                    return;
+                }
+            }
+        }
         let session = match connector.connect(&target, mode).await {
             Ok(session) => session,
             Err(error) => {

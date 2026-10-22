@@ -1,6 +1,7 @@
 use super::driver::{DriverMessage, ThreadDriverHandle};
 use super::status::{ConnectionPhase, ThreadStatus};
 use crate::history::{UNTITLED, git_root};
+use crate::runtime;
 use crate::target::{ConnectMode, Connector, SessionTarget};
 use acp_utils::conversation::ConversationContent;
 use acp_utils::notifications::PromptSearchResponse;
@@ -246,14 +247,25 @@ impl Thread {
         }
     }
 
-    /// Ends the thread's agent, leaving the thread [`Dormant`](ThreadStatus::Dormant).
-    pub(crate) fn stop(&mut self, cx: &mut Context<Self>) {
-        if self.driver.take().is_some() {
-            self.phase = ConnectionPhase::Stopped;
-            self.elicitation = None;
-            self.review = None;
-            cx.notify();
+    /// Ends the thread's agent, and terminates the instance it was launched on, leaving the
+    /// thread [`Dormant`](ThreadStatus::Dormant).
+    pub(crate) fn stop(&mut self, connector: Arc<dyn Connector>, cx: &mut Context<Self>) {
+        if self.driver.take().is_none() {
+            return;
         }
+        self.phase = ConnectionPhase::Stopped;
+        self.elicitation = None;
+        self.review = None;
+        if let Some(instance) = self.target.instance.take() {
+            let target = SessionTarget { instance: Some(instance), ..self.target.clone() };
+            runtime::spawn(cx, async move {
+                if let Err(error) = connector.terminate(&target).await {
+                    tracing::warn!(%error, agent = %target.agent.name, "could not terminate the agent's instance");
+                }
+            })
+            .detach();
+        }
+        cx.notify();
     }
 
     /// Connects again after the connection failed or closed, resuming the thread's session if it
@@ -278,6 +290,10 @@ impl Thread {
 
     fn on_driver_message(&mut self, message: DriverMessage, cx: &mut Context<Self>) {
         let effects = match message {
+            DriverMessage::Launched(instance) => {
+                self.target.instance = Some(instance);
+                Vec::new()
+            }
             DriverMessage::Connected(config) => {
                 self.session_id = Some(config.session_response.session_id.clone());
                 // Replaces any earlier core, since a resumed session replays its history from the

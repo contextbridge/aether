@@ -1,5 +1,7 @@
 use super::thread::{Thread, ThreadEvent, ThreadId};
-use crate::target::{AgentCommandLine, ConnectMode, Connector, SessionTarget};
+use crate::agents::{AgentProfile, Agents};
+use crate::history::git_root;
+use crate::target::{ConnectMode, Connector, SessionTarget};
 use agent_client_protocol::schema::v2::SessionId;
 use gpui::{App, AppContext, Context, Entity, EventEmitter};
 use std::collections::HashSet;
@@ -12,7 +14,7 @@ use std::sync::Arc;
 /// goes back to being only in history.
 pub struct ThreadManager {
     connector: Arc<dyn Connector>,
-    agent: AgentCommandLine,
+    agents: Entity<Agents>,
     threads: Vec<Entity<Thread>>,
     selected: Option<ThreadId>,
     unread: HashSet<ThreadId>,
@@ -29,11 +31,12 @@ pub struct Attention {
 }
 
 impl ThreadManager {
-    /// Connects new threads through `connector`, starting `agent` for each local one.
-    pub fn new(connector: Arc<dyn Connector>, agent: AgentCommandLine) -> Self {
+    /// Connects threads through `connector`, resuming saved sessions with the agents `agents`
+    /// offers.
+    pub fn new(connector: Arc<dyn Connector>, agents: Entity<Agents>) -> Self {
         Self {
             connector,
-            agent,
+            agents,
             threads: Vec::new(),
             selected: None,
             unread: HashSet::new(),
@@ -91,18 +94,21 @@ impl ThreadManager {
         self.unread.contains(&id)
     }
 
-    /// Starts a thread with a fresh session in `cwd`, and selects it.
-    pub fn new_thread(&mut self, cwd: PathBuf, cx: &mut Context<Self>) -> Entity<Thread> {
-        self.open(cwd, ConnectMode::NewSession, cx)
+    /// Starts a thread with a fresh session of `agent` in `cwd`, and selects it.
+    pub fn new_thread(&mut self, cwd: PathBuf, agent: AgentProfile, cx: &mut Context<Self>) -> Entity<Thread> {
+        self.open(SessionTarget::new(cwd, agent), ConnectMode::NewSession, cx)
     }
 
     /// Opens the saved session `session_id` in a live thread and selects it.
     ///
-    /// A new thread resumes the session in `cwd`, replaying its history. When a thread already has
-    /// the session open, that thread is selected instead, and reconnected if its connection ended.
+    /// A new thread resumes the session in `cwd` with its project's
+    /// [`DEFAULT_AGENT`](crate::agents::DEFAULT_AGENT), since saved sessions are Aether's,
+    /// replaying its history. When a thread already has the session open, that thread is selected
+    /// instead, and reconnected if its connection ended.
     pub fn resume(&mut self, session_id: SessionId, cwd: PathBuf, cx: &mut Context<Self>) -> Entity<Thread> {
         let Some(thread) = self.thread_with_session(&session_id, cx).cloned() else {
-            return self.open(cwd, ConnectMode::Resume(session_id), cx);
+            let agent = self.agents.read(cx).catalog(&git_root(&cwd)).default_agent().clone();
+            return self.open(SessionTarget::new(cwd, agent), ConnectMode::Resume(session_id), cx);
         };
         let id = thread.read(cx).id();
         self.reconnect(id, cx);
@@ -119,14 +125,15 @@ impl ThreadManager {
         }
     }
 
-    /// Ends the thread's agent and removes the thread. Its session, once saved, shows in history
-    /// again, from where it can be resumed.
+    /// Ends the thread's agent, and any instance it was launched on, and removes the thread. Its
+    /// session, once saved, shows in history again, from where it can be resumed.
     pub fn stop(&mut self, id: ThreadId, cx: &mut Context<Self>) {
         let Some(index) = self.threads.iter().position(|thread| thread.read(cx).id() == id) else {
             return;
         };
         // Stopped explicitly because other holders of the entity would otherwise keep its agent alive.
-        self.threads.remove(index).update(cx, Thread::stop);
+        let connector = self.connector.clone();
+        self.threads.remove(index).update(cx, |thread, cx| thread.stop(connector, cx));
         self.unread.remove(&id);
         if self.selected == Some(id) {
             self.selected = None;
@@ -134,10 +141,9 @@ impl ThreadManager {
         cx.notify();
     }
 
-    fn open(&mut self, cwd: PathBuf, mode: ConnectMode, cx: &mut Context<Self>) -> Entity<Thread> {
+    fn open(&mut self, target: SessionTarget, mode: ConnectMode, cx: &mut Context<Self>) -> Entity<Thread> {
         let id = ThreadId::new(self.next_id);
         self.next_id += 1;
-        let target = SessionTarget::Local { cwd, agent: self.agent.clone() };
         let connector = self.connector.clone();
         let thread = cx.new(|cx| Thread::connect(id, target, mode, connector, cx));
         cx.subscribe(&thread, move |this, _, event: &ThreadEvent, cx| this.on_thread_event(id, event, cx)).detach();

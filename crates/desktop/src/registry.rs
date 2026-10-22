@@ -116,6 +116,18 @@ impl Registry {
         }
     }
 
+    /// The agent the user last chose from the project's new-thread menu, if they chose one.
+    pub fn last_agent(&self, root: &Path) -> Option<&str> {
+        self.state.last_agents.get(root).map(String::as_str)
+    }
+
+    pub fn set_last_agent(&mut self, root: PathBuf, agent: String, cx: &mut Context<Self>) {
+        if self.state.last_agents.get(&root) != Some(&agent) {
+            self.state.last_agents.insert(root, agent);
+            self.changed(cx);
+        }
+    }
+
     pub fn thread(&self, session_id: &SessionId) -> &ThreadMeta {
         self.state.threads.get(session_id).unwrap_or(&NO_META)
     }
@@ -272,6 +284,8 @@ struct State {
     version: u32,
     projects: Vec<PathBuf>,
     disclosures: HashMap<PathBuf, Disclosure>,
+    /// The agent last chosen from each project's new-thread menu, by name.
+    last_agents: HashMap<PathBuf, String>,
     threads: HashMap<SessionId, ThreadMeta>,
     window: Option<WindowSize>,
     last_selected: Option<SessionId>,
@@ -284,6 +298,7 @@ impl Default for State {
             version: STATE_VERSION,
             projects: Vec::new(),
             disclosures: HashMap::new(),
+            last_agents: HashMap::new(),
             threads: HashMap::new(),
             window: None,
             last_selected: None,
