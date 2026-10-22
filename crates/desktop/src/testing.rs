@@ -16,12 +16,15 @@ use chrono::{DateTime, Utc};
 use client_core::session::Connection;
 use client_core::testing::{FakeGit, FakeGitDiffServer};
 use gpui::{
-    App, AppContext, Bounds, Entity, KeyUpEvent, Keystroke, Modifiers, MouseButton, Pixels, ScrollDelta,
-    ScrollWheelEvent, Size, SystemNotificationResponse, TestAppContext, VisualTestContext, WindowHandle, point, px,
-    size,
+    AnyWindowHandle, App, AppContext, Bounds, Element, ElementId, Entity, Global, GlobalElementId, HighlightStyle,
+    Hsla, InspectorElementId, IntoElement, KeyUpEvent, Keystroke, LayoutId, Modifiers, MouseButton, Pixels,
+    ScrollDelta, ScrollWheelEvent, SharedString, Size, StyledText, SystemNotificationResponse, TestAppContext,
+    VisualTestContext, Window, WindowHandle, WindowId, point, px, size,
 };
 use std::collections::{HashMap, VecDeque};
 use std::io;
+use std::ops::Range;
+use std::panic::Location;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use tokio::runtime::{Builder, Runtime};
@@ -34,6 +37,25 @@ pub const DEFAULT_NOW: &str = "2026-01-07T12:00:00Z";
 /// The file the `fake-acp-agent` test binary holds an exclusive lock on, in its working
 /// directory, for as long as it runs.
 pub const FAKE_AGENT_LOCK_FILE: &str = "agent.lock";
+
+/// Text and effective foreground styles observed while the production element paints.
+#[derive(Clone, Debug)]
+pub struct PaintedText {
+    pub text: SharedString,
+    pub highlights: Vec<(Range<usize>, HighlightStyle)>,
+    pub foreground: Hsla,
+}
+
+impl PaintedText {
+    /// The effective foreground at a UTF-8 byte offset in this text.
+    pub fn color_at(&self, offset: usize) -> Hsla {
+        self.highlights
+            .iter()
+            .find(|(range, _)| range.contains(&offset))
+            .and_then(|(_, style)| style.color)
+            .unwrap_or(self.foreground)
+    }
+}
 
 /// Configures and opens a [`DesktopHarness`].
 pub struct DesktopHarnessBuilder {
@@ -449,6 +471,14 @@ impl DesktopHarness {
         cx.update_window(*self.window, |_, window, _| window.rem_size()).expect("the test window is open")
     }
 
+    /// The last paint of this exact text in this window, including styles and inherited foreground.
+    /// Retained across frames because gpui can reuse previously painted list rows.
+    pub fn painted_text(&self, cx: &mut TestAppContext, text: &str) -> Option<PaintedText> {
+        self.draw(cx);
+        let window = AnyWindowHandle::from(self.window).window_id();
+        cx.read(|cx| cx.try_global::<PaintedTexts>()?.0.get(&window)?.get(text).cloned())
+    }
+
     /// Reads the installed app theme.
     pub fn theme(&self, cx: &TestAppContext) -> DesktopTheme {
         cx.read(|cx| DesktopTheme::global(cx).clone())
@@ -463,6 +493,10 @@ impl DesktopHarness {
 pub enum HarnessError {
     #[error("no painted element is tagged `{0}`")]
     MissingElement(&'static str),
+}
+
+pub(crate) fn observe_text(text: SharedString, highlights: Vec<(Range<usize>, HighlightStyle)>) -> impl IntoElement {
+    ObservedText { inner: StyledText::new(text.clone()).with_highlights(highlights.clone()), text, highlights }
 }
 
 #[derive(Default)]
@@ -493,4 +527,79 @@ impl FakeConnectorState {
 
 fn parse_time(time: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(time).expect("an RFC 3339 time").to_utc()
+}
+
+#[derive(Default)]
+struct PaintedTexts(HashMap<WindowId, HashMap<SharedString, PaintedText>>);
+
+impl Global for PaintedTexts {}
+
+struct ObservedText {
+    inner: StyledText,
+    text: SharedString,
+    highlights: Vec<(Range<usize>, HighlightStyle)>,
+}
+
+impl IntoElement for ObservedText {
+    type Element = Self;
+
+    fn into_element(self) -> Self {
+        self
+    }
+}
+
+impl Element for ObservedText {
+    type RequestLayoutState = <StyledText as Element>::RequestLayoutState;
+    type PrepaintState = <StyledText as Element>::PrepaintState;
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        id: Option<&GlobalElementId>,
+        inspector: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        self.inner.request_layout(id, inspector, window, cx)
+    }
+
+    fn prepaint(
+        &mut self,
+        id: Option<&GlobalElementId>,
+        inspector: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
+        self.inner.prepaint(id, inspector, bounds, layout, window, cx);
+    }
+
+    fn paint(
+        &mut self,
+        id: Option<&GlobalElementId>,
+        inspector: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        layout: &mut Self::RequestLayoutState,
+        prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        self.inner.paint(id, inspector, bounds, layout, prepaint, window, cx);
+        cx.default_global::<PaintedTexts>().0.entry(window.window_handle().window_id()).or_default().insert(
+            self.text.clone(),
+            PaintedText {
+                text: self.text.clone(),
+                highlights: self.highlights.clone(),
+                foreground: window.text_style().color,
+            },
+        );
+    }
 }

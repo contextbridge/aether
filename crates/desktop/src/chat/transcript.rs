@@ -1,7 +1,8 @@
+use super::diff::DiffCache;
 use super::markdown::{MarkdownRenderer, StreamedMarkdown};
 use super::notice::notice;
 use super::thinking::thinking_block;
-use super::tool_card::tool_card;
+use super::tool_card::ToolRenderer;
 use crate::theme::DesktopTheme;
 use crate::threads::{Thread, ThreadStatus};
 use crate::ui::tokens::{CONTENT_MAX_WIDTH, RADIUS_CONTAINER, rem};
@@ -32,6 +33,7 @@ pub(crate) struct Transcript {
     /// The tool calls and reasoning the user unfolded.
     expanded: HashSet<ConversationItemId>,
     highlighter: SyntaxHighlighter,
+    patches: DiffCache,
     following: bool,
 }
 
@@ -58,6 +60,7 @@ impl Transcript {
             markdown: HashMap::new(),
             expanded: HashSet::new(),
             highlighter: SyntaxHighlighter::default(),
+            patches: DiffCache::default(),
             following: true,
         }
     }
@@ -71,6 +74,7 @@ impl Transcript {
         if id != self.synced || revisions.len() < self.revisions.len() {
             self.list.reset(revisions.len());
             self.markdown.clear();
+            self.patches.clear();
             self.expanded.clear();
         } else {
             for (index, (old, new)) in self.revisions.iter().zip(&revisions).enumerate() {
@@ -132,7 +136,10 @@ impl Transcript {
                 let text = item.text().unwrap_or_default().into_owned();
                 thinking_block(text, item.is_open(), index, expanded, &theme, toggle)
             }
-            ConversationContent::Tool(tool) => tool_card(tool, index, expanded, &theme, toggle),
+            ConversationContent::Tool(tool) => {
+                ToolRenderer::new(desktop_theme.review(), &mut self.highlighter, &mut self.patches)
+                    .render(tool, index, expanded, toggle)
+            }
             ConversationContent::Notice(text) => notice(text, &theme),
         };
         div()

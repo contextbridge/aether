@@ -51,6 +51,7 @@ aether-sessions = { path = "../aether-sessions", version = "0.3.18" }
 chrono = { workspace = true }
 client_core = { package = "aether-client-core", path = "../client-core", version = "0.1.0" }
 clankerdiff-client = { workspace = true }
+clankerdiff-core = { workspace = true }
 clankerdiff-gpui = { workspace = true }
 clankerdiff-markdown = { workspace = true }
 clankerdiff-syntax = { workspace = true }
@@ -69,7 +70,7 @@ tracing-subscriber = { workspace = true }
 utils = { package = "aether-utils", path = "../utils", version = "0.3.0" }
 
 [dev-dependencies]
-clankerdiff-core = { workspace = true }
+serde_json = { workspace = true }
 client_core = { package = "aether-client-core", path = "../client-core", features = ["testing"], version = "0.1.0" }
 tempfile = { workspace = true }
 

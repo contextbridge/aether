@@ -1,12 +1,13 @@
+use super::code::{highlight, styled_text};
 use crate::ui::tokens::{GROUP_HEIGHT, RADIUS_CONTAINER, rem};
 use crate::ui::{Button, ButtonVariant, CODE_FONT, IconName, Typography, TypographyExt};
-use clankerdiff_gpui::style::{color, highlight_style};
+use clankerdiff_gpui::style::color;
 use clankerdiff_gpui::ui::prelude::UiTheme;
 use clankerdiff_markdown::{
     MarkdownBlock, MarkdownBlockKind, MarkdownCodeBlock, MarkdownDocument, MarkdownInline, MarkdownListItem,
     MarkdownStream, MarkdownTable,
 };
-use clankerdiff_syntax::{Fingerprint, LanguageHint, SyntaxHighlighter};
+use clankerdiff_syntax::{LanguageHint, SyntaxHighlighter};
 use clankerdiff_theme::{MarkdownPalette, ReviewTheme};
 use gpui::{
     AnyElement, ClipboardItem, ElementId, FontStyle, FontWeight, HighlightStyle, InteractiveText, SharedString,
@@ -138,7 +139,8 @@ impl<'a> MarkdownRenderer<'a> {
     fn code_block(&mut self, block: &MarkdownCodeBlock) -> AnyElement {
         let palette = &self.review.markdown;
         let code = block.lines.iter().map(|line| line.text.as_str()).collect::<Vec<_>>().join("\n");
-        let highlights = self.highlight(&code, block.highlight_hint());
+        let highlights =
+            highlight(&code, LanguageHint::InfoString(block.highlight_hint()), &self.review.syntax, self.highlighter);
         let id = ElementId::NamedInteger(format!("copy-code-{}", self.scope).into(), self.code_blocks);
         self.code_blocks += 1;
         let copied = code.clone();
@@ -177,7 +179,7 @@ impl<'a> MarkdownRenderer<'a> {
                     .font_family(CODE_FONT)
                     .typography(Typography::Small)
                     .text_color(color(palette.code))
-                    .child(StyledText::new(code).with_highlights(highlights)),
+                    .child(styled_text(code, highlights)),
             )
             .into_any_element()
     }
@@ -223,26 +225,6 @@ impl<'a> MarkdownRenderer<'a> {
         InteractiveText::new(id, styled)
             .on_click(ranges, move |index, _, cx| cx.open_url(&urls[index]))
             .into_any_element()
-    }
-
-    fn highlight(&mut self, code: &str, hint: &str) -> Vec<(Range<usize>, HighlightStyle)> {
-        let Ok(highlighted) = self.highlighter.with_theme(&self.review.syntax).highlight_document(
-            Fingerprint::of([code.as_bytes()]),
-            LanguageHint::InfoString(hint),
-            || code,
-        ) else {
-            return Vec::new();
-        };
-        let mut offset = 0;
-        let mut highlights = Vec::new();
-        for (index, line) in code.split('\n').enumerate() {
-            for span in highlighted.line(index).unwrap_or_default() {
-                let range = span.range.start + offset..span.range.end + offset;
-                highlights.push((range, highlight_style(span.foreground, span.font_style)));
-            }
-            offset += line.len() + 1;
-        }
-        highlights
     }
 }
 
