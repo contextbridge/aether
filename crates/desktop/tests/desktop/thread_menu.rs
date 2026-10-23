@@ -42,6 +42,18 @@ fn escape_cancels_a_rename(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn typing_a_space_into_a_rename_keeps_editing(cx: &mut TestAppContext) {
+    let connector = FakeConnector::default().agent("/alpha", replying("alpha-session", "hello"));
+    let harness = DesktopHarnessBuilder::default().connector(connector).project("/alpha").build(cx);
+    prompted_thread(&harness, cx, "first prompt");
+
+    choose(&harness, cx, "thread-row-0", "menu-rename");
+    harness.simulate_keystrokes(cx, "a space b enter");
+
+    assert_eq!(harness.row_title(cx, "thread-row-0").as_deref(), Some("a b"));
+}
+
+#[gpui::test]
 fn a_rename_is_kept_across_launches(first: &mut TestAppContext, second: &mut TestAppContext) {
     let state = tempfile::tempdir().unwrap();
     let harness = launch(first, state.path(), sessions(&["saved"]));

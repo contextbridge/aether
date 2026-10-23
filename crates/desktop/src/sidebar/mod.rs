@@ -622,7 +622,8 @@ impl Sidebar {
             }
         }
         if let Some(Rename { input, .. }) = editing {
-            thread_row = thread_row.editor(Self::render_editor(input, theme, cx));
+            let thread_row = thread_row.editor(Self::render_editor(input, theme, cx));
+            return div().w_full().child(thread_row).into_any_element();
         }
         with_menu(selector, thread_row, MouseButton::Right, items, theme).w_full().into_any_element()
     }
