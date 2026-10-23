@@ -94,6 +94,7 @@ impl WorkspaceSession {
     }
 
     pub(crate) fn queue_diagnostic_refresh(&self, uri: Uri) {
+        self.documents.mark_written(&uri);
         self.refresh.enqueue(vec![uri]);
     }
 
@@ -144,16 +145,24 @@ impl WorkspaceSession {
         #[cfg(feature = "testing")]
         let sync = self.hooks.observe_pending(crate::testing::TestPoint::DocumentSyncWait(uri.clone()), sync);
         let _sync = sync.await;
-        let notifications = match self.documents.acquire(uri).await {
-            AcquireAction::Open { file_path, content } => open_and_save_notifications(uri, &file_path, content),
-            AcquireAction::Reopen { file_path, content } => reopen_notifications(uri, &file_path, content),
-            AcquireAction::Unchanged => return DocumentSync::AlreadyOpen,
+        let mut notifications = match self.documents.acquire(uri).await {
+            AcquireAction::Open { file_path, content } => vec![open_notification(uri, &file_path, 1, content)],
+            AcquireAction::Reopen { file_path, content } => {
+                vec![close_notification(uri), open_notification(uri, &file_path, 1, content)]
+            }
+            AcquireAction::Unchanged => Vec::new(),
             AcquireAction::MissingOnDisk => {
                 self.documents.forget_uri(uri);
                 self.diagnostics.forget_uri(uri);
                 return DocumentSync::Missing;
             }
         };
+        if self.documents.take_pending_save(uri) {
+            notifications.push(save_notification(uri));
+        }
+        if notifications.is_empty() {
+            return DocumentSync::AlreadyOpen;
+        }
 
         #[cfg(feature = "testing")]
         self.hooks.pause(crate::testing::TestPoint::DocumentOpen(uri.clone())).await;
@@ -329,14 +338,6 @@ fn path_is_supported(path: &Path, supported_extensions: &HashSet<String>) -> boo
     path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| supported_extensions.contains(ext))
 }
 
-fn open_and_save_notifications(uri: &Uri, file_path: &str, content: String) -> Vec<LspNotification> {
-    vec![open_notification(uri, file_path, 1, content), save_notification(uri)]
-}
-
-fn reopen_notifications(uri: &Uri, file_path: &str, content: String) -> Vec<LspNotification> {
-    vec![close_notification(uri), open_notification(uri, file_path, 1, content), save_notification(uri)]
-}
-
 fn open_notification(uri: &Uri, file_path: &str, version: i32, content: String) -> LspNotification {
     let language_id = LanguageId::from_path(Path::new(file_path)).as_str().to_string();
     notification::<DidOpenTextDocument>(DidOpenTextDocumentParams {
@@ -359,30 +360,4 @@ fn close_notification(uri: &Uri) -> LspNotification {
 
 fn notification<N: Notification>(params: N::Params) -> LspNotification {
     LspNotification { method: N::METHOD.to_string(), params: serde_json::to_value(params).unwrap() }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn open_and_save_notifications_emit_open_then_save() {
-        let uri: Uri = "file:///workspace/main.rs".parse().unwrap();
-        let notifications = open_and_save_notifications(&uri, "/workspace/main.rs", "fn main() {}\n".to_string());
-
-        assert_eq!(notifications.len(), 2);
-        assert_eq!(notifications[0].method, DidOpenTextDocument::METHOD);
-        assert_eq!(notifications[1].method, DidSaveTextDocument::METHOD);
-    }
-
-    #[test]
-    fn reopen_notifications_emit_close_open_save() {
-        let uri: Uri = "file:///workspace/main.rs".parse().unwrap();
-        let notifications = reopen_notifications(&uri, "/workspace/main.rs", "fn main() {}\n".to_string());
-
-        assert_eq!(notifications.len(), 3);
-        assert_eq!(notifications[0].method, DidCloseTextDocument::METHOD);
-        assert_eq!(notifications[1].method, DidOpenTextDocument::METHOD);
-        assert_eq!(notifications[2].method, DidSaveTextDocument::METHOD);
-    }
 }

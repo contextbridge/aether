@@ -29,6 +29,7 @@ held_diagnostics = {}
 root_path = None
 next_request_id = 0
 cancelled_since_open = set()
+save_counts = {}
 
 
 def write_message(msg):
@@ -324,7 +325,8 @@ while True:
         }
         publish(uri, text)
     elif method == "textDocument/didSave":
-        continue
+        uri = params["textDocument"]["uri"]
+        save_counts[uri] = save_counts.get(uri, 0) + 1
     elif method == "textDocument/didClose":
         uri = params["textDocument"]["uri"]
         state = document(uri)
@@ -354,7 +356,8 @@ while True:
         position = params["position"]
         value = (
             f"open_count={state['open_count']}; line={position['line']}; "
-            f"character={position['character']}; text={state['text']}"
+            f"character={position['character']}; save_count={save_counts.get(uri, 0)}; "
+            f"text={state['text']}"
         )
         respond(message, {"contents": {"kind": "plaintext", "value": value}})
     elif method == "textDocument/definition":
