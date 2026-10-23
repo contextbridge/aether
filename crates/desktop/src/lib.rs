@@ -2,6 +2,7 @@
 
 pub mod agents;
 mod app;
+mod artifact_review;
 mod changes;
 mod chat;
 pub mod cli;
@@ -33,7 +34,7 @@ pub use theme::{DesktopTheme, ThemePair};
 
 use aether_sessions::SessionStore;
 use agents::{Agents, default_agents_file};
-use clankerdiff_gpui::DiffViewer;
+use clankerdiff_gpui::{DiffViewer, MarkdownReviewer};
 use cli::Cli;
 use clock::SystemClock;
 use gpui::{App, AppContext, Bounds, Entity, Pixels, Size, TitlebarOptions, WindowBounds, WindowOptions, px, size};
@@ -89,6 +90,7 @@ fn init(cx: &mut App) {
     gpui_base::init(cx);
     ui::InterfaceSize::init(ui::interface_size::DEFAULT_INTERFACE_SIZE, cx);
     DiffViewer::bind_keys(cx);
+    MarkdownReviewer::bind_keys(cx);
     // Bound before the menus are installed so that the menus can show the shortcuts.
     DesktopApp::bind_keys(cx);
     menus::install(cx);

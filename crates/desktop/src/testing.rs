@@ -19,8 +19,8 @@ use client_core::testing::{FakeGit, FakeGitDiffServer};
 use gpui::{
     AnyWindowHandle, App, AppContext, Bounds, Element, ElementId, Entity, Global, GlobalElementId, HighlightStyle,
     Hsla, InspectorElementId, IntoElement, KeyUpEvent, Keystroke, LayoutId, Modifiers, MouseButton, MouseDownEvent,
-    MouseUpEvent, Pixels, ScrollDelta, ScrollWheelEvent, SharedString, Size, StyledText, SystemNotificationResponse,
-    TestAppContext, VisualTestContext, Window, WindowHandle, WindowId, point, px, size,
+    MouseUpEvent, Pixels, Point, ScrollDelta, ScrollWheelEvent, SharedString, Size, StyledText,
+    SystemNotificationResponse, TestAppContext, VisualTestContext, Window, WindowHandle, WindowId, point, px, size,
 };
 use std::collections::{HashMap, VecDeque};
 use std::io;
@@ -399,13 +399,20 @@ impl DesktopHarness {
         }
     }
 
-    /// Draws and settles the test window.
+    /// Draws and settles the test window, then delivers the frame a view asked for while drawing,
+    /// as a display would.
     ///
     /// # Panics
     ///
     /// Panics if gpui cannot draw the test window.
     pub fn draw(&self, cx: &mut TestAppContext) {
-        cx.update_window(*self.window, |_, window, cx| window.draw(cx).clear(cx)).expect("draw the gpui test window");
+        cx.update_window(*self.window, |_, window, cx| {
+            window.draw(cx).clear(cx);
+            if window.simulate_next_frame(cx) > 0 {
+                window.draw(cx).clear(cx);
+            }
+        })
+        .expect("draw the gpui test window");
         cx.run_until_parked();
     }
 
@@ -457,7 +464,17 @@ impl DesktopHarness {
     /// Drags the element tagged with `selector` sideways, from its centre to `x`.
     pub fn drag(&self, cx: &mut TestAppContext, selector: &'static str, x: Pixels) -> Result<(), HarnessError> {
         let from = self.bounds(cx, selector).ok_or(HarnessError::MissingElement(selector))?.center();
-        let to = point(x, from.y);
+        self.drag_to(cx, selector, point(x, from.y))
+    }
+
+    /// Drags the element tagged with `selector` from its centre to `to`.
+    pub fn drag_to(
+        &self,
+        cx: &mut TestAppContext,
+        selector: &'static str,
+        to: Point<Pixels>,
+    ) -> Result<(), HarnessError> {
+        let from = self.bounds(cx, selector).ok_or(HarnessError::MissingElement(selector))?.center();
         let mut window = VisualTestContext::from_window(*self.window, cx);
         window.simulate_mouse_down(from, MouseButton::Left, Modifiers::default());
         // A drag starts only once the pointer has moved some way from where it was pressed.

@@ -8,7 +8,7 @@ use crate::theme::DesktopTheme;
 use crate::threads::{Thread, ThreadStatus};
 use crate::ui::UiTheme;
 use crate::ui::tokens::{CONTENT_MAX_WIDTH, RADIUS_CONTAINER, rem};
-use crate::ui::{Button, ButtonVariant, EmptyState, IconName, NoticeTone};
+use crate::ui::{Button, ButtonVariant, EmptyState, IconName, ListScrollbar, NoticeTone};
 use acp_utils::conversation::{
     Conversation, ConversationContent, ConversationId, ConversationItem, ConversationItemId, Revision,
 };
@@ -36,7 +36,6 @@ pub(crate) struct Transcript {
     expanded: HashSet<ConversationItemId>,
     highlighter: SharedHighlighter,
     patches: DiffCache,
-    following: bool,
     _thread_changed: Subscription,
 }
 
@@ -46,14 +45,8 @@ impl Transcript {
         let list = ListState::new(0, ListAlignment::Bottom, px(OVERDRAW));
         list.set_follow_mode(FollowMode::Tail);
         let this = cx.entity().downgrade();
-        list.set_scroll_handler(move |event, _, cx| {
-            let following = event.is_following_tail;
-            let _ = this.update(cx, |this, cx| {
-                if this.following != following {
-                    this.following = following;
-                    cx.notify();
-                }
-            });
+        list.set_scroll_handler(move |_, _, cx| {
+            let _ = this.update(cx, |_, cx| cx.notify());
         });
         let thread_changed = cx.observe(&thread, |_, _, cx| cx.notify());
         Self {
@@ -65,7 +58,6 @@ impl Transcript {
             expanded: HashSet::new(),
             highlighter: SharedHighlighter::global(cx),
             patches: DiffCache::default(),
-            following: true,
             _thread_changed: thread_changed,
         }
     }
@@ -106,7 +98,6 @@ impl Transcript {
 
     fn jump_to_latest(&mut self, cx: &mut Context<Self>) {
         self.list.set_follow_mode(FollowMode::Tail);
-        self.following = true;
         cx.notify();
     }
 
@@ -174,7 +165,7 @@ impl Render for Transcript {
         if conversation.is_none_or(|conversation| conversation.items().is_empty()) {
             return transcript.child(empty_state(&thread.status(), &theme));
         }
-        let jump = (!self.following).then(|| {
+        let jump = (!self.list.is_following_tail()).then(|| {
             div().absolute().bottom_4().left_0().right_0().flex().justify_center().child(
                 Button::new("jump-to-latest", "Jump to latest", theme)
                     .icon(IconName::ArrowDown)
@@ -182,9 +173,11 @@ impl Render for Transcript {
                     .on_click(cx.listener(|this, _, _, cx| this.jump_to_latest(cx))),
             )
         });
+        let rows = list(self.list.clone(), cx.processor(|this, index, _, cx| this.render_row(index, cx))).size_full();
         transcript
-            .child(list(self.list.clone(), cx.processor(|this, index, _, cx| this.render_row(index, cx))).size_full())
-            .children(jump)
+            .flex()
+            .child(div().relative().flex_1().min_w_0().h_full().child(rows).children(jump))
+            .child(ListScrollbar::new("transcript-scrollbar", self.list.clone(), theme))
     }
 }
 

@@ -1,6 +1,7 @@
+use crate::artifact_review::{ArtifactReview, pending_review};
 use crate::changes::{Changes, Dismissed};
 use crate::chat::{Composer, PlanPanel, Transcript};
-use crate::elicitation::ElicitationCard;
+use crate::elicitation::{ElicitationCard, OpenReview};
 use crate::registry::Registry;
 use crate::theme::DesktopTheme;
 use crate::threads::{ReviewEvent, Thread};
@@ -9,7 +10,8 @@ use crate::ui::{Button, ButtonVariant, Typography, TypographyExt};
 use gpui::{App, AppContext, Context, Entity, StyleRefinement, Subscription, Window, div, prelude::*};
 
 /// One thread's main area: a header naming the thread and its project, above either its chat
-/// (with any question its agent waits on) or the changes it made to the working tree.
+/// (with any question its agent waits on), the changes it made to the working tree, or the
+/// artifact it asked the user to review.
 ///
 /// Each thread keeps its own view, so switching threads keeps every transcript's scroll position,
 /// every composer's draft, every tab choice and every unsent review comment.
@@ -22,6 +24,7 @@ pub(crate) struct ThreadView {
     elicitation: Entity<ElicitationCard>,
     composer: Entity<Composer>,
     changes: Entity<Changes>,
+    review: Entity<ArtifactReview>,
     /// The header as last rendered, so that the thread's other changes, such as each streamed
     /// chunk of a reply, do not re-render the view.
     header: Header,
@@ -33,13 +36,16 @@ pub(crate) struct ThreadView {
 struct Header {
     title: String,
     changes_label: String,
+    /// Whether the agent waits on an artifact review, which the Review tab shows.
+    reviewing: bool,
 }
 
-/// The two halves of a thread's main area.
+/// What a thread's main area shows. The Review tab exists only while the agent waits on a review.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ThreadTab {
     Chat,
     Changes,
+    Review,
 }
 
 impl ThreadView {
@@ -54,9 +60,18 @@ impl ThreadView {
         let elicitation = cx.new(|cx| ElicitationCard::new(thread.clone(), window, cx));
         let composer = cx.new(|cx| Composer::new(thread.clone(), window, cx));
         let changes = cx.new(|cx| Changes::new(thread.clone(), cx));
+        let review = cx.new(|cx| ArtifactReview::new(thread.clone(), cx));
         let subscriptions = vec![
-            cx.observe(&thread, |this, _, cx| this.sync_header(cx)),
+            cx.observe_in(&thread, window, |this, _, window, cx| {
+                this.sync_header(cx);
+                if this.tab == ThreadTab::Review && !this.header.reviewing {
+                    this.show(ThreadTab::Chat, window, cx);
+                }
+            }),
             cx.observe(&registry, |this, _, cx| this.sync_header(cx)),
+            cx.subscribe_in(&elicitation, window, |this, _, _: &OpenReview, window, cx| {
+                this.show(ThreadTab::Review, window, cx);
+            }),
             cx.subscribe_in(&thread, window, |this, _, event: &ReviewEvent, window, cx| {
                 if *event == ReviewEvent::Submitted {
                     this.show(ThreadTab::Chat, window, cx);
@@ -77,6 +92,7 @@ impl ThreadView {
             elicitation,
             composer,
             changes,
+            review,
             _subscriptions: subscriptions,
         }
     }
@@ -95,20 +111,24 @@ impl ThreadView {
         self.header.changes_label.clone()
     }
 
-    /// Shows `tab` and moves focus into it.
+    /// Shows `tab` and moves focus into it. The Review tab is not shown while there is nothing to
+    /// review.
     pub(crate) fn show(&mut self, tab: ThreadTab, window: &mut Window, cx: &mut Context<Self>) {
+        if tab == ThreadTab::Review && !self.header.reviewing {
+            return;
+        }
         self.tab = tab;
         self.focus(window, cx);
         cx.notify();
     }
 
-    /// Focuses the shown tab: the composer of the chat, or the diff viewer of the changes.
+    /// Focuses the shown tab: the composer of the chat, or the viewer of the changes or review.
     pub(crate) fn focus(&self, window: &mut Window, cx: &mut App) {
         match self.tab {
             ThreadTab::Chat => self.composer.update(cx, |composer, cx| composer.focus(window, cx)),
-            // The diff viewer keeps its focus handle to itself and takes focus when it paints
-            // into a window where nothing has it.
-            ThreadTab::Changes => window.blur(cx),
+            // The diff and Markdown viewers keep their focus handles to themselves and take focus
+            // when they paint into a window where nothing has it.
+            ThreadTab::Changes | ThreadTab::Review => window.blur(cx),
         }
     }
 
@@ -128,12 +148,14 @@ impl ThreadView {
                 .selected(self.tab == value)
                 .on_click(cx.listener(move |this, _, window, cx| this.show(value, window, cx)))
         };
-        div().flex_none().flex().gap_1().child(tab("tab-chat", "Chat".to_owned(), ThreadTab::Chat, cx)).child(tab(
-            "tab-changes",
-            self.header.changes_label.clone(),
-            ThreadTab::Changes,
-            cx,
-        ))
+        let review = self.header.reviewing.then(|| tab("tab-review", "Review".to_owned(), ThreadTab::Review, cx));
+        div()
+            .flex_none()
+            .flex()
+            .gap_1()
+            .child(tab("tab-chat", "Chat".to_owned(), ThreadTab::Chat, cx))
+            .child(tab("tab-changes", self.header.changes_label.clone(), ThreadTab::Changes, cx))
+            .children(review)
     }
 }
 
@@ -193,6 +215,9 @@ impl Render for ThreadView {
             ThreadTab::Changes => {
                 div().flex_1().min_h_0().child(self.changes.clone().cached(StyleRefinement::default().size_full()))
             }
+            ThreadTab::Review => {
+                div().flex_1().min_h_0().child(self.review.clone().cached(StyleRefinement::default().size_full()))
+            }
         };
         div().size_full().flex().flex_col().child(header).child(body)
     }
@@ -204,7 +229,8 @@ impl Header {
             Some(files) => format!("Changes ({files})"),
             None => "Changes".to_owned(),
         };
-        Self { title: Self::title(thread, registry, cx), changes_label }
+        let reviewing = pending_review(thread.read(cx)).is_some();
+        Self { title: Self::title(thread, registry, cx), changes_label, reviewing }
     }
 
     fn title(thread: &Entity<Thread>, registry: &Entity<Registry>, cx: &App) -> String {

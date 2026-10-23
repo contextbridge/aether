@@ -10,7 +10,7 @@ use agent_client_protocol::schema::v2::{
     ListSessionsRequest, ListSessionsResponse, LoginAuthRequest, LoginAuthResponse, NewSessionRequest,
     NewSessionResponse, PromptRequest, PromptResponse, ResumeSessionRequest, ResumeSessionResponse, SessionId,
     SessionInfo, SessionUpdate, SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, StopReason,
-    UpdateSessionNotification, UserMessage,
+    StringPropertySchema, UpdateSessionNotification, UserMessage,
 };
 use agent_client_protocol::util::MatchDispatchFrom;
 use agent_client_protocol::{
@@ -18,6 +18,7 @@ use agent_client_protocol::{
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::mpsc;
+use utils::artifact_review::{ArtifactReviewDecision, ArtifactReviewElicitationMeta};
 
 pub struct FakeAgent {
     initialize: InitializeResponse,
@@ -152,6 +153,14 @@ impl FakeAgent {
     /// Answers every prompt by asking `message` to be answered at `url`, then echoing the answer.
     pub fn prompt_url(mut self, message: &str, url: &str) -> Self {
         self.turn = Some(Turn::Elicit { message: message.into(), question: Question::Url(url.into()) });
+        self
+    }
+
+    /// Answers every prompt by asking the user to review the Markdown artifact `meta` describes,
+    /// then echoing the answer.
+    pub fn prompt_artifact_review(mut self, meta: ArtifactReviewElicitationMeta) -> Self {
+        let message = meta.title.clone();
+        self.turn = Some(Turn::Elicit { message, question: Question::ArtifactReview(meta) });
         self
     }
     pub fn compaction(mut self, session_id: &str, compaction_id: &str, status: CompactionStatus) -> Self {
@@ -409,6 +418,10 @@ impl FakeAgent {
                         ElicitationUrlMode::new(scope, format!("elicitation-{index}"), url.clone()),
                         prompt.clone(),
                     ),
+                    Question::ArtifactReview(meta) => {
+                        CreateElicitationRequest::new(ElicitationFormMode::new(scope, review_schema()), prompt.clone())
+                            .meta(meta.to_meta())
+                    }
                 };
                 let connection = cx.clone();
                 cx.spawn(async move {
@@ -434,6 +447,17 @@ enum Turn {
 enum Question {
     Form(ElicitationSchema),
     Url(String),
+    ArtifactReview(ArtifactReviewElicitationMeta),
+}
+
+/// The form the review MCP server asks an artifact review with.
+fn review_schema() -> ElicitationSchema {
+    let decisions = ArtifactReviewDecision::ALL.map(|decision| decision.to_string()).to_vec();
+    ElicitationSchema::new().property("decision", StringPropertySchema::new().enum_values(decisions), true).property(
+        "feedback",
+        StringPropertySchema::new(),
+        false,
+    )
 }
 
 struct Capture {

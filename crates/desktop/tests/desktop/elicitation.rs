@@ -6,6 +6,8 @@ use agent_client_protocol::schema::v2::{
     BooleanPropertySchema, ElicitationSchema, EnumOption, NewSessionResponse, StringPropertySchema,
 };
 use gpui::{Entity, TestAppContext};
+use std::path::PathBuf;
+use utils::artifact_review::ArtifactReviewElicitationMeta;
 
 #[gpui::test]
 fn a_typed_answer_reaches_the_agent_and_its_turn_goes_on(cx: &mut TestAppContext) {
@@ -68,6 +70,71 @@ fn a_link_question_opens_its_link_and_accepts(cx: &mut TestAppContext) {
 
     assert_eq!(cx.opened_url().as_deref(), Some("https://example.com/login"));
     assert!(answer.contains("accept"), "{answer}");
+}
+
+#[gpui::test]
+fn an_artifact_review_opens_in_place_of_the_chat(cx: &mut TestAppContext) {
+    let (harness, _thread) = questioned(agent().prompt_artifact_review(plan()), cx);
+    assert!(harness.bounds(cx, "elicitation").is_some(), "the review is announced as a card");
+
+    harness.click(cx, "elicitation-open-review").unwrap();
+
+    assert!(harness.bounds(cx, "artifact-review").is_some(), "the artifact is shown for review");
+    assert!(harness.bounds(cx, "composer").is_none(), "the chat is hidden");
+}
+
+#[gpui::test]
+fn approving_an_artifact_tells_the_agent_and_returns_to_the_chat(cx: &mut TestAppContext) {
+    let (harness, thread) = questioned(agent().prompt_artifact_review(plan()), cx);
+    harness.click(cx, "elicitation-open-review").unwrap();
+
+    harness.simulate_keystrokes(cx, "a");
+    let answer = turn_end(&harness, &thread, cx);
+
+    assert!(answer.contains(r#""decision":"approved""#), "{answer}");
+    assert!(harness.bounds(cx, "composer").is_some(), "the chat is back");
+    assert!(harness.bounds(cx, "tab-review").is_none(), "an answered review leaves");
+}
+
+#[gpui::test]
+fn comments_on_an_artifact_reach_the_agent_as_feedback(cx: &mut TestAppContext) {
+    let (harness, thread) = questioned(agent().prompt_artifact_review(plan()), cx);
+    harness.click(cx, "elicitation-open-review").unwrap();
+
+    harness.simulate_keystrokes(cx, "c");
+    harness.simulate_input(cx, "Too vague");
+    harness.press_key(cx, "enter");
+    harness.simulate_keystrokes(cx, "r");
+    let answer = turn_end(&harness, &thread, cx);
+
+    assert!(answer.contains(r#""decision":"feedback""#), "{answer}");
+    assert!(answer.contains("Too vague"), "{answer}");
+}
+
+#[gpui::test]
+fn cancelling_an_artifact_review_tells_the_agent_and_returns_to_the_chat(cx: &mut TestAppContext) {
+    let (harness, thread) = questioned(agent().prompt_artifact_review(plan()), cx);
+    harness.click(cx, "elicitation-open-review").unwrap();
+
+    harness.simulate_keystrokes(cx, "escape");
+    let answer = turn_end(&harness, &thread, cx);
+
+    assert!(answer.contains("cancel"), "{answer}");
+    assert!(harness.bounds(cx, "composer").is_some(), "the chat is back");
+}
+
+#[gpui::test]
+fn an_artifact_review_can_be_declined_from_its_card(cx: &mut TestAppContext) {
+    let (harness, thread) = questioned(agent().prompt_artifact_review(plan()), cx);
+
+    harness.click(cx, "elicitation-decline").unwrap();
+    let answer = turn_end(&harness, &thread, cx);
+
+    assert!(answer.contains("decline"), "{answer}");
+}
+
+fn plan() -> ArtifactReviewElicitationMeta {
+    ArtifactReviewElicitationMeta::new(Some(PathBuf::from("/alpha/plan.md")), "Review plan.md", "# Plan\n\nShip it.\n")
 }
 
 fn agent() -> FakeAgent {

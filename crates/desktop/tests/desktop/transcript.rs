@@ -9,7 +9,7 @@ use aether_desktop::{DesktopTheme, ThemePair};
 use agent_client_protocol::schema::v2 as acp;
 use agent_client_protocol::{Client, ConnectionTo, JsonRpcNotification};
 use clankerdiff_core::git_patch_from_texts;
-use gpui::{Entity, TestAppContext, WindowAppearance, px};
+use gpui::{Entity, TestAppContext, WindowAppearance, point, px};
 
 #[gpui::test]
 fn a_code_block_in_a_reply_copies_its_code(cx: &mut TestAppContext) {
@@ -558,6 +558,36 @@ fn scrolling_up_offers_a_way_back_to_the_latest_reply(cx: &mut TestAppContext) {
     assert!(harness.bounds(cx, "jump-to-latest").is_none(), "jumping back follows again");
 }
 
+#[gpui::test]
+fn a_short_transcript_has_no_scrollbar(cx: &mut TestAppContext) {
+    let harness = harness_with(cx, replying("alpha-session", "Hello"));
+    let thread = start_thread(&harness, cx, "project-alpha-new-thread");
+    send(&harness, cx, &thread, "hi");
+
+    assert!(harness.bounds(cx, "transcript-scrollbar").is_none());
+}
+
+#[gpui::test]
+fn a_long_transcript_has_a_scrollbar_at_its_latest_reply(cx: &mut TestAppContext) {
+    let harness = long_transcript(cx);
+
+    let track = harness.bounds(cx, "transcript-scrollbar").expect("a scrollbar beside the transcript");
+    let thumb = harness.bounds(cx, "transcript-scrollbar-thumb").expect("a thumb on the scrollbar");
+    assert_eq!(thumb.bottom(), track.bottom(), "the transcript follows its latest reply");
+}
+
+#[gpui::test]
+fn dragging_the_scrollbar_offers_a_way_back_to_the_latest_reply(cx: &mut TestAppContext) {
+    let harness = long_transcript(cx);
+    let track = harness.bounds(cx, "transcript-scrollbar").expect("a scrollbar beside the transcript");
+
+    harness.drag_to(cx, "transcript-scrollbar-thumb", point(track.center().x, track.top())).unwrap();
+    assert!(harness.bounds(cx, "jump-to-latest").is_some(), "dragging up stops following");
+
+    harness.drag_to(cx, "transcript-scrollbar-thumb", point(track.center().x, track.bottom())).unwrap();
+    assert!(harness.bounds(cx, "jump-to-latest").is_none(), "dragging to the bottom follows again");
+}
+
 /// An agent that opens `session_id` and answers every prompt with `updates`.
 fn updating(session_id: &str, updates: Vec<acp::SessionUpdate>) -> FakeAgent {
     FakeAgent::default().new_session_response(acp::NewSessionResponse::new(session_id)).prompt_updates(updates)
@@ -569,6 +599,17 @@ fn plan(entries: &[(&str, acp::PlanEntryStatus)]) -> acp::SessionUpdate {
         .map(|(content, status)| acp::PlanEntry::new(*content, acp::PlanEntryPriority::Medium, status.clone()))
         .collect();
     acp::SessionUpdate::PlanUpdate(acp::PlanUpdate::new(acp::PlanUpdateContent::items("plan", entries)))
+}
+
+/// A thread whose one reply is far taller than its window.
+fn long_transcript(cx: &mut TestAppContext) -> DesktopHarness {
+    let reply = (0..200).map(|line| format!("line {line}")).collect::<Vec<_>>().join("\n\n");
+    let connector = FakeConnector::default().agent("/alpha", replying("alpha-session", &reply));
+    let harness =
+        DesktopHarnessBuilder::default().connector(connector).project("/alpha").window_size(900.0, 600.0).build(cx);
+    let thread = start_thread(&harness, cx, "project-alpha-new-thread");
+    send(&harness, cx, &thread, "talk a lot");
+    harness
 }
 
 fn harness_with(cx: &mut TestAppContext, agent: FakeAgent) -> DesktopHarness {

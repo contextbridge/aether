@@ -1,5 +1,5 @@
-//! The card a thread shows while its agent waits on a question: a form to fill in, or a link to
-//! answer at.
+//! The card a thread shows while its agent waits on a question: a form to fill in, a link to
+//! answer at, or an artifact to review.
 
 use crate::theme::DesktopTheme;
 use crate::threads::Thread;
@@ -11,14 +11,16 @@ use agent_client_protocol::schema::v2::ElicitationMode;
 use client_core::elicitation::ElicitationResponder;
 use client_core::session_core::Elicitation;
 use gpui::{
-    AnyElement, App, ClickEvent, Context, Entity, MouseButton, SharedString, Subscription, Window, div, prelude::*,
+    AnyElement, App, ClickEvent, Context, Entity, EventEmitter, MouseButton, SharedString, Subscription, Window, div,
+    prelude::*,
 };
 use gpui_base::input::{Enter, Input, InputState};
 
 /// Shows the question a thread's agent waits on, above the composer, and sends the user's answer.
 ///
-/// A form is answered with Submit, a link by opening it, and either can be declined. A question
-/// the card cannot answer, such as an artifact review, can only be declined.
+/// A form is answered with Submit, a link by opening it, and an artifact review in the thread's
+/// Review tab, which Open review asks for. Any of them can be declined. A question the card cannot
+/// answer can only be declined.
 pub(crate) struct ElicitationCard {
     thread: Entity<Thread>,
     /// The answer being written, while the thread has a question waiting.
@@ -34,11 +36,16 @@ pub(crate) fn question(elicitation: &Elicitation) -> String {
     }
 }
 
+/// Asks the thread's view to show the artifact review its agent waits on.
+pub(crate) struct OpenReview;
+
 enum Draft {
     /// Each field of the form with its answer so far, and why the last submission was refused.
     Form { fields: Vec<DraftField>, error: Option<FormError> },
     /// A page the user answers at.
     Url(String),
+    /// An artifact reviewed in the Review tab, named by its path when it has one.
+    ArtifactReview(Option<String>),
     /// A question the card can only decline.
     Unsupported,
 }
@@ -75,7 +82,9 @@ impl ElicitationCard {
                 ElicitationMode::Url(url) => Draft::Url(url.url.clone()),
                 _ => Draft::Unsupported,
             }),
-            Some(Elicitation::ArtifactReview(_)) => Some(Draft::Unsupported),
+            Some(Elicitation::ArtifactReview(meta)) => {
+                Some(Draft::ArtifactReview(meta.path.as_ref().map(|path| path.display().to_string())))
+            }
         };
         self.draft = draft;
         cx.notify();
@@ -222,6 +231,8 @@ impl ElicitationCard {
     }
 }
 
+impl EventEmitter<OpenReview> for ElicitationCard {}
+
 impl Render for ElicitationCard {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (Some(draft), Some(elicitation)) = (&self.draft, self.thread.read(cx).elicitation()) else {
@@ -243,6 +254,11 @@ impl Render for ElicitationCard {
                 .text_color(theme.colors.text_muted)
                 .child(url.clone())
                 .into_any_element(),
+            Draft::ArtifactReview(path) => div()
+                .typography(Typography::Small)
+                .text_color(theme.colors.text_muted)
+                .children(path.clone())
+                .into_any_element(),
             Draft::Unsupported => div()
                 .typography(Typography::Small)
                 .text_color(theme.colors.text_muted)
@@ -259,6 +275,11 @@ impl Render for ElicitationCard {
                 Button::new("elicitation-open-url", "Open link", theme)
                     .variant(ButtonVariant::Primary)
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_url(cx))),
+            ),
+            Draft::ArtifactReview(_) => Some(
+                Button::new("elicitation-open-review", "Open review", theme)
+                    .variant(ButtonVariant::Primary)
+                    .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(OpenReview))),
             ),
             Draft::Unsupported => None,
         };
