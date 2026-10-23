@@ -97,8 +97,8 @@ impl Reviewer {
             MarkdownDocument::parse_with_metadata(path.map(|path| path.display().to_string()), Some(title), markdown);
         let theme = DesktopTheme::global(cx).review().clone();
         let view = cx.new(|cx| {
-            let mut reviewer =
-                MarkdownReviewer::with_options(Arc::new(document), theme, MarkdownReviewerOptions::default());
+            let options = MarkdownReviewerOptions { themes: false, ..MarkdownReviewerOptions::default() };
+            let mut reviewer = MarkdownReviewer::with_options(Arc::new(document), theme, options);
             reviewer.set_capabilities(
                 ReviewCapabilities { repository: false, refresh: false, scope: false, submit: true, clipboard: true },
                 cx,
