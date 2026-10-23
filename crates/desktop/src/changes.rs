@@ -1,9 +1,9 @@
 use crate::theme::DesktopTheme;
-use crate::threads::{ReviewEvent, Thread, ThreadStatus};
-use crate::ui::{Button, ControlSize, EmptyState, NoticeTone};
-use clankerdiff_client::{ClientState, ConnectionState, DiffReviewEvent, DiffScope, DiffSnapshot};
-use clankerdiff_gpui::{DiffViewer, DiffViewerOptions};
-use gpui::{AnyElement, App, ClipboardItem, Context, Entity, EventEmitter, Subscription, Window, div, prelude::*};
+use crate::threads::{Thread, ThreadEvent, ThreadStatus};
+use crate::ui::{EmptyState, NoticeTone};
+use clankerdiff_client::ClientState;
+use clankerdiff_gpui::{DiffClientEvent, DiffClientView};
+use gpui::{AnyElement, App, Context, Entity, EventEmitter, Subscription, Window, div, prelude::*};
 use std::sync::Arc;
 
 /// A thread's Changes tab: the agent's view of the working tree's diff, where the user comments
@@ -13,16 +13,15 @@ use std::sync::Arc;
 /// while another tab is showing.
 pub(crate) struct Changes {
     thread: Entity<Thread>,
-    /// Created with the first snapshot, and kept so comments survive later snapshots.
-    viewer: Option<Entity<DiffViewer>>,
-    installed: Option<Arc<DiffSnapshot>>,
+    /// Kept across review states so comments survive later snapshots, and dropped with the
+    /// session, since its comments are on a diff that is gone.
+    view: Option<(Entity<DiffClientView>, Subscription)>,
     /// What the tab last showed, so that the thread's other changes, such as each streamed
     /// chunk of a reply, neither re-sync nor re-render it.
     shown: Shown,
-    subscriptions: Vec<Subscription>,
+    _subscriptions: [Subscription; 3],
 }
 
-/// The parts of a thread the Changes tab shows.
 #[derive(Clone)]
 struct Shown {
     review: Option<Arc<ClientState>>,
@@ -34,141 +33,65 @@ pub(crate) struct Dismissed;
 
 impl Changes {
     pub(crate) fn new(thread: Entity<Thread>, cx: &mut Context<Self>) -> Self {
-        let subscriptions = vec![
+        let subscriptions = [
             cx.observe(&thread, |this, _, cx| {
                 let shown = Shown::of(this.thread.read(cx));
                 if !shown.same_as(&this.shown) {
-                    let previous = std::mem::replace(&mut this.shown, shown);
-                    this.sync(previous.review.as_deref(), cx);
+                    this.shown = shown;
+                    this.sync(cx);
                     cx.notify();
                 }
             }),
-            cx.subscribe(&thread, |this, _, event: &ReviewEvent, cx| this.on_review_event(event, cx)),
+            cx.subscribe(&thread, |this, _, event: &ThreadEvent, cx| this.on_thread_event(event, cx)),
             cx.observe_global::<DesktopTheme>(|this, cx| {
                 let theme = DesktopTheme::global(cx).review().clone();
-                if let Some(viewer) = &this.viewer {
-                    viewer.update(cx, |viewer, cx| viewer.set_theme(theme, cx));
+                if let Some((view, _)) = &this.view {
+                    view.update(cx, |view, cx| view.set_theme(theme, cx));
                 }
             }),
         ];
         let shown = Shown::of(thread.read(cx));
-        let mut changes = Self { thread, viewer: None, installed: None, shown, subscriptions };
-        changes.sync(None, cx);
+        let mut changes = Self { thread, view: None, shown, _subscriptions: subscriptions };
+        changes.sync(cx);
         changes
     }
 
-    /// Shows the thread's latest review state, having last shown `previous`. Once the session
-    /// closes there is none, and the comments on the old diff go with it.
-    fn sync(&mut self, previous: Option<&ClientState>, cx: &mut Context<Self>) {
+    fn sync(&mut self, cx: &mut Context<Self>) {
         let Some(state) = self.shown.review.clone() else {
-            self.viewer = None;
-            self.installed = None;
+            self.view = None;
             return;
         };
-        let installed = self.installed.is_some();
-        if let Some(snapshot) = state.snapshot_if_changed(&mut self.installed) {
-            self.install(snapshot, cx);
-        }
-        let capabilities_changed =
-            !installed || previous.is_none_or(|previous| previous.capabilities != state.capabilities);
-        if let Some(viewer) = &self.viewer {
-            viewer.update(cx, |viewer, cx| {
-                if capabilities_changed {
-                    viewer.set_capabilities(state.capabilities, cx);
-                }
-                viewer.set_background_error(state.status(), cx);
-            });
-        }
-    }
-
-    fn install(&mut self, snapshot: &DiffSnapshot, cx: &mut Context<Self>) {
-        let document = snapshot.document.clone();
-        let scope = snapshot.scope;
-        if let Some(viewer) = &self.viewer {
-            viewer.update(cx, |viewer, cx| {
-                viewer.set_scope(scope, cx);
-                viewer.set_document(document, cx);
-            });
-            return;
-        }
-        let theme = DesktopTheme::global(cx).review().clone();
-        let viewer = cx.new(|cx| {
-            let mut viewer = DiffViewer::with_options(document, theme, DiffViewerOptions::default());
-            viewer.set_scope(scope, cx);
-            viewer
+        let (view, _) = self.view.get_or_insert_with(|| {
+            let theme = DesktopTheme::global(cx).review().clone();
+            let view = cx.new(|_| DiffClientView::new(theme));
+            let subscription =
+                cx.subscribe(&view, |this, _, event: &DiffClientEvent, cx| this.on_view_event(event, cx));
+            (view, subscription)
         });
-        self.subscriptions.push(cx.subscribe(&viewer, |this, _, event: &DiffReviewEvent, cx| {
-            this.on_viewer_event(event.clone(), cx);
-        }));
-        self.viewer = Some(viewer);
+        view.update(cx, |view, cx| view.set_state(&state, cx));
     }
 
-    fn on_viewer_event(&mut self, event: DiffReviewEvent, cx: &mut Context<Self>) {
+    fn on_view_event(&mut self, event: &DiffClientEvent, cx: &mut Context<Self>) {
         match event {
-            DiffReviewEvent::SubmitReview(submission) => {
+            DiffClientEvent::Command(event) => {
+                self.thread.update(cx, |thread, _| thread.send_review_event(event.clone()));
+            }
+            DiffClientEvent::Submit(submission) => {
                 self.thread.update(cx, |thread, cx| thread.submit_review(&submission.formatted, cx));
             }
-            DiffReviewEvent::CopyFormattedReview(text) => cx.write_to_clipboard(ClipboardItem::new_string(text)),
-            DiffReviewEvent::Cancel => cx.emit(Dismissed),
-            event
-            @ (DiffReviewEvent::RepositoryAction(_) | DiffReviewEvent::SetScope(_) | DiffReviewEvent::Refresh) => {
-                self.send(event, cx);
-            }
+            DiffClientEvent::Cancel => cx.emit(Dismissed),
         }
     }
 
-    /// Hands `event` to the agent, holding further repository actions until it finishes.
-    fn send(&mut self, event: DiffReviewEvent, cx: &mut Context<Self>) {
-        if let Some(viewer) = &self.viewer {
-            viewer.update(cx, |viewer, cx| viewer.set_repository_pending(true, cx));
-        }
-        self.thread.update(cx, |thread, _| thread.send_review_event(event));
-    }
-
-    fn on_review_event(&mut self, event: &ReviewEvent, cx: &mut Context<Self>) {
-        let Some(viewer) = &self.viewer else {
+    fn on_thread_event(&mut self, event: &ThreadEvent, cx: &mut Context<Self>) {
+        let Some((view, _)) = &self.view else {
             return;
         };
-        viewer.update(cx, |viewer, cx| match event {
-            ReviewEvent::ActionFinished(Ok(())) => viewer.set_repository_pending(false, cx),
-            ReviewEvent::ActionFinished(Err(error)) => viewer.set_repository_error(error.clone(), cx),
-            ReviewEvent::Submitted => viewer.clear_review(cx),
+        view.update(cx, |view, cx| match event {
+            ThreadEvent::ReviewActionFinished(result) => view.command_finished(result.clone(), cx),
+            ThreadEvent::ReviewSubmitted => view.clear_review(cx),
+            _ => {}
         });
-    }
-
-    /// A clean working tree, with a way to look at another scope, since the viewer that would
-    /// otherwise offer it has nothing to show.
-    fn render_clean(scope: DiffScope, cx: &mut Context<Self>) -> AnyElement {
-        let theme = DesktopTheme::global(cx).ui();
-        let segment = |id: &'static str, label: &'static str, value: DiffScope| {
-            Button::new(id, label, theme).size(ControlSize::Small).selected(scope == value).on_click(cx.listener(
-                move |this, _, _, cx| {
-                    if scope != value {
-                        this.send(DiffReviewEvent::SetScope(value), cx);
-                    }
-                },
-            ))
-        };
-        div()
-            .debug_selector(|| "changes-clean".to_owned())
-            .size_full()
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap_4()
-            .child(div().flex_none().child(EmptyState::new(
-                "No changes",
-                format!("Nothing to review in {scope}"),
-                NoticeTone::Neutral,
-                theme,
-            )))
-            .child(div().flex().gap_1().children([
-                segment("scope-unstaged", "Unstaged", DiffScope::Unstaged),
-                segment("scope-staged", "Staged", DiffScope::Staged),
-                segment("scope-both", "Both", DiffScope::Both),
-            ]))
-            .into_any_element()
     }
 }
 
@@ -176,27 +99,14 @@ impl EventEmitter<Dismissed> for Changes {}
 
 impl Render for Changes {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let Some(state) = self.shown.review.clone() else {
-            return match self.shown.status {
-                ThreadStatus::Connecting | ThreadStatus::Idle | ThreadStatus::Running | ThreadStatus::NeedsInput => {
-                    render_status("Loading changes…", "Waiting for the agent".to_owned(), NoticeTone::Neutral, cx)
-                }
-                _ => render_status(
-                    "Agent not running",
-                    "Start the thread again to review its changes".to_owned(),
-                    NoticeTone::Neutral,
-                    cx,
-                ),
-            };
-        };
-        match (&state.snapshot, &self.viewer) {
-            (Some(snapshot), _) if snapshot.document.files.is_empty() => Self::render_clean(snapshot.scope, cx),
-            (Some(_), Some(viewer)) => div()
-                .debug_selector(|| "changes-viewer".to_owned())
-                .size_full()
-                .child(viewer.clone())
-                .into_any_element(),
-            _ => render_unavailable(&state, cx),
+        if let Some((view, _)) = &self.view {
+            return view.clone().into_any_element();
+        }
+        match self.shown.status {
+            ThreadStatus::Connecting | ThreadStatus::Idle | ThreadStatus::Running | ThreadStatus::NeedsInput => {
+                render_status("Loading changes…", "Waiting for the agent", cx)
+            }
+            _ => render_status("Agent not running", "Start the thread again to review its changes", cx),
         }
     }
 }
@@ -206,8 +116,8 @@ impl Shown {
         Self { review: thread.review().cloned(), status: thread.status() }
     }
 
-    /// Whether `self` shows what `other` does. Review states are compared by identity, since the
-    /// thread replaces its state whenever the agent reports a new one.
+    /// Review states are compared by identity, since the thread replaces its state whenever the
+    /// agent reports a new one.
     fn same_as(&self, other: &Self) -> bool {
         let same_review = match (&self.review, &other.review) {
             (Some(review), Some(other)) => Arc::ptr_eq(review, other),
@@ -217,23 +127,10 @@ impl Shown {
     }
 }
 
-/// Before the first snapshot: still loading, or the agent could not read the repository.
-fn render_unavailable(state: &ClientState, cx: &App) -> AnyElement {
-    let detail = state.status().unwrap_or_default();
-    match state.connection {
-        ConnectionState::Failed(_) => render_status("Could not load changes", detail, NoticeTone::Error, cx),
-        ConnectionState::Connecting | ConnectionState::Connected => {
-            render_status("Loading changes…", detail, NoticeTone::Neutral, cx)
-        }
-    }
-}
-
-/// A status in place of the changes, its title colored by `tone`.
-fn render_status(title: &str, detail: String, tone: NoticeTone, cx: &App) -> AnyElement {
-    let theme = DesktopTheme::global(cx).ui();
+fn render_status(title: &'static str, detail: &'static str, cx: &App) -> AnyElement {
     div()
         .debug_selector(|| "changes-status".to_owned())
         .size_full()
-        .child(EmptyState::new(title.to_owned(), detail, tone, theme))
+        .child(EmptyState::new(title, detail, NoticeTone::Neutral, DesktopTheme::global(cx).ui()))
         .into_any_element()
 }

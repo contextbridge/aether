@@ -27,7 +27,7 @@ pub(crate) async fn run(
     mut event_rx: mpsc::UnboundedReceiver<AcpEvent>,
     client_handle: AcpClientHandle,
 ) -> Result<(), AppError> {
-    let mut dispatcher = CommandDispatcher::new(client_handle, TuiHost);
+    let mut dispatcher = CommandDispatcher::with_host(client_handle, TuiHost);
     let result = async {
         let (_, terminal_height) = size()?;
         let viewport = Viewport::Inline(inline_viewport_height(terminal_height));

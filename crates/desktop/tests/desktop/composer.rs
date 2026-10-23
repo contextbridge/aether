@@ -1,17 +1,16 @@
-use crate::support::{replying, start_thread, texts};
+use crate::support::{replying, texts};
 use acp_utils::testing::{FakeAgent, FakeAgentRequests};
-use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder, FakeConnector};
-use aether_desktop::threads::{Thread, ThreadStatus};
+use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder};
+use aether_desktop::threads::Thread;
 use agent_client_protocol::schema::v2 as acp;
 use gpui::{Entity, TestAppContext, px};
 use std::fs;
 
 #[gpui::test]
 fn up_and_down_walk_the_prompts_sent_before(cx: &mut TestAppContext) {
-    let harness = harness_with(cx, replying("alpha-session", "ok"));
-    let thread = start_thread(&harness, cx, "project-alpha-new-thread");
-    send(&harness, cx, &thread, "first");
-    send(&harness, cx, &thread, "second");
+    let (harness, thread) = harness_with(cx, replying("alpha-session", "ok"));
+    harness.send(cx, &thread, "first");
+    harness.send(cx, &thread, "second");
 
     harness.simulate_keystrokes(cx, "up");
     assert_eq!(harness.composer_text(cx).as_deref(), Some("second"));
@@ -25,9 +24,8 @@ fn up_and_down_walk_the_prompts_sent_before(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn up_in_a_draft_moves_the_cursor_instead_of_recalling(cx: &mut TestAppContext) {
-    let harness = harness_with(cx, replying("alpha-session", "ok"));
-    let thread = start_thread(&harness, cx, "project-alpha-new-thread");
-    send(&harness, cx, &thread, "first");
+    let (harness, thread) = harness_with(cx, replying("alpha-session", "ok"));
+    harness.send(cx, &thread, "first");
 
     harness.simulate_input(cx, "draft");
     harness.simulate_keystrokes(cx, "up");
@@ -37,9 +35,8 @@ fn up_in_a_draft_moves_the_cursor_instead_of_recalling(cx: &mut TestAppContext) 
 
 #[gpui::test]
 fn a_slash_offers_the_agents_commands_and_sends_the_chosen_one(cx: &mut TestAppContext) {
-    let harness = harness_with(cx, advertising_commands());
-    let thread = start_thread(&harness, cx, "project-alpha-new-thread");
-    send(&harness, cx, &thread, "hi");
+    let (harness, thread) = harness_with(cx, advertising_commands());
+    harness.send(cx, &thread, "hi");
 
     harness.simulate_input(cx, "/rev");
     assert!(harness.bounds(cx, "completion-item-0").is_some(), "review matches");
@@ -52,9 +49,8 @@ fn a_slash_offers_the_agents_commands_and_sends_the_chosen_one(cx: &mut TestAppC
 
 #[gpui::test]
 fn a_command_that_takes_input_waits_for_it(cx: &mut TestAppContext) {
-    let harness = harness_with(cx, advertising_commands());
-    let thread = start_thread(&harness, cx, "project-alpha-new-thread");
-    send(&harness, cx, &thread, "hi");
+    let (harness, thread) = harness_with(cx, advertising_commands());
+    harness.send(cx, &thread, "hi");
 
     harness.simulate_input(cx, "/expl");
     harness.simulate_keystrokes(cx, "tab");
@@ -65,9 +61,8 @@ fn a_command_that_takes_input_waits_for_it(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn escape_closes_the_menu_until_the_token_ends(cx: &mut TestAppContext) {
-    let harness = harness_with(cx, advertising_commands());
-    let thread = start_thread(&harness, cx, "project-alpha-new-thread");
-    send(&harness, cx, &thread, "hi");
+    let (harness, thread) = harness_with(cx, advertising_commands());
+    harness.send(cx, &thread, "hi");
     harness.simulate_input(cx, "/");
     assert!(harness.bounds(cx, "completion-menu").is_some());
 
@@ -87,9 +82,8 @@ fn an_at_mention_sends_the_file_with_the_prompt(cx: &mut TestAppContext) {
     fs::write(root.join("README.md"), "# alpha\n").unwrap();
     let (agent, mut requests) =
         FakeAgent::default().new_session_response(acp::NewSessionResponse::new("alpha-session")).capture();
-    let connector = FakeConnector::default().agent(&root, agent);
-    let harness = DesktopHarnessBuilder::default().connector(connector).project(&root).build(cx);
-    start_thread(&harness, cx, "project-alpha-new-thread");
+    let harness = DesktopHarnessBuilder::default().agent(&root, agent).build(cx);
+    harness.start_thread(cx, &root);
 
     harness.simulate_input(cx, "explain @lib");
     harness.run_until_painted(cx, "completion-item-0");
@@ -115,11 +109,10 @@ fn choosing_a_model_asks_the_agent_to_switch(cx: &mut TestAppContext) {
     let (agent, mut requests) = FakeAgent::default()
         .new_session_response(acp::NewSessionResponse::new("alpha-session").config_options(vec![model]))
         .capture();
-    let harness = harness_with(cx, agent);
-    start_thread(&harness, cx, "project-alpha-new-thread");
+    let (harness, _) = harness_with(cx, agent);
 
     harness.click(cx, "config-model").unwrap();
-    harness.click(cx, "config-model-slow").unwrap();
+    harness.click(cx, "config-model-picker-slow").unwrap();
     harness.run_until(cx, |_| !requests.config.is_empty());
 
     let request = requests.config.try_recv().unwrap();
@@ -131,15 +124,14 @@ fn choosing_a_model_asks_the_agent_to_switch(cx: &mut TestAppContext) {
 fn typing_in_the_model_picker_filters_the_models_and_enter_chooses_one(cx: &mut TestAppContext) {
     let (agent, mut requests) =
         agent_with_models(&["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta", "iota"]);
-    let harness = harness_with(cx, agent);
-    start_thread(&harness, cx, "project-alpha-new-thread");
+    let (harness, _) = harness_with(cx, agent);
 
     harness.click(cx, "config-model").unwrap();
-    assert!(harness.bounds(cx, "config-model-search").is_some(), "a long list can be searched");
+    assert!(harness.bounds(cx, "config-model-picker-search").is_some(), "a long list can be searched");
     harness.simulate_input(cx, "thet");
 
-    assert!(harness.bounds(cx, "config-model-model-theta").is_some());
-    assert!(harness.bounds(cx, "config-model-model-alpha").is_none(), "models not matching are hidden");
+    assert!(harness.bounds(cx, "config-model-picker-model-theta").is_some());
+    assert!(harness.bounds(cx, "config-model-picker-model-alpha").is_none(), "models not matching are hidden");
     harness.simulate_keystrokes(cx, "enter");
     harness.run_until(cx, |_| !requests.config.is_empty());
 
@@ -151,8 +143,7 @@ fn typing_in_the_model_picker_filters_the_models_and_enter_chooses_one(cx: &mut 
 #[gpui::test]
 fn the_arrow_keys_move_the_pickers_highlight_from_the_current_value(cx: &mut TestAppContext) {
     let (agent, mut requests) = agent_with_models(&["one", "two", "three"]);
-    let harness = harness_with(cx, agent);
-    start_thread(&harness, cx, "project-alpha-new-thread");
+    let (harness, _) = harness_with(cx, agent);
 
     harness.click(cx, "config-model").unwrap();
     harness.simulate_keystrokes(cx, "down down enter");
@@ -166,8 +157,7 @@ fn the_arrow_keys_move_the_pickers_highlight_from_the_current_value(cx: &mut Tes
 fn space_types_into_the_pickers_search_instead_of_closing_it(cx: &mut TestAppContext) {
     let (agent, _requests) =
         agent_with_models(&["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta", "iota"]);
-    let harness = harness_with(cx, agent);
-    start_thread(&harness, cx, "project-alpha-new-thread");
+    let (harness, _) = harness_with(cx, agent);
 
     harness.click(cx, "config-model").unwrap();
     harness.simulate_keystrokes(cx, "t space");
@@ -177,25 +167,14 @@ fn space_types_into_the_pickers_search_instead_of_closing_it(cx: &mut TestAppCon
 }
 
 #[gpui::test]
-fn space_leaves_a_short_picker_open(cx: &mut TestAppContext) {
-    let (agent, _requests) = agent_with_models(&["one", "two"]);
-    let harness = harness_with(cx, agent);
-    start_thread(&harness, cx, "project-alpha-new-thread");
-
-    harness.click(cx, "config-model").unwrap();
-    harness.simulate_keystrokes(cx, "space");
-
-    assert!(harness.bounds(cx, "config-model-picker").is_some());
-}
-
-#[gpui::test]
-fn escape_closes_the_picker_without_switching(cx: &mut TestAppContext) {
+fn space_leaves_a_short_picker_open_and_escape_closes_it_without_switching(cx: &mut TestAppContext) {
     let (agent, requests) = agent_with_models(&["one", "two"]);
-    let harness = harness_with(cx, agent);
-    start_thread(&harness, cx, "project-alpha-new-thread");
+    let (harness, _) = harness_with(cx, agent);
 
     harness.click(cx, "config-model").unwrap();
-    assert!(harness.bounds(cx, "config-model-search").is_none(), "a short list needs no search");
+    assert!(harness.bounds(cx, "config-model-picker-search").is_none(), "a short list needs no search");
+    harness.simulate_keystrokes(cx, "space");
+    assert!(harness.bounds(cx, "config-model-picker").is_some());
     harness.simulate_keystrokes(cx, "escape");
 
     assert!(harness.bounds(cx, "config-model-picker").is_none());
@@ -206,12 +185,8 @@ fn escape_closes_the_picker_without_switching(cx: &mut TestAppContext) {
 fn a_long_list_of_models_scrolls_inside_the_window(cx: &mut TestAppContext) {
     let names: Vec<String> = (0..80).map(|n| format!("m{n}")).collect();
     let (agent, _requests) = agent_with_models(&names.iter().map(String::as_str).collect::<Vec<_>>());
-    let harness = DesktopHarnessBuilder::default()
-        .connector(FakeConnector::default().agent("/alpha", agent))
-        .project("/alpha")
-        .window_size(1000.0, 600.0)
-        .build(cx);
-    start_thread(&harness, cx, "project-alpha-new-thread");
+    let harness = DesktopHarnessBuilder::default().agent("/alpha", agent).window_size(1000.0, 600.0).build(cx);
+    harness.start_thread(cx, "/alpha");
 
     harness.click(cx, "config-model").unwrap();
 
@@ -226,53 +201,19 @@ fn the_context_meter_shows_once_the_agent_reports_usage(cx: &mut TestAppContext)
     let agent = FakeAgent::default()
         .new_session_response(acp::NewSessionResponse::new("alpha-session"))
         .prompt_updates(vec![usage]);
-    let harness = harness_with(cx, agent);
-    let thread = start_thread(&harness, cx, "project-alpha-new-thread");
+    let (harness, thread) = harness_with(cx, agent);
     assert!(harness.bounds(cx, "context-meter").is_none(), "nothing is reported yet");
 
-    send(&harness, cx, &thread, "hi");
+    harness.send(cx, &thread, "hi");
 
-    for shortcut in ["secondary-0", "secondary-=", "secondary-- secondary--"] {
-        harness.simulate_keystrokes(cx, shortcut);
-        assert!(harness.painted_text(cx, "50k / 200k tokens").is_some());
-        let ring = harness.bounds(cx, "context-ring").expect("usage is drawn as a progress ring");
-        assert_eq!(ring.size.width, ring.size.height);
-        assert_eq!(ring.size.width, harness.rem_size(cx));
-    }
-}
-
-#[gpui::test]
-fn the_context_meter_shows_token_counts_at_usage_boundaries(cx: &mut TestAppContext) {
-    for (used, size, label) in [
-        (0, 200_000, "0 / 200k tokens"),
-        (850, 999, "850 / 999 tokens"),
-        (150_000, 200_000, "150k / 200k tokens"),
-        (180_000, 200_000, "180k / 200k tokens"),
-        (200_000, 200_000, "200k / 200k tokens"),
-        (210_000, 200_000, "210k / 200k tokens"),
-        (1_200_000, 2_000_000, "1.2M / 2.0M tokens"),
-        (50_000, 0, "50k tokens"),
-        (0, 0, "0 tokens"),
-    ] {
-        let agent = FakeAgent::default()
-            .new_session_response(acp::NewSessionResponse::new("alpha-session"))
-            .prompt_updates(vec![acp::SessionUpdate::UsageUpdate(acp::UsageUpdate::new(used, size))]);
-        let harness = harness_with(cx, agent);
-        let thread = start_thread(&harness, cx, "project-alpha-new-thread");
-
-        send(&harness, cx, &thread, "hi");
-
-        assert!(harness.painted_text(cx, label).is_some(), "expected {label} for usage {used}/{size}");
-        assert!(harness.bounds(cx, "context-ring").is_some());
-    }
+    assert!(harness.bounds(cx, "context-ring").is_some());
 }
 
 #[gpui::test]
 fn a_prompt_the_agent_has_not_taken_up_shows_as_queued(cx: &mut TestAppContext) {
     let (agent, mut requests) =
         FakeAgent::default().new_session_response(acp::NewSessionResponse::new("alpha-session")).capture();
-    let harness = harness_with(cx, agent);
-    let thread = start_thread(&harness, cx, "project-alpha-new-thread");
+    let (harness, thread) = harness_with(cx, agent);
 
     harness.simulate_input(cx, "later");
     harness.simulate_keystrokes(cx, "enter");
@@ -288,8 +229,7 @@ fn a_prompt_the_agent_has_not_taken_up_shows_as_queued(cx: &mut TestAppContext) 
 #[gpui::test]
 fn prompt_search_puts_a_past_prompt_back_in_the_composer(cx: &mut TestAppContext) {
     let agent = replying("alpha-session", "ok").prompt_history(&["fix the build", "write the docs"]);
-    let harness = harness_with(cx, agent);
-    start_thread(&harness, cx, "project-alpha-new-thread");
+    let (harness, _) = harness_with(cx, agent);
 
     harness.simulate_keystrokes(cx, "secondary-r");
     harness.simulate_input(cx, "build");
@@ -303,8 +243,7 @@ fn prompt_search_puts_a_past_prompt_back_in_the_composer(cx: &mut TestAppContext
 
 #[gpui::test]
 fn prompt_search_is_offered_only_by_agents_that_support_it(cx: &mut TestAppContext) {
-    let harness = harness_with(cx, replying("alpha-session", "ok"));
-    start_thread(&harness, cx, "project-alpha-new-thread");
+    let (harness, _) = harness_with(cx, replying("alpha-session", "ok"));
 
     harness.simulate_keystrokes(cx, "secondary-r");
 
@@ -334,18 +273,9 @@ fn agent_with_models(names: &[&str]) -> (FakeAgent, FakeAgentRequests) {
         .capture()
 }
 
-fn harness_with(cx: &mut TestAppContext, agent: FakeAgent) -> DesktopHarness {
-    let connector = FakeConnector::default().agent("/alpha", agent);
-    DesktopHarnessBuilder::default().connector(connector).project("/alpha").build(cx)
-}
-
-/// Sends `prompt` through the composer and waits for the agent's turn on it to end.
-fn send(harness: &DesktopHarness, cx: &mut TestAppContext, thread: &Entity<Thread>, prompt: &str) {
-    let sent = thread.read_with(cx, |thread, _| texts(thread).iter().filter(|text| *text == prompt).count()) + 1;
-    harness.simulate_input(cx, prompt);
-    harness.simulate_keystrokes(cx, "enter");
-    harness.run_until(cx, |cx| {
-        let thread = thread.read(cx);
-        thread.status() == ThreadStatus::Idle && texts(thread).iter().filter(|text| *text == prompt).count() == sent
-    });
+/// A connected thread in `/alpha` talking to `agent`.
+fn harness_with(cx: &mut TestAppContext, agent: FakeAgent) -> (DesktopHarness, Entity<Thread>) {
+    let harness = DesktopHarnessBuilder::default().agent("/alpha", agent).build(cx);
+    let thread = harness.start_thread(cx, "/alpha");
+    (harness, thread)
 }

@@ -50,7 +50,6 @@ pub enum ConnectMode {
 /// microVM installs dependencies before its agent listens.
 pub const STARTUP_WINDOW: Duration = Duration::from_mins(5);
 
-/// The future each [`Connector`] operation returns.
 pub type ConnectorFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ConnectError>> + Send + 'a>>;
 
 /// Starts, connects to and ends the agent of a [`SessionTarget`].

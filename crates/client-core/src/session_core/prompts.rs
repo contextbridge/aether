@@ -18,10 +18,10 @@ impl SessionCore {
     /// Sends `submission` as a prompt, reading its attachments first. While
     /// another foreground operation runs the submission is handed straight
     /// back through [`Effect::RestoreSubmission`].
-    pub fn submit(&mut self, submission: Submission) -> Vec<Effect> {
+    pub fn submit(&mut self, submission: Submission) {
         if !self.foreground.is_idle() {
             self.effects.push(Effect::RestoreSubmission(submission));
-            return self.take_effects();
+            return;
         }
         let attachments = submission.attachments();
         self.foreground = ForegroundOperation::PreparingPrompt(submission);
@@ -31,28 +31,25 @@ impl SessionCore {
             self.effects
                 .push(Effect::Dispatch(Command::Filesystem(FilesystemCommand::PrepareSubmission { attachments })));
         }
-        self.take_effects()
     }
 
     /// Sends a git review as a normal prompt, queued behind any running turn.
     /// While a prompt is being prepared or a session transition runs, the
     /// review is not sent and a notice says so.
-    pub fn submit_review(&mut self, prompt: &str) -> Vec<Effect> {
+    pub fn submit_review(&mut self, prompt: &str) {
         if !self.foreground.is_idle() {
-            self.raise_notice("Cannot submit review while a prompt or session transition is in progress");
-            return self.take_effects();
+            self.notify("Cannot submit review while a prompt or session transition is in progress");
+            return;
         }
-        self.raise_notice(&format!("Submitted review of working tree diff.\n{prompt}"));
+        self.notify(&format!("Submitted review of working tree diff.\n{prompt}"));
         self.start_prompt(Submission { text: prompt.to_string(), ..Submission::default() }, None);
         self.effects.push(Effect::ReviewSubmitted);
-        self.take_effects()
     }
 
-    /// Searches the agent's prompt history for `query`. Results arrive as
-    /// [`Effect::PromptSearchResults`], echoing the query they answer.
-    pub fn search_prompts(&mut self, query: String) -> Vec<Effect> {
+    /// Searches the agent's prompt history for `query`. Results come back from
+    /// [`on_command_result`](Self::on_command_result), echoing the query they answer.
+    pub fn search_prompts(&mut self, query: String) {
         self.dispatch(AgentCommand::SearchPrompts(PromptSearchParams { query, limit: None }));
-        self.take_effects()
     }
 
     pub(super) fn finish_submission(&mut self, outcome: AttachmentOutcome) {
@@ -67,10 +64,10 @@ impl SessionCore {
             self.start_prompt(submission, content);
         }
         for warning in &outcome.warnings {
-            self.raise_notice(warning);
+            self.notify(warning);
         }
         if let Some(message) = media_error {
-            self.raise_notice(&message);
+            self.notify(&message);
         }
     }
 
@@ -83,7 +80,7 @@ impl SessionCore {
             self.effects.push(Effect::RestoreSubmission(prompt.submission));
             match rejection {
                 PromptRejection::Cancelled => self.end_turn(TurnEnd::Cancelled),
-                PromptRejection::Failed(error) => self.raise_notice(&format!("Failed to send prompt: {error}")),
+                PromptRejection::Failed(error) => self.notify(&format!("Failed to send prompt: {error}")),
             }
         }
         self.announce_if_settled();

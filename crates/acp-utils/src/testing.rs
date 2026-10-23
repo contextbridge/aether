@@ -157,6 +157,17 @@ impl TestPeer {
 
 /// Build a live `ConnectionTo<Client>` over an in-memory duplex transport with
 /// a peer on the other end. Must be called inside a `LocalSet`.
+/// A client handle whose agent connection is already closed.
+pub async fn disconnected_client() -> Result<crate::client::AcpClientHandle, crate::client::AcpClientError> {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let client = FakeAgent::default().build().await?;
+            client.handle.disconnect().await;
+            Ok(client.handle)
+        })
+        .await
+}
+
 pub async fn test_connection() -> (ConnectionTo<Client>, TestPeer) {
     let (peer, client_builder) = TestPeer::new();
     let agent = Agent.v2().name("test-agent").on_receive_request(

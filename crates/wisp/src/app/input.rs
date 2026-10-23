@@ -1,4 +1,5 @@
 use super::config::cycle_reasoning_option;
+use super::session::builtin_commands;
 use super::{App, ExitState, Overlay, Route};
 use crate::command::Command;
 use crate::renderer::DrawContext;
@@ -9,6 +10,7 @@ use crate::view::input::{MouseAction, UiEvent};
 use client_core::command_entry::CommandEntry;
 use client_core::composer::dropped_files::parse_dropped_file_paths;
 use client_core::session_config_view::LocalConfigView;
+use client_core::session_core::SessionCore;
 use client_core::workspace_status::WorkspaceAccess;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::buffer::Buffer;
@@ -137,8 +139,7 @@ impl App {
         if self.ui.keybindings.matches(KeyAction::ToggleGitDiff, key) {
             let screen = GitDiffScreen::new();
             self.open_route(Route::GitReview(Box::new(screen)));
-            let effects = self.core.open_git_review();
-            self.apply_effects(effects);
+            self.update_core(SessionCore::open_git_review);
             return;
         }
 
@@ -172,8 +173,7 @@ impl App {
         }
 
         if self.ui.keybindings.matches(KeyAction::Cancel, key) {
-            let effects = self.core.cancel();
-            self.apply_effects(effects);
+            self.update_core(SessionCore::cancel);
             return;
         }
 
@@ -183,7 +183,9 @@ impl App {
             if opens_command_picker || self.ui.keybindings.matches(KeyAction::OpenFilePicker, key) {
                 self.composer.insert_char(character);
                 if opens_command_picker {
-                    self.composer.open_command_picker(self.core.available_commands().to_vec());
+                    let mut commands = builtin_commands(self.core.session().capabilities());
+                    commands.extend_from_slice(self.core.available_commands());
+                    self.composer.open_command_picker(commands);
                 } else if self.core.session().workspace_access() == WorkspaceAccess::Remote {
                     self.notify("File picker is unavailable for remote workspaces");
                 } else {
@@ -211,8 +213,7 @@ impl App {
 
     fn apply_config_cycle(&mut self, next: Option<(String, String)>) {
         if let Some((id, value)) = next {
-            let effects = self.core.set_config_option(&id, &value);
-            self.apply_effects(effects);
+            self.update_core(|core| core.set_config_option(&id, &value));
         }
     }
 

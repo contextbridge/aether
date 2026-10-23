@@ -20,24 +20,13 @@ pub struct History {
 }
 
 /// The saved sessions of one project, newest first.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ProjectHistory {
     pub root: PathBuf,
-    pub sessions: Vec<HistoryEntry>,
-}
-
-/// One saved session, as the sidebar lists it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HistoryEntry {
-    pub session_id: String,
-    pub cwd: PathBuf,
-    pub title: String,
-    /// `None` when the session's timestamp cannot be parsed.
-    pub created_at: Option<DateTime<Utc>>,
+    pub sessions: Vec<SessionSummary>,
 }
 
 impl History {
-    /// Reads history from `store`, or shows none when there is no store.
     pub fn new(store: Option<SessionStore>) -> Self {
         Self { store: store.map(Arc::new), summaries: Arc::default(), projects: Vec::new(), refresh: None }
     }
@@ -73,22 +62,18 @@ impl History {
 /// Sessions are ordered newest first within each project, and projects by their newest session.
 /// Recency is the session's creation time, as `aether-sessions` records nothing later.
 pub fn group_by_project(
-    sessions: Vec<SessionSummary>,
+    mut sessions: Vec<SessionSummary>,
     mut project_root: impl FnMut(&Path) -> PathBuf,
 ) -> Vec<ProjectHistory> {
+    sessions.sort_by(|a, b| created_at(b).cmp(&created_at(a)).then_with(|| b.meta.session_id.cmp(&a.meta.session_id)));
     let mut projects: Vec<ProjectHistory> = Vec::new();
     for summary in sessions {
         let root = project_root(&summary.meta.cwd);
-        let entry = HistoryEntry::from(summary);
         match projects.iter_mut().find(|project| project.root == root) {
-            Some(project) => project.sessions.push(entry),
-            None => projects.push(ProjectHistory { root, sessions: vec![entry] }),
+            Some(project) => project.sessions.push(summary),
+            None => projects.push(ProjectHistory { root, sessions: vec![summary] }),
         }
     }
-    for project in &mut projects {
-        project.sessions.sort_by(newest_first);
-    }
-    projects.sort_by(|a, b| newest_first(&a.sessions[0], &b.sessions[0]));
     projects
 }
 
@@ -97,18 +82,12 @@ pub fn git_root(dir: &Path) -> PathBuf {
     dir.ancestors().find(|ancestor| ancestor.join(".git").exists()).unwrap_or(dir).to_path_buf()
 }
 
-impl From<SessionSummary> for HistoryEntry {
-    fn from(summary: SessionSummary) -> Self {
-        let SessionSummary { meta, title } = summary;
-        Self {
-            created_at: DateTime::parse_from_rfc3339(&meta.created_at).ok().map(|time| time.to_utc()),
-            title: title.filter(|title| !title.trim().is_empty()).unwrap_or_else(|| UNTITLED.to_owned()),
-            session_id: meta.session_id,
-            cwd: meta.cwd,
-        }
-    }
+/// When the session was created, or `None` when its timestamp cannot be parsed.
+pub fn created_at(summary: &SessionSummary) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(&summary.meta.created_at).ok().map(|time| time.to_utc())
 }
 
-fn newest_first(a: &HistoryEntry, b: &HistoryEntry) -> std::cmp::Ordering {
-    b.created_at.cmp(&a.created_at).then_with(|| b.session_id.cmp(&a.session_id))
+/// The session's title, or [`UNTITLED`] when it has no prompt to name it.
+pub fn title(summary: &SessionSummary) -> String {
+    summary.title.clone().filter(|title| !title.trim().is_empty()).unwrap_or_else(|| UNTITLED.to_owned())
 }

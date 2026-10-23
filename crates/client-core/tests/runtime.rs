@@ -1,12 +1,12 @@
-use acp_utils::client::{AcpClientError, AcpClientHandle};
-use acp_utils::testing::FakeAgent;
+use acp_utils::client::AcpClientError;
+use acp_utils::testing::{FakeAgent, disconnected_client};
 use agent_client_protocol::schema::v2::SessionId;
 use clankerdiff_client::protocol::server::ServerMessage;
 use clankerdiff_client::protocol::shared::{DocumentUpdate, Event, FileEntry, LIVE_PROTOCOL_VERSION};
 use clankerdiff_core::{DiffScope, FileDiff};
 use client_core::command::{AgentCommand, Command, CommandResult, GitReviewCommand};
 use client_core::composer::file_index::index_files_with_limit;
-use client_core::runtime::{CommandDispatcher, NoHost};
+use client_core::runtime::CommandDispatcher;
 use client_core::workspace_status::initial_workspace_status;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -25,7 +25,7 @@ fn file_index_limit_counts_only_indexed_files() {
 
 #[tokio::test]
 async fn closed_agent_connection_becomes_a_reducer_visible_failure() -> Result<(), TestError> {
-    let mut dispatcher = CommandDispatcher::new(disconnected_client().await?, NoHost);
+    let mut dispatcher = CommandDispatcher::new(disconnected_client().await?);
 
     let result = dispatcher.dispatch(Command::Agent(AgentCommand::Cancel { session_id: SessionId::new("session") }));
 
@@ -38,7 +38,7 @@ async fn closed_agent_connection_becomes_a_reducer_visible_failure() -> Result<(
 
 #[tokio::test]
 async fn workspace_status_falls_back_to_the_session_path_without_an_agent() -> Result<(), TestError> {
-    let mut dispatcher = CommandDispatcher::new(disconnected_client().await?, NoHost);
+    let mut dispatcher = CommandDispatcher::new(disconnected_client().await?);
     let first = TempDir::new()?;
     let second = TempDir::new()?;
 
@@ -67,7 +67,7 @@ async fn git_review_publishes_the_agents_document() -> Result<(), TestError> {
     LocalSet::new()
         .run_until(async {
             let client = FakeAgent::default().build().await?;
-            let mut dispatcher = CommandDispatcher::new(client.handle.clone(), NoHost);
+            let mut dispatcher = CommandDispatcher::new(client.handle.clone());
 
             dispatcher.dispatch(Command::GitReview(GitReviewCommand::Open { session_id: "s1".to_string() }));
             for message in git_diff_messages() {
@@ -111,14 +111,4 @@ enum TestError {
     Client(#[from] AcpClientError),
     #[error(transparent)]
     Io(#[from] std::io::Error),
-}
-
-async fn disconnected_client() -> Result<AcpClientHandle, TestError> {
-    LocalSet::new()
-        .run_until(async {
-            let client = FakeAgent::default().build().await?;
-            client.handle.disconnect().await;
-            Ok(client.handle)
-        })
-        .await
 }

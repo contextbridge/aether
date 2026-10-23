@@ -4,7 +4,7 @@ use crate::chat::{Composer, PlanPanel, Transcript};
 use crate::elicitation::{ElicitationCard, OpenReview};
 use crate::registry::Registry;
 use crate::theme::DesktopTheme;
-use crate::threads::{ReviewEvent, Thread};
+use crate::threads::{Thread, ThreadEvent};
 use crate::ui::tokens::{BAR_HEIGHT, rem};
 use crate::ui::{Button, ButtonVariant, Typography, TypographyExt};
 use gpui::{App, AppContext, Context, Entity, StyleRefinement, Subscription, Window, div, prelude::*};
@@ -72,8 +72,8 @@ impl ThreadView {
             cx.subscribe_in(&elicitation, window, |this, _, _: &OpenReview, window, cx| {
                 this.show(ThreadTab::Review, window, cx);
             }),
-            cx.subscribe_in(&thread, window, |this, _, event: &ReviewEvent, window, cx| {
-                if *event == ReviewEvent::Submitted {
+            cx.subscribe_in(&thread, window, |this, _, event: &ThreadEvent, window, cx| {
+                if *event == ThreadEvent::ReviewSubmitted {
                     this.show(ThreadTab::Chat, window, cx);
                 }
             }),
@@ -101,7 +101,6 @@ impl ThreadView {
         &self.composer
     }
 
-    /// The title the user gave the thread, or else the one derived from its first prompt.
     pub(crate) fn title(&self, cx: &App) -> String {
         Header::title(&self.thread, &self.registry, cx)
     }
@@ -235,10 +234,6 @@ impl Header {
 
     fn title(thread: &Entity<Thread>, registry: &Entity<Registry>, cx: &App) -> String {
         let thread = thread.read(cx);
-        let title = thread.title();
-        match thread.session_id() {
-            Some(session_id) => registry.read(cx).thread(session_id).title_or(title),
-            None => title,
-        }
+        registry.read(cx).state().title(thread.session_id(), thread.title())
     }
 }

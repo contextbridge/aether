@@ -314,6 +314,7 @@ dependencies = [
  "clankerdiff-client",
  "clankerdiff-core",
  "clankerdiff-gpui",
+ "clankerdiff-gpui-shell",
  "clankerdiff-markdown",
  "clankerdiff-syntax",
  "clankerdiff-theme",
@@ -321,10 +322,6 @@ dependencies = [
  "gpui-base",
  "gpui-pre",
  "gpui-pre-platform",
- "nucleo",
- "objc2 0.6.5",
- "objc2-app-kit 0.3.2",
- "objc2-foundation 0.3.2",
  "rustls",
  "serde",
  "serde_json",
@@ -3150,6 +3147,7 @@ dependencies = [
 name = "clankerdiff-gpui"
 version = "0.3.3"
 dependencies = [
+ "clankerdiff-client",
  "clankerdiff-core",
  "clankerdiff-gpui-ui",
  "clankerdiff-markdown",
@@ -3160,12 +3158,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "clankerdiff-gpui-shell"
+version = "0.3.3"
+dependencies = [
+ "gpui-base",
+ "gpui-pre",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "tokio",
+]
+
+[[package]]
 name = "clankerdiff-gpui-ui"
 version = "0.3.3"
 dependencies = [
  "clankerdiff-theme",
  "gpui-base",
  "gpui-pre",
+ "nucleo-matcher",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

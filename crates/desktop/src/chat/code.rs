@@ -1,17 +1,15 @@
 use clankerdiff_gpui::style::highlight_style;
-use clankerdiff_syntax::{Fingerprint, HighlightSpan, LanguageHint, SyntaxHighlighter};
+use clankerdiff_syntax::{Fingerprint, LanguageHint, SyntaxHighlighter};
 use clankerdiff_theme::SyntaxTheme;
-#[cfg(not(feature = "testing"))]
-use gpui::StyledText;
-use gpui::{AnyElement, App, Global, HighlightStyle, IntoElement, SharedString};
-use std::cell::RefCell;
+use gpui::{App, Global, HighlightStyle};
 use std::ops::Range;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex, PoisonError};
 
 /// The syntax highlighter every transcript shares, so that grammars load once for the app rather
-/// than once per thread.
+/// than once per thread. Markdown code blocks highlight through it from gpui-base's text view,
+/// which needs it to be `Send + Sync`.
 #[derive(Clone, Default)]
-pub(crate) struct SharedHighlighter(Rc<RefCell<SyntaxHighlighter>>);
+pub(crate) struct SharedHighlighter(Arc<Mutex<SyntaxHighlighter>>);
 
 impl SharedHighlighter {
     pub(crate) fn global(cx: &mut App) -> Self {
@@ -20,26 +18,11 @@ impl SharedHighlighter {
 
     /// Lends the highlighter to `highlight`. Rendering never re-enters it, so it is never lent twice.
     pub(crate) fn with<R>(&self, highlight: impl FnOnce(&mut SyntaxHighlighter) -> R) -> R {
-        highlight(&mut self.0.borrow_mut())
+        highlight(&mut self.0.lock().unwrap_or_else(PoisonError::into_inner))
     }
 }
 
 impl Global for SharedHighlighter {}
-
-/// Styled source text, observable at paint time through the desktop integration harness.
-pub(crate) fn styled_text(
-    text: impl Into<SharedString>,
-    highlights: Vec<(Range<usize>, HighlightStyle)>,
-) -> AnyElement {
-    #[cfg(feature = "testing")]
-    {
-        crate::testing::observe_text(text.into(), highlights).into_any_element()
-    }
-    #[cfg(not(feature = "testing"))]
-    {
-        StyledText::new(text).with_highlights(highlights).into_any_element()
-    }
-}
 
 /// Highlights a complete source document, retaining context across lines.
 pub(crate) fn highlight(
@@ -56,18 +39,10 @@ pub(crate) fn highlight(
     let mut offset = 0;
     let mut highlights = Vec::new();
     for (index, line) in source.split('\n').enumerate() {
-        highlights.extend(span_styles(document.line(index).unwrap_or_default(), offset));
+        highlights.extend(document.line(index).unwrap_or_default().iter().map(|span| {
+            (span.range.start + offset..span.range.end + offset, highlight_style(span.foreground, span.font_style))
+        }));
         offset += line.len() + 1;
     }
     highlights
-}
-
-/// Converts line-relative syntax spans to GPUI byte ranges in the displayed text.
-pub(crate) fn span_styles(spans: &[HighlightSpan], offset: usize) -> Vec<(Range<usize>, HighlightStyle)> {
-    spans
-        .iter()
-        .map(|span| {
-            (span.range.start + offset..span.range.end + offset, highlight_style(span.foreground, span.font_style))
-        })
-        .collect()
 }

@@ -1,6 +1,6 @@
 use super::{Effect, Elicitation, ForegroundOperation, SessionCore, TurnEnd};
 use crate::command::{Command, GitReviewCommand};
-use crate::command_entry::{CommandEntry, builtin_commands};
+use crate::command_entry::CommandEntry;
 use acp_utils::client::AcpEvent;
 use acp_utils::conversation::TurnFinished;
 use acp_utils::notifications::McpNotification;
@@ -8,7 +8,7 @@ use agent_client_protocol::schema::v2::{self as acp, CreateElicitationRequest, E
 use utils::artifact_review::ArtifactReviewElicitationMeta;
 
 impl SessionCore {
-    pub(super) fn reduce_acp_event(&mut self, event: AcpEvent) {
+    pub fn on_acp_event(&mut self, event: AcpEvent) {
         let current = self.is_current(&event);
         if current && let Some(TurnFinished { stop_reason }) = self.conversation.apply_event(&event) {
             self.end_turn(match stop_reason {
@@ -63,9 +63,7 @@ impl SessionCore {
     fn on_session_update(&mut self, update: &SessionUpdate) {
         match update {
             SessionUpdate::AvailableCommandsUpdate(update) => {
-                let mut all = builtin_commands(self.session.capabilities());
-                all.extend(update.available_commands.iter().map(CommandEntry::from_acp));
-                self.available_commands = all;
+                self.available_commands = update.available_commands.iter().map(CommandEntry::from_acp).collect();
             }
             SessionUpdate::ConfigOptionUpdate(update) => {
                 self.session.update_config_options(update.config_options.clone());

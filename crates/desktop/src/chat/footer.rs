@@ -1,7 +1,6 @@
-use super::config_picker::ConfigPicker;
 use crate::ui::UiTheme;
 use crate::ui::tokens::{ICON_SIZE_SMALL, RADIUS_CONTROL, ROW_HEIGHT, rem};
-use crate::ui::{Icon, IconName, Typography, TypographyExt, plain_text};
+use crate::ui::{Icon, IconName, SearchPicker, Typography, TypographyExt};
 use agent_client_protocol::schema::v2 as acp;
 use client_core::session_config_view::LocalConfigOption;
 use client_core::session_core::QueuedPrompt;
@@ -15,10 +14,10 @@ use std::f32::consts::TAU;
 /// that shows the current choice and opens `picker` above itself while there is one.
 ///
 /// Clicking it asks `on_open_change` to open the picker, and clicking it again or anywhere
-/// outside the picker asks it to close. The button is tagged `config-<option id>`.
+/// outside the picker asks it to close.
 pub(crate) fn config_selector(
     option: &LocalConfigOption,
-    picker: Option<Entity<ConfigPicker>>,
+    picker: Option<Entity<SearchPicker>>,
     theme: &UiTheme,
     on_open_change: impl Fn(&bool, &mut Window, &mut App) + 'static,
 ) -> Option<AnyElement> {
@@ -58,7 +57,6 @@ pub(crate) fn config_selector(
 }
 
 /// How much of the model's context window the conversation fills, as a ring and token counts.
-/// It is tagged `context-meter`.
 pub(crate) fn context_meter(usage: &acp::UsageUpdate, theme: &UiTheme) -> Div {
     #[allow(clippy::cast_precision_loss, reason = "The ring only needs subpixel precision; labels use integer counts.")]
     let fraction = if usage.size == 0 { 0.0 } else { usage.used.min(usage.size) as f32 / usage.size as f32 };
@@ -84,11 +82,11 @@ pub(crate) fn context_meter(usage: &acp::UsageUpdate, theme: &UiTheme) -> Div {
         .typography(Typography::Caption)
         .text_color(theme.colors.text_muted)
         .child(context_ring(fraction, color, theme.colors.border))
-        .child(plain_text(label))
+        .child(label)
 }
 
 /// The prompts the agent has not taken up yet, oldest first, with any beyond the first few
-/// counted. It is tagged `queued-prompts`.
+/// counted.
 pub(crate) fn queued_prompts(prompts: &[QueuedPrompt], theme: &UiTheme) -> Div {
     let shown = if prompts.len() > MAX_QUEUED_ROWS + 1 { MAX_QUEUED_ROWS } else { prompts.len() };
     let mut list =

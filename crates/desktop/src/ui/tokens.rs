@@ -7,8 +7,6 @@
 
 pub use clankerdiff_gpui::ui::tokens::*;
 
-/// The fixed leading slot for thread activity and project disclosure icons.
-pub const STATUS_SLOT: f32 = 16.0;
 pub const UNREAD_DOT_SIZE: f32 = 8.0;
 
 /// The width a chat transcript and composer grow to, centred in wider windows.

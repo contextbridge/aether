@@ -14,8 +14,8 @@ pub(crate) fn show(thread: &Thread, event: &ThreadEvent, title: String, cx: &App
         return;
     };
     let body = match event {
-        ThreadEvent::TurnFinished => TURN_FINISHED.to_owned(),
         ThreadEvent::NeedsInput => thread.elicitation().map_or_else(|| NEEDS_INPUT.to_owned(), question),
+        _ => TURN_FINISHED.to_owned(),
     };
     cx.show_system_notification(SystemNotification {
         tag: session_id.0.clone().into(),

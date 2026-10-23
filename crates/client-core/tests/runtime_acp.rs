@@ -1,23 +1,21 @@
 use acp_utils::client::AcpClientError;
 use acp_utils::conversation::Conversation;
-use acp_utils::testing::FakeAgent;
+use acp_utils::testing::{FakeAgent, FakeAgentRequests};
 use agent_client_protocol::Error;
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v2::{
-    AgentCapabilities, AuthMethodId, CancelSessionNotification, ContentBlock, Implementation, InitializeRequest,
-    LoginAuthRequest, NewSessionResponse, PromptCapabilities, PromptImageCapabilities, PromptRequest, PromptResponse,
-    ReplayFrom, ResumeSessionRequest, ResumeSessionResponse, SessionCapabilities, SessionConfigId, SessionConfigOption,
-    SessionConfigOptionValue, SessionConfigSelectOption, SessionId, SetSessionConfigOptionRequest, TextContent,
+    AgentCapabilities, AuthMethodId, ContentBlock, Implementation, NewSessionResponse, PromptCapabilities,
+    PromptImageCapabilities, PromptResponse, ReplayFrom, ResumeSessionRequest, ResumeSessionResponse,
+    SessionCapabilities, SessionConfigId, SessionConfigOption, SessionConfigOptionValue, SessionConfigSelectOption,
+    SessionId, TextContent,
 };
-use agent_client_protocol::{Channel, Responder};
 use client_core::command::{AgentCommand, Command, CommandResult, PromptRejection};
 use client_core::error::ClientError;
 use client_core::request::RequestId;
-use client_core::runtime::{CommandDispatcher, NoHost};
+use client_core::runtime::CommandDispatcher;
 use client_core::session::{Connection, Session};
 use client_core::workspace_status::WorkspaceAccess;
 use std::path::PathBuf;
-use tokio::sync::mpsc;
 use tokio::task::{LocalSet, spawn_local};
 
 #[tokio::test]
@@ -57,15 +55,14 @@ async fn connecting_without_a_new_session_defers_it_to_the_host() {
         .run_until(async {
             let (agent, mut requests) =
                 FakeAgent::default().new_session_response(NewSessionResponse::new("deferred")).capture();
-            let (agent_transport, client_transport) = Channel::duplex();
-            spawn_local(agent.agent().connect_to(agent_transport));
+            let client_transport = agent.serve();
 
             let connection =
                 Connection::connect_to(client_info(), client_transport, PathBuf::from("/workspace")).await.unwrap();
             assert_eq!(requests.initialize.recv().await.unwrap().info, client_info());
             assert!(requests.new_session.try_recv().is_err(), "connecting alone must not create a session");
 
-            let mut dispatcher = CommandDispatcher::new(connection.client.handle.clone(), NoHost);
+            let mut dispatcher = CommandDispatcher::new(connection.client.handle.clone());
             dispatcher.dispatch(Command::Agent(AgentCommand::ResumeSession {
                 session_id: "saved".into(),
                 cwd: connection.working_dir.clone(),
@@ -96,7 +93,7 @@ async fn runtime_login_and_config_requests_use_v2_payloads() {
     LocalSet::new()
         .run_until(async {
             let (session, mut peer) = connect(None).await;
-            let mut dispatcher = CommandDispatcher::new(session.client.handle.clone(), NoHost);
+            let mut dispatcher = CommandDispatcher::new(session.client.handle.clone());
             dispatcher.dispatch(Command::Agent(AgentCommand::Authenticate { method_id: "provider".into() }));
             assert!(matches!(
                 dispatcher.next_result().await,
@@ -132,7 +129,7 @@ async fn runtime_replays_sequentially_without_owning_turn_policy() {
     LocalSet::new()
         .run_until(async {
             let (mut session, mut peer) = connect(None).await;
-            let mut dispatcher = CommandDispatcher::new(session.client.handle.clone(), NoHost);
+            let mut dispatcher = CommandDispatcher::new(session.client.handle.clone());
             for id in ["first", "second"] {
                 dispatcher.dispatch(Command::Agent(AgentCommand::ResumeSession {
                     session_id: id.into(),
@@ -217,8 +214,7 @@ async fn remote_startup_rejects_missing_contract_without_creating_a_session() {
         .run_until(async {
             let (agent, mut requests) =
                 FakeAgent::default().new_session_response(NewSessionResponse::new("must-not-create")).capture();
-            let (server, transport) = Channel::duplex();
-            spawn_local(agent.agent().connect_to(server));
+            let transport = agent.serve();
             assert!(matches!(
                 Session::connect_remote_to(client_info(), transport, None).await,
                 Err(ClientError::MissingRemoteContract)
@@ -239,8 +235,7 @@ async fn remote_startup_unknown_explicit_session_does_not_fall_back_to_live() {
                     session_id: Some("live".into()),
                 })
                 .capture();
-            let (server, transport) = Channel::duplex();
-            spawn_local(agent.agent().connect_to(server));
+            let transport = agent.serve();
             assert!(matches!(
                 Session::connect_remote_to(client_info(), transport, Some("missing".into())).await,
                 Err(ClientError::Acp(_))
@@ -251,20 +246,11 @@ async fn remote_startup_unknown_explicit_session_does_not_fall_back_to_live() {
         .await;
 }
 
-struct Peer {
-    initialize: mpsc::UnboundedReceiver<InitializeRequest>,
-    login: mpsc::UnboundedReceiver<LoginAuthRequest>,
-    config: mpsc::UnboundedReceiver<SetSessionConfigOptionRequest>,
-    resume: mpsc::UnboundedReceiver<(ResumeSessionRequest, Responder<ResumeSessionResponse>)>,
-    prompt: mpsc::UnboundedReceiver<(PromptRequest, Responder<PromptResponse>)>,
-    cancel: mpsc::UnboundedReceiver<CancelSessionNotification>,
-}
-
 fn client_info() -> Implementation {
     Implementation::new("client-core-test", "1")
 }
 
-async fn connect(capabilities: Option<SessionCapabilities>) -> (Session, Peer) {
+async fn connect(capabilities: Option<SessionCapabilities>) -> (Session, FakeAgentRequests) {
     let (agent, mut requests) = FakeAgent::default()
         .agent_info(Implementation::new("Fake agent", "1"))
         .capabilities(AgentCapabilities::new().session(capabilities))
@@ -276,21 +262,9 @@ async fn connect(capabilities: Option<SessionCapabilities>) -> (Session, Peer) {
         )]))
         .login_method("provider")
         .capture();
-    let (agent_transport, client_transport) = Channel::duplex();
-    spawn_local(agent.agent().connect_to(agent_transport));
-    let session = Session::connect_to(client_info(), client_transport, PathBuf::from("/workspace")).await.unwrap();
+    let session = Session::connect_to(client_info(), agent.serve(), PathBuf::from("/workspace")).await.unwrap();
     let created = requests.new_session.recv().await.unwrap();
     assert_eq!(created.cwd.0, PathBuf::from("/workspace"));
     assert_eq!(created.mcp_servers.len(), 0);
-    (
-        session,
-        Peer {
-            initialize: requests.initialize,
-            login: requests.login,
-            config: requests.config,
-            resume: requests.resume,
-            prompt: requests.prompt,
-            cancel: requests.cancel,
-        },
-    )
+    (session, requests)
 }

@@ -128,6 +128,22 @@ impl ToolCall {
     }
 }
 
+/// A file change as a status letter and its path, e.g. `M src/lib.rs` or `R old.rs → new.rs`.
+pub fn diff_change_label(change: &acp::DiffChange) -> String {
+    match &change.operation {
+        acp::DiffChangeOperation::Add(change) => format!("A {}", change.path.0.display()),
+        acp::DiffChangeOperation::Delete(change) => format!("D {}", change.path.0.display()),
+        acp::DiffChangeOperation::Modify(change) => format!("M {}", change.path.0.display()),
+        acp::DiffChangeOperation::Move(change) => {
+            format!("R {} → {}", change.old_path.0.display(), change.path.0.display())
+        }
+        acp::DiffChangeOperation::Copy(change) => {
+            format!("C {} → {}", change.old_path.0.display(), change.path.0.display())
+        }
+        _ => "Unknown file change".into(),
+    }
+}
+
 fn apply_sub_agent_progress(states: &mut Vec<SubAgentState>, notification: &SubAgentProgressParams) {
     let index = states.iter().position(|agent| agent.task_id == notification.task_id).unwrap_or_else(|| {
         states.push(SubAgentState {

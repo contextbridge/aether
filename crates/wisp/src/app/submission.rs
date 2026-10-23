@@ -14,15 +14,13 @@ impl App {
             return;
         }
         let submission = self.composer.take_submission();
-        let effects = self.core.submit(submission);
-        self.apply_effects(effects);
+        self.update_core(|core| core.submit(submission));
     }
 
     pub(super) fn send_prompt_search_query(&mut self, query: String) {
         if self.composer.prompt_search().is_none() {
             return;
         }
-        let effects = self.core.search_prompts(query);
-        self.apply_effects(effects);
+        self.update_core(|core| core.search_prompts(query));
     }
 }

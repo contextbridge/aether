@@ -1,18 +1,17 @@
 #![cfg(feature = "testing")]
 
-use acp_utils::testing::{idle_notification, running_notification};
+use acp_utils::testing::{FakeAgentRequests, idle_notification, running_notification};
+use agent_client_protocol::Channel;
 use agent_client_protocol::schema::v2::{
-    CancelSessionNotification, ContentChunk, Implementation, NewSessionResponse, PromptRequest, PromptResponse,
-    ReplayFrom, ResumeSessionResponse, SessionConfigOption, SessionConfigSelectOption, SessionId, SessionUpdate,
-    StopReason, UpdateSessionNotification, UserMessage,
+    ContentChunk, Implementation, NewSessionResponse, PromptResponse, ReplayFrom, ResumeSessionResponse,
+    SessionConfigOption, SessionConfigSelectOption, SessionId, SessionUpdate, StopReason, UpdateSessionNotification,
+    UserMessage,
 };
-use agent_client_protocol::{Channel, Responder};
 use client_core::command::AgentCommand;
 use client_core::runtime::CommandDispatcher;
 use client_core::session::Session;
 use client_core::workspace_status::WorkspaceAccess;
 use std::path::PathBuf;
-use tokio::sync::mpsc;
 use tokio::task::{LocalSet, spawn_local};
 use wisp::command::{Command, CommandResult};
 use wisp::runtime::TuiHost;
@@ -23,10 +22,11 @@ async fn accepted_turn_finishes_the_ui_only_after_matching_live_idle() {
         .run_until(async {
             for reason in [Some(StopReason::EndTurn), Some(StopReason::Cancelled), None] {
                 let (mut session, mut peer) = connect().await;
+                let connection = peer.connection.recv().await.unwrap();
                 let mut ui = Box::new(wisp::testing::TestUi::new());
                 ui.deliver_result(CommandResult::NewSession(Ok(NewSessionResponse::new("new"))));
                 ui.submit("hello");
-                let mut dispatcher = CommandDispatcher::new(session.client.handle.clone(), TuiHost);
+                let mut dispatcher = CommandDispatcher::with_host(session.client.handle.clone(), TuiHost);
                 for command in ui.executor_mut().take_commands() {
                     dispatcher.dispatch(command);
                 }
@@ -53,11 +53,11 @@ async fn accepted_turn_finishes_the_ui_only_after_matching_live_idle() {
                         SessionUpdate::AgentMessageChunk(ContentChunk::new("response".into(), "reply")),
                     ),
                 ] {
-                    peer.connection.send_notification(notification).unwrap();
+                    connection.send_notification(notification).unwrap();
                     ui.acp_event(session.client.event_rx.recv().await.unwrap());
                     assert!(ui.app().waiting_for_response());
                 }
-                peer.connection.send_notification(idle_notification("new", reason)).unwrap();
+                connection.send_notification(idle_notification("new", reason)).unwrap();
                 ui.acp_event(session.client.event_rx.recv().await.unwrap());
                 assert!(!ui.app().waiting_for_response());
                 let text = ui.conversation_text();
@@ -80,10 +80,9 @@ async fn remote_exit_joins_connection_without_cancel_or_close() {
                 })
                 .new_session_response(NewSessionResponse::new("new"))
                 .capture();
-            let (server, transport) = Channel::duplex();
-            spawn_local(agent.agent().connect_to(server));
+            let transport = agent.serve();
             let session = Session::connect_remote_to(wisp::client_info(), transport, None).await.unwrap();
-            let mut dispatcher = CommandDispatcher::new(session.client.handle.clone(), TuiHost);
+            let mut dispatcher = CommandDispatcher::with_host(session.client.handle.clone(), TuiHost);
             let (mut ui, mut events) = wisp::testing::TestUiBuilder::new().build_from_session(session);
             ui.submit("keep running");
             for command in ui.take_commands() {
@@ -130,7 +129,7 @@ async fn remote_connection_loss_exits_with_error_without_resending() {
             let (server, transport) = Channel::duplex();
             let driver = spawn_local(agent.agent().connect_to(server));
             let session = Session::connect_remote_to(wisp::client_info(), transport, None).await.unwrap();
-            let mut dispatcher = CommandDispatcher::new(session.client.handle.clone(), TuiHost);
+            let mut dispatcher = CommandDispatcher::with_host(session.client.handle.clone(), TuiHost);
             let (mut ui, mut events) = wisp::testing::TestUiBuilder::new().build_from_session(session);
             ui.submit("acceptance is uncertain");
             for command in ui.take_commands() {
@@ -171,8 +170,7 @@ async fn remote_startup_creates_in_the_server_workspace() {
                 .remote_server(&acp_utils::notifications::RemoteServerInfo { cwd: cwd.clone(), session_id: None })
                 .new_session_response(NewSessionResponse::new("created"))
                 .capture();
-            let (server, transport) = Channel::duplex();
-            spawn_local(agent.agent().connect_to(server));
+            let transport = agent.serve();
             let session = Session::connect_remote_to(wisp::client_info(), transport, None).await.unwrap();
             assert_eq!(requests.new_session.recv().await.unwrap().cwd.0, cwd);
             assert_eq!(session.working_dir, cwd);
@@ -221,8 +219,7 @@ async fn remote_startup_resumes_selected_session_and_preserves_queued_replay() {
                         truncated: false,
                     })
                     .capture();
-                let (server, transport) = Channel::duplex();
-                spawn_local(agent.agent().connect_to(server));
+                let transport = agent.serve();
                 let startup = spawn_local(Session::connect_remote_to(
                     wisp::client_info(),
                     transport,
@@ -284,25 +281,15 @@ async fn remote_startup_resumes_selected_session_and_preserves_queued_replay() {
         .await;
 }
 
-struct Peer {
-    connection: agent_client_protocol::ConnectionTo<agent_client_protocol::Client>,
-    prompt: mpsc::UnboundedReceiver<(PromptRequest, Responder<PromptResponse>)>,
-    cancel: mpsc::UnboundedReceiver<CancelSessionNotification>,
-}
-
 /// Connects a local session the way `wisp` does, asserting the identity Wisp
 /// announces to the agent.
-async fn connect() -> (Session, Peer) {
+async fn connect() -> (Session, FakeAgentRequests) {
     let (agent, mut requests) = acp_utils::testing::FakeAgent::default()
         .agent_info(Implementation::new("Fake agent", "1"))
         .new_session_response(NewSessionResponse::new("new"))
         .capture();
-    let (agent_transport, client_transport) = Channel::duplex();
-    spawn_local(agent.agent().connect_to(agent_transport));
-    let session =
-        Session::connect_to(wisp::client_info(), client_transport, PathBuf::from("/workspace")).await.unwrap();
+    let session = Session::connect_to(wisp::client_info(), agent.serve(), PathBuf::from("/workspace")).await.unwrap();
     assert_eq!(requests.initialize.recv().await.unwrap().info.name, "wisp");
     assert_eq!(requests.new_session.recv().await.unwrap().cwd.0, PathBuf::from("/workspace"));
-    let connection = requests.connection.recv().await.unwrap();
-    (session, Peer { connection, prompt: requests.prompt, cancel: requests.cancel })
+    (session, requests)
 }

@@ -1,5 +1,5 @@
 use super::{App, ExitState, Overlay, Route};
-use crate::command::{Command, HostCommand};
+use crate::command::{Command, CommandResult, HostCommand};
 use crate::screens::artifact_review::ArtifactReviewScreen;
 use crate::settings::overlay::ProviderLoginStatus;
 use crate::surfaces::modal::ElicitationModal;
@@ -7,36 +7,35 @@ use crate::surfaces::session_picker::SessionPicker;
 use crate::surfaces::workspace_picker::WorkspacePicker;
 use agent_client_protocol::schema::v2 as acp;
 use client_core::elicitation::ElicitationResponder;
-use client_core::session_core::{Effect, Elicitation};
+use client_core::session_core::{Effect, Elicitation, SessionCore};
 
 impl App {
-    /// Turns the session core's effects into commands, routes, and overlays, in
-    /// the order the core produced them.
-    pub(super) fn apply_effects(&mut self, effects: Vec<Effect>) {
-        for effect in effects {
+    /// Runs `change` on the session core, then turns the effects it produced into commands,
+    /// routes, and overlays, in the order the core produced them.
+    pub(super) fn update_core<T>(&mut self, change: impl FnOnce(&mut SessionCore) -> T) -> T {
+        let value = change(&mut self.core);
+        for effect in self.core.take_effects() {
             self.apply_effect(effect);
         }
+        value
     }
 
-    fn apply_effect(&mut self, effect: Effect) {
-        match effect {
-            Effect::Dispatch(command) => self.queue(command.widen()),
-            Effect::ShowElicitation { elicitation, responder } => self.show_elicitation(elicitation, responder),
-            Effect::GitReviewState(state) => {
+    /// Reduces the command results the core hands back for the UI to show.
+    pub(super) fn on_unhandled_result(&mut self, result: CommandResult) {
+        match result {
+            CommandResult::Host(result) => self.on_host_result(result),
+            CommandResult::GitReview(state) => {
                 if let Route::GitReview(screen) = &mut self.route {
                     screen.install(&state);
                 }
             }
-            Effect::GitReviewActionFinished(result) => {
+            CommandResult::GitReviewAction(result) => {
                 if let Route::GitReview(screen) = &mut self.route {
                     screen.on_action_result(result);
                 }
             }
-            Effect::TurnFinished => self.queue(Command::Host(HostCommand::RingBell)),
-            // The conversation already shows the notice.
-            Effect::Notice(_) => {}
-            Effect::SessionsListed(sessions) => self.open_session_picker(sessions),
-            Effect::SessionPreviewLoaded { session_id, result } => {
+            CommandResult::SessionsListed(Ok(response)) => self.open_session_picker(response.sessions),
+            CommandResult::SessionPreviewLoaded { session_id, result } => {
                 if let Some(Overlay::Sessions(picker)) = self.overlay.as_mut() {
                     match result {
                         Ok(preview) => picker.on_preview_loaded(preview),
@@ -44,10 +43,10 @@ impl App {
                     }
                 }
             }
-            Effect::WorkspacesListed(workspaces) => {
-                self.open_overlay(Overlay::Workspaces(WorkspacePicker::new(workspaces)));
+            CommandResult::WorkspacesListed(Ok(response)) => {
+                self.open_overlay(Overlay::Workspaces(WorkspacePicker::new(response.workspaces)));
             }
-            Effect::PromptSearchResults { query, result } => match result {
+            CommandResult::PromptSearchResults { query, result } => match result {
                 Ok(response) => self.composer.prompt_search_on_results(response),
                 Err(error) => {
                     if let Some(picker) = self.composer.prompt_search_mut() {
@@ -55,7 +54,26 @@ impl App {
                     }
                 }
             },
-            Effect::FilesIndexed { request_id, files } => self.composer.on_files_indexed(request_id, files),
+            CommandResult::FilesIndexed { request_id, files } => self.composer.on_files_indexed(request_id, files),
+            CommandResult::AuthenticationCompleted { method_id, result } => {
+                if let Err(error) = &result {
+                    tracing::warn!("Provider authentication failed for {method_id}: {error}");
+                }
+                if let Some(Overlay::Settings(overlay)) = self.overlay.as_mut() {
+                    let status =
+                        if result.is_ok() { ProviderLoginStatus::LoggedIn } else { ProviderLoginStatus::NeedsLogin };
+                    overlay.set_provider_status(&method_id, status);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn apply_effect(&mut self, effect: Effect) {
+        match effect {
+            Effect::Dispatch(command) => self.queue(command.widen()),
+            Effect::ShowElicitation { elicitation, responder } => self.show_elicitation(elicitation, responder),
+            Effect::TurnFinished => self.queue(Command::Host(HostCommand::RingBell)),
             Effect::ConfigOptionsChanged => {
                 if let Some(Overlay::Settings(overlay)) = self.overlay.as_mut() {
                     overlay.update_config_options(self.core.session().config_options());
@@ -71,19 +89,8 @@ impl App {
                     overlay.update_server_statuses(self.core.session().server_statuses().to_vec());
                 }
             }
-            Effect::AuthenticationFinished { method_id, result } => {
-                if let Some(Overlay::Settings(overlay)) = self.overlay.as_mut() {
-                    let status =
-                        if result.is_ok() { ProviderLoginStatus::LoggedIn } else { ProviderLoginStatus::NeedsLogin };
-                    overlay.set_provider_status(&method_id, status);
-                }
-            }
             Effect::RestoreSubmission(submission) => self.composer.restore_submission(submission),
-            Effect::SessionCreated => {
-                self.close_elicitation_owner();
-                self.return_to_conversation();
-            }
-            Effect::ResumeStarted | Effect::SessionResumed | Effect::WorkspaceMoved => self.return_to_conversation(),
+            Effect::SessionChanged => self.return_to_conversation(),
             Effect::ReviewSubmitted => self.close_active(),
             Effect::ConnectionClosed => self.on_connection_closed(),
         }
@@ -111,11 +118,13 @@ impl App {
         }
     }
 
+    /// Offers the agent's sessions other than the current one.
     fn open_session_picker(&mut self, sessions: Vec<acp::SessionInfo>) {
+        let current = self.core.session().session_id().clone();
+        let sessions = sessions.into_iter().filter(|session| session.session_id != current).collect();
         let picker = SessionPicker::new(sessions, self.core.session().capabilities().session_preview);
         if let Some(id) = picker.initial_preview_request() {
-            let effects = self.core.preview_session(id);
-            self.apply_effects(effects);
+            self.update_core(|core| core.preview_session(id));
         }
         self.open_overlay(Overlay::Sessions(picker));
     }
@@ -123,7 +132,6 @@ impl App {
     /// The connection is gone, but a remote agent may still be running.
     /// Release local interactions and overlays, then ask the event loop to exit.
     fn on_connection_closed(&mut self) {
-        self.close_elicitation_owner();
         self.return_to_conversation();
         self.commands.retain(|command| !matches!(command, Command::Host(HostCommand::RingBell)));
         self.exit_state = ExitState::ConnectionLost;

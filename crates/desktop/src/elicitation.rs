@@ -4,8 +4,8 @@
 use crate::theme::DesktopTheme;
 use crate::threads::Thread;
 use crate::ui::UiTheme;
-use crate::ui::tokens::{CONTENT_MAX_WIDTH, RADIUS_CONTAINER, RADIUS_CONTROL, rem};
-use crate::ui::{Button, ButtonVariant, Typography, TypographyExt};
+use crate::ui::tokens::{CONTENT_MAX_WIDTH, RADIUS_CONTROL, rem};
+use crate::ui::{Button, ButtonVariant, SurfaceExt, Typography, TypographyExt};
 use acp_utils::elicitation::{FieldInput, FormError, FormField, FormFieldKind, accept_content, form_fields};
 use agent_client_protocol::schema::v2::ElicitationMode;
 use client_core::elicitation::ElicitationResponder;
@@ -295,10 +295,8 @@ impl Render for ElicitationCard {
             .flex()
             .flex_col()
             .gap_4()
-            .rounded(rem(RADIUS_CONTAINER))
-            .border_1()
+            .surface(theme)
             .border_color(theme.colors.accent)
-            .bg(theme.colors.surface)
             .shadow_md()
             .child(div().typography(Typography::Title).child(message))
             .child(body)
@@ -316,7 +314,7 @@ impl Render for ElicitationCard {
 
 impl Draft {
     fn form(fields: Vec<FormField>, window: &mut Window, cx: &mut App) -> Self {
-        let style = DesktopTheme::global(cx).editor_style();
+        let style = DesktopTheme::global(cx).ui().editor_style();
         let fields = fields
             .into_iter()
             .map(|field| {

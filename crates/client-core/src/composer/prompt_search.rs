@@ -33,7 +33,6 @@ impl PromptSearchState {
         self.query.trim().is_empty()
     }
 
-    /// Appends `c` to the query, returning the query it produced.
     pub fn push_char(&mut self, c: char) -> String {
         self.query.push(c);
         self.refresh();
@@ -51,14 +50,12 @@ impl PromptSearchState {
         self.query.clone()
     }
 
-    /// Replaces the query, as a search field does on every edit, returning the query it produced.
     pub fn set_query(&mut self, query: &str) -> String {
         query.clone_into(&mut self.query);
         self.refresh();
         self.query.clone()
     }
 
-    /// Drops the last character of the query, returning the query it produced.
     pub fn backspace(&mut self) -> String {
         self.query.pop();
         self.refresh();

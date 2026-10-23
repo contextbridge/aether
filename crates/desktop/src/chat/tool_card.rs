@@ -1,13 +1,14 @@
-use super::code::{highlight, styled_text};
-use super::diff::DiffCache;
+use super::code::highlight;
 use crate::ui::UiTheme;
-use crate::ui::tokens::{ICON_SIZE_SMALL, RADIUS_CONTROL, ROW_HEIGHT, rem};
-use crate::ui::{CODE_FONT, Icon, IconName, Typography, TypographyExt};
-use acp_utils::conversation::{SubAgentState, ToolCall, ToolStatus};
+use crate::ui::tokens::{ICON_SIZE_SMALL, ROW_HEIGHT, rem};
+use crate::ui::{CODE_FONT, Disclosure, Icon, IconName, Typography, TypographyExt};
+use acp_utils::conversation::{SubAgentState, ToolCall, ToolStatus, diff_change_label};
 use agent_client_protocol::schema::v2 as acp;
+use clankerdiff_gpui::DiffPreviewCache;
+use clankerdiff_gpui::style::stat_badges;
 use clankerdiff_syntax::{LanguageHint, SyntaxHighlighter};
 use clankerdiff_theme::ReviewTheme;
-use gpui::{AnyElement, App, ClickEvent, Role, Window, div, prelude::*};
+use gpui::{AnyElement, App, ClickEvent, StyledText, Window, div, prelude::*};
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -15,23 +16,20 @@ use std::path::Path;
 pub(crate) struct ToolRenderer<'a> {
     review: &'a ReviewTheme,
     highlighter: &'a mut SyntaxHighlighter,
-    patches: &'a mut DiffCache,
+    patches: &'a mut DiffPreviewCache,
 }
 
 impl<'a> ToolRenderer<'a> {
     pub(crate) fn new(
         review: &'a ReviewTheme,
         highlighter: &'a mut SyntaxHighlighter,
-        patches: &'a mut DiffCache,
+        patches: &'a mut DiffPreviewCache,
     ) -> Self {
         Self { review, highlighter, patches }
     }
 
     /// A compact tool activity row. Clicking it unfolds input, output and file changes along a
     /// single indented guide. Sub-agent activity stays visible while the details are folded.
-    ///
-    /// The header is tagged `tool-card-<index>`, the input and output `tool-details-<index>` and the
-    /// file changes `tool-changes-<index>`.
     pub(crate) fn render(
         &mut self,
         tool: &ToolCall,
@@ -41,31 +39,11 @@ impl<'a> ToolRenderer<'a> {
     ) -> AnyElement {
         let theme = &UiTheme::new(self.review);
         let colors = theme.colors;
-        let chevron = if expanded { IconName::ChevronDown } else { IconName::ChevronRight };
-        let mut disclosure_color = colors.text_muted;
-        if !expanded {
-            disclosure_color.a = 0.0;
-        }
         let diffs: Vec<_> = tool.diffs().collect();
-        let header = div()
-            .id(("tool-card", index))
-            .debug_selector(move || format!("tool-card-{index}"))
-            .role(Role::Button)
-            .aria_label(title(tool))
-            .aria_expanded(expanded)
-            .focusable()
-            .tab_stop(true)
+        let header = Disclosure::new(("tool-card", index), expanded, *theme)
             .h(rem(ROW_HEIGHT))
-            .flex()
-            .items_center()
-            .gap_2()
-            .px_1()
-            .rounded(rem(RADIUS_CONTROL))
-            .cursor_pointer()
-            .text_color(disclosure_color)
-            .hover(move |header| header.bg(colors.surface_hover).text_color(colors.text_muted))
-            .focus_visible(move |header| header.bg(colors.surface_hover).text_color(colors.text_muted))
-            .on_click(on_toggle)
+            .overflow_hidden()
+            .on_toggle(on_toggle)
             .child(status_icon(tool.status, tool.id(), theme))
             .child(
                 div()
@@ -86,17 +64,7 @@ impl<'a> ToolRenderer<'a> {
                     .when(tool.bash_command().is_some() || !diffs.is_empty(), |summary| summary.font_family(CODE_FONT))
                     .children(self.summary(tool)),
             )
-            .when(!diffs.is_empty(), |header| header.child(change_summary(&diffs, index, theme)))
-            .child(
-                div()
-                    .debug_selector(move || format!("tool-disclosure-{index}"))
-                    .flex_none()
-                    .size(rem(ICON_SIZE_SMALL))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(Icon::new(chevron, colors.text_muted).size(ICON_SIZE_SMALL).inherit_color()),
-            );
+            .when(!diffs.is_empty(), |header| header.child(self.change_summary(&diffs, index, theme)));
         div()
             .flex()
             .flex_col()
@@ -129,13 +97,10 @@ impl<'a> ToolRenderer<'a> {
     /// An error, highlighted command, display value or changed path, in order of relevance.
     fn summary(&mut self, tool: &ToolCall) -> Option<AnyElement> {
         if tool.status == ToolStatus::Failed {
-            let error = tool
-                .content()
-                .iter()
-                .filter_map(content_text)
-                .find_map(|text| text.lines().find(|line| !line.trim().is_empty()).map(str::to_owned));
+            let error =
+                tool.content().iter().filter_map(content_text).find_map(|text| first_line(&text).map(str::to_owned));
             if let Some(error) = error {
-                return Some(styled_text(error, Vec::new()));
+                return Some(error.into_any_element());
             }
         }
         if let Some(command) = tool.bash_command()
@@ -146,22 +111,22 @@ impl<'a> ToolRenderer<'a> {
                 .filter_map(|(range, style)| {
                     (range.start < first.len()).then(|| (range.start + 2..range.end.min(first.len()) + 2, style))
                 })
-                .collect();
-            return Some(styled_text(format!("$ {first}"), highlights));
+                .collect::<Vec<_>>();
+            return Some(StyledText::new(format!("$ {first}")).with_highlights(highlights).into_any_element());
         }
         tool.display_value()
-            .filter(|value| !value.is_empty())
+            .and_then(first_line)
             .map(str::to_owned)
             .or_else(|| {
                 tool.diffs().flat_map(|diff| &diff.changes).find_map(change_path).map(|path| path.display().to_string())
             })
-            .map(|text| styled_text(text, Vec::new()))
+            .map(IntoElement::into_any_element)
     }
 
     fn details(&mut self, tool: &ToolCall, index: usize, theme: &UiTheme) -> gpui::Div {
         let command = tool.bash_command().map(|command| {
             let highlights = highlight(command, LanguageHint::Id("bash"), &self.review.syntax, self.highlighter);
-            section("Command", styled_text(command.to_owned(), highlights), theme)
+            section("Command", StyledText::new(command.to_owned()).with_highlights(highlights), theme)
         });
         let input = tool.raw_input();
         let output = tool.content().iter().filter_map(content_text).collect::<Vec<_>>().join("\n");
@@ -171,10 +136,8 @@ impl<'a> ToolRenderer<'a> {
             .flex_col()
             .gap_3()
             .children(command)
-            .when(!input.is_empty(), |details| details.child(section("Input", styled_text(input, Vec::new()), theme)))
-            .when(!output.is_empty(), |details| {
-                details.child(section("Output", styled_text(output, Vec::new()), theme))
-            })
+            .when(!input.is_empty(), |details| details.child(section("Input", input, theme)))
+            .when(!output.is_empty(), |details| details.child(section("Output", output, theme)))
     }
 
     /// The file changes a tool made, as patches when the agent sent them and otherwise as the paths
@@ -192,16 +155,40 @@ impl<'a> ToolRenderer<'a> {
                 Some(patch) if patch.format == acp::DiffPatchFormat::GitPatch => {
                     changes.child(self.patches.render(&patch.text, self.review, self.highlighter))
                 }
-                Some(patch) => changes.child(section("Patch", styled_text(patch.text.clone(), Vec::new()), theme)),
+                Some(patch) => changes.child(section("Patch", patch.text.clone(), theme)),
                 None => changes.children(diff.changes.iter().map(|change| {
-                    div()
-                        .text_color(theme.colors.text_secondary)
-                        .child(styled_text(change_label(change), Vec::new()))
-                        .into_any_element()
+                    div().text_color(theme.colors.text_secondary).child(diff_change_label(change)).into_any_element()
                 })),
             };
         }
         changes
+    }
+
+    /// Lines added and removed, as the patches parse, and the number of files when that says more.
+    fn change_summary(&mut self, diffs: &[&acp::Diff], index: usize, theme: &UiTheme) -> impl IntoElement + use<> {
+        let (added, removed) = diffs
+            .iter()
+            .filter_map(|diff| diff.patch.as_ref())
+            .filter_map(|patch| self.patches.stats(&patch.text))
+            .fold((0, 0), |(added, removed), (more, fewer)| (added + more, removed + fewer));
+        let files = diffs.iter().flat_map(|diff| &diff.changes).filter_map(change_path).collect::<HashSet<_>>().len();
+        let changed_lines = added > 0 || removed > 0;
+        div()
+            .debug_selector(move || format!("tool-change-summary-{index}"))
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap_2()
+            .typography(Typography::Caption)
+            .text_color(theme.colors.text_muted)
+            .when(files > 1 || !changed_lines, |summary| {
+                summary.child(match files {
+                    0 => "File changes".to_owned(),
+                    1 => "1 file".to_owned(),
+                    _ => format!("{files} files"),
+                })
+            })
+            .when(changed_lines, |summary| summary.children(stat_badges(&self.review.diff, added, removed)))
     }
 
     /// Each sub-agent with its latest tool calls, older ones folded into a count.
@@ -248,11 +235,15 @@ impl<'a> ToolRenderer<'a> {
     }
 }
 
-/// How many of a sub-agent's latest tool calls its tree shows.
 const SUB_AGENT_VISIBLE_TOOLS: usize = 3;
 
 fn title(tool: &ToolCall) -> String {
-    Some(tool.title()).filter(|title| !title.is_empty()).unwrap_or("Tool call").to_owned()
+    first_line(tool.title()).unwrap_or("Tool call").to_owned()
+}
+
+/// A tool row holds one line, but agents may send several, such as a whole script as a title.
+fn first_line(text: &str) -> Option<&str> {
+    text.lines().map(str::trim).find(|line| !line.is_empty())
 }
 
 fn section(label: &'static str, text: impl IntoElement, theme: &UiTheme) -> gpui::Div {
@@ -268,46 +259,6 @@ fn section(label: &'static str, text: impl IntoElement, theme: &UiTheme) -> gpui
                 .typography(Typography::Small)
                 .child(text),
         )
-}
-
-fn change_summary(diffs: &[&acp::Diff], index: usize, theme: &UiTheme) -> impl IntoElement {
-    let mut added = 0;
-    let mut removed = 0;
-    for patch in diffs.iter().filter_map(|diff| diff.patch.as_ref()) {
-        let mut in_hunk = false;
-        for line in patch.text.lines() {
-            if line.starts_with("@@") {
-                in_hunk = true;
-            } else if line.starts_with("diff --git ") {
-                in_hunk = false;
-            } else if in_hunk && line.starts_with('+') {
-                added += 1;
-            } else if in_hunk && line.starts_with('-') {
-                removed += 1;
-            }
-        }
-    }
-    let files = diffs.iter().flat_map(|diff| &diff.changes).filter_map(change_path).collect::<HashSet<_>>().len();
-    div()
-        .debug_selector(move || format!("tool-change-summary-{index}"))
-        .flex()
-        .flex_none()
-        .items_center()
-        .gap_2()
-        .typography(Typography::Caption)
-        .text_color(theme.colors.text_muted)
-        .when(files > 1 || (added == 0 && removed == 0), |summary| {
-            let label = match files {
-                0 => "File changes".to_owned(),
-                1 => "1 file".to_owned(),
-                _ => format!("{files} files"),
-            };
-            summary.child(label)
-        })
-        .when(added > 0, |summary| summary.child(div().text_color(theme.colors.positive).child(format!("+{added}"))))
-        .when(removed > 0, |summary| {
-            summary.child(div().text_color(theme.colors.destructive).child(format!("−{removed}")))
-        })
 }
 
 fn content_text(content: &acp::ToolCallContent) -> Option<String> {
@@ -327,21 +278,6 @@ fn change_path(change: &acp::DiffChange) -> Option<&Path> {
         | acp::DiffChangeOperation::Modify(change) => Some(&change.path.0),
         acp::DiffChangeOperation::Move(change) | acp::DiffChangeOperation::Copy(change) => Some(&change.path.0),
         _ => None,
-    }
-}
-
-fn change_label(change: &acp::DiffChange) -> String {
-    match &change.operation {
-        acp::DiffChangeOperation::Add(change) => format!("A {}", change.path.0.display()),
-        acp::DiffChangeOperation::Delete(change) => format!("D {}", change.path.0.display()),
-        acp::DiffChangeOperation::Modify(change) => format!("M {}", change.path.0.display()),
-        acp::DiffChangeOperation::Move(change) => {
-            format!("R {} → {}", change.old_path.0.display(), change.path.0.display())
-        }
-        acp::DiffChangeOperation::Copy(change) => {
-            format!("C {} → {}", change.old_path.0.display(), change.path.0.display())
-        }
-        _ => "Unknown file change".to_owned(),
     }
 }
 

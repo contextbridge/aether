@@ -9,13 +9,10 @@ pub mod cli;
 pub mod clock;
 mod elicitation;
 mod file_index;
-mod fuzzy;
 pub mod history;
 mod menus;
 mod notification;
 pub mod registry;
-mod run_loop;
-mod runtime;
 pub mod sidebar;
 mod switcher;
 pub mod target;
@@ -29,12 +26,12 @@ pub mod ui;
 pub use app::{
     DesktopApp, DesktopConfig, OpenThreadSwitcher, SelectNextThread, SelectPreviousThread, ShowChanges, ShowChat,
 };
-pub use menus::{About, Hide, HideOthers, Minimize, Quit, ShowAll, Zoom};
 pub use theme::{DesktopTheme, ThemePair};
 
 use aether_sessions::SessionStore;
 use agents::{Agents, default_agents_file};
 use clankerdiff_gpui::{DiffViewer, MarkdownReviewer};
+use clankerdiff_gpui_shell::{run_loop, runtime};
 use cli::Cli;
 use clock::SystemClock;
 use gpui::{App, AppContext, Bounds, Entity, Pixels, Size, TitlebarOptions, WindowBounds, WindowOptions, px, size};
@@ -44,11 +41,6 @@ use std::sync::Arc;
 use target::AgentConnector;
 
 /// Runs the desktop app until its last window closes or it is quit.
-///
-/// # Panics
-///
-/// Panics if the TLS crypto provider cannot be installed, the bundled fonts cannot be loaded or
-/// the main window cannot open.
 pub fn run(cli: Cli) {
     aws_lc_rs::default_provider().install_default().expect("failed to install the Rustls AWS-LC crypto provider");
     let runtime = runtime::build();
@@ -98,7 +90,7 @@ fn init(cx: &mut App) {
 
 /// The size the main window had when the app last ran, or else the default size.
 fn window_size(registry: &Entity<Registry>, cx: &App) -> Size<Pixels> {
-    registry.read(cx).window_size().map_or(DEFAULT_WINDOW_SIZE, |size| size.max(&MIN_WINDOW_SIZE))
+    registry.read(cx).state().window_size.map_or(DEFAULT_WINDOW_SIZE, |size| size.max(&MIN_WINDOW_SIZE))
 }
 
 fn window_options(bounds: Bounds<Pixels>) -> WindowOptions {

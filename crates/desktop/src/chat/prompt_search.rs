@@ -1,24 +1,21 @@
 use crate::theme::DesktopTheme;
-use crate::threads::{PromptSearchEvent, Thread};
-use crate::ui::tokens::{RADIUS_CONTAINER, RADIUS_CONTROL, rem};
-use crate::ui::{ListRow, Typography, TypographyExt};
-use acp_utils::notifications::PromptSearchResult;
+use crate::threads::{Thread, ThreadEvent};
+use crate::ui::tokens::rem;
+use crate::ui::{PickerItem, SearchPicker, SearchPickerEvent};
+use acp_utils::notifications::{PromptSearchResponse, PromptSearchResult};
 use client_core::composer::prompt_search::PromptSearchState;
-use gpui::{ClickEvent, Context, Entity, EventEmitter, Subscription, Window, div, prelude::*};
-use gpui_base::input::{Enter, Escape, Input, InputEvent, InputState, MoveDown, MoveUp};
+use gpui::{Context, Entity, EventEmitter, Subscription, Window, prelude::*};
 
 /// A search through every prompt the agent has been sent, in any session, to send one again.
 ///
 /// The agent answers each query as the user types, and an answer to a query edited away from is
-/// dropped. ↑ and ↓ move the highlight, Enter or a click chooses a prompt, and Escape dismisses
-/// the search. It is tagged `prompt-search`, and each result `prompt-search-result-<n>`.
+/// dropped.
 pub(crate) struct PromptSearch {
     thread: Entity<Thread>,
-    input: Entity<InputState>,
+    picker: Entity<SearchPicker>,
     state: PromptSearchState,
     results: Vec<PromptSearchResult>,
-    highlighted: usize,
-    _subscriptions: Vec<Subscription>,
+    _subscriptions: [Subscription; 2],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,135 +26,93 @@ pub(crate) enum PromptSearchOutcome {
 
 impl PromptSearch {
     pub(crate) fn new(thread: Entity<Thread>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let style = DesktopTheme::global(cx).editor_style();
-        let input = cx.new(|cx| {
-            let mut input = InputState::new(window, cx).placeholder("Search past prompts…");
-            input.set_editor_style(style);
-            input
+        let theme = DesktopTheme::global(cx).ui();
+        let picker = cx.new(|cx| {
+            SearchPicker::new("prompt-search", Vec::new(), theme, cx)
+                .unfiltered()
+                .searchable("Search past prompts…", window, cx)
+                .empty("No matching prompts")
+                .max_list_height(rem(RESULTS_HEIGHT))
         });
-        input.update(cx, |input, cx| input.focus(window, cx));
-        let subscriptions = vec![
-            cx.subscribe(&input, |this, _, event: &InputEvent, cx| {
-                if matches!(event, InputEvent::Change) {
-                    this.search(cx);
+        let subscriptions = [
+            cx.subscribe(&picker, |this, _, event: &SearchPickerEvent, cx| match event {
+                SearchPickerEvent::Query(query) => this.search(query, cx),
+                SearchPickerEvent::Chose(index) => {
+                    cx.emit(PromptSearchOutcome::Chose(this.results[*index].prompt.clone()));
+                }
+                SearchPickerEvent::Dismissed => cx.emit(PromptSearchOutcome::Dismissed),
+            }),
+            cx.subscribe(&thread, |this, _, event: &ThreadEvent, cx| {
+                if let ThreadEvent::PromptSearchResults { query, result } = event {
+                    this.on_answer(query, result, cx);
                 }
             }),
-            cx.subscribe(&thread, |this, _, event: &PromptSearchEvent, cx| this.on_answer(event, cx)),
         ];
-        Self {
+        let search = Self {
             thread,
-            input,
+            picker,
             state: PromptSearchState::default(),
             results: Vec::new(),
-            highlighted: 0,
             _subscriptions: subscriptions,
-        }
+        };
+        search.show(cx);
+        search
     }
 
-    fn search(&mut self, cx: &mut Context<Self>) {
-        let query = self.state.set_query(&self.input.read(cx).value());
+    fn search(&mut self, query: &str, cx: &mut Context<Self>) {
+        let query = self.state.set_query(query);
         if self.state.is_blank() {
             self.results.clear();
         } else {
             self.thread.update(cx, |thread, cx| thread.search_prompts(query, cx));
         }
-        cx.notify();
+        self.show(cx);
     }
 
-    fn on_answer(&mut self, event: &PromptSearchEvent, cx: &mut Context<Self>) {
-        match &event.result {
+    fn on_answer(&mut self, query: &str, result: &Result<PromptSearchResponse, String>, cx: &mut Context<Self>) {
+        match result {
             Ok(response) => {
                 if let Some(results) = self.state.on_results(response.clone()) {
                     self.results = results;
-                    self.highlighted = 0;
                 }
             }
             Err(error) => {
-                self.state.on_failed(&event.query, error.clone());
+                self.state.on_failed(query, error.clone());
             }
         }
-        cx.notify();
+        self.show(cx);
     }
 
-    /// Moves the highlight `by` results, stopping at either end of the list.
-    fn step(&mut self, by: isize, cx: &mut Context<Self>) {
-        let last = self.results.len().saturating_sub(1);
-        self.highlighted = self.highlighted.saturating_add_signed(by).min(last);
-        cx.notify();
-    }
-
-    fn choose(&mut self, position: usize, cx: &mut Context<Self>) {
-        if let Some(result) = self.results.get(position) {
-            cx.emit(PromptSearchOutcome::Chose(result.prompt.clone()));
-        }
-    }
-
-    fn status(&self) -> Option<String> {
-        if let Some(error) = self.state.error() {
-            Some(format!("Search failed: {error}"))
+    fn show(&self, cx: &mut Context<Self>) {
+        let items = self
+            .results
+            .iter()
+            .enumerate()
+            .map(|(n, result)| {
+                PickerItem::new(format!("result-{n}"), result.prompt.lines().next().unwrap_or_default().to_owned())
+            })
+            .collect();
+        let status = if let Some(error) = self.state.error() {
+            Some(format!("Search failed: {error}").into())
         } else if self.state.is_loading() {
-            Some("Searching…".to_owned())
+            Some("Searching…".into())
         } else if self.state.is_blank() {
-            Some("Type to search the prompts you have sent".to_owned())
-        } else if self.results.is_empty() {
-            Some("No matching prompts".to_owned())
+            Some("Type to search the prompts you have sent".into())
         } else {
             None
-        }
+        };
+        self.picker.update(cx, |picker, cx| {
+            picker.set_items(items, cx);
+            picker.set_status(status, cx);
+        });
     }
 }
 
 impl EventEmitter<PromptSearchOutcome> for PromptSearch {}
 
 impl Render for PromptSearch {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = DesktopTheme::global(cx).ui();
-        let mut results =
-            div().id("prompt-search-results").max_h(rem(RESULTS_HEIGHT)).overflow_y_scroll().flex().flex_col();
-        for (position, result) in self.results.iter().enumerate() {
-            let prompt = result.prompt.lines().next().unwrap_or_default().to_owned();
-            let row = ListRow::new(format!("prompt-search-result-{position}"), theme)
-                .selected(position == self.highlighted)
-                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.choose(position, cx)))
-                .child(div().flex_1().min_w_0().truncate().child(prompt));
-            results = results.child(row);
-        }
-        div()
-            .debug_selector(|| "prompt-search".to_owned())
-            .flex()
-            .flex_col()
-            .gap_1()
-            .p_1()
-            .rounded(rem(RADIUS_CONTAINER))
-            .border_1()
-            .border_color(theme.colors.border)
-            .bg(theme.colors.surface)
-            .shadow_lg()
-            // Captured on the way down to the search field, which would otherwise move its cursor.
-            .capture_action(cx.listener(|this, _: &MoveUp, _, cx| {
-                this.step(-1, cx);
-                cx.stop_propagation();
-            }))
-            .capture_action(cx.listener(|this, _: &MoveDown, _, cx| {
-                this.step(1, cx);
-                cx.stop_propagation();
-            }))
-            .on_action(cx.listener(|this, _: &Enter, _, cx| this.choose(this.highlighted, cx)))
-            .on_action(cx.listener(|_, _: &Escape, _, cx| cx.emit(PromptSearchOutcome::Dismissed)))
-            .child(
-                div()
-                    .px_2()
-                    .py_1()
-                    .rounded(rem(RADIUS_CONTROL))
-                    .border_1()
-                    .border_color(theme.colors.accent)
-                    .bg(theme.colors.canvas)
-                    .child(Input::new(&self.input)),
-            )
-            .children(self.status().map(|status| {
-                div().px_2().py_1().typography(Typography::Small).text_color(theme.colors.text_muted).child(status)
-            }))
-            .child(results)
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        self.picker.clone()
     }
 }
 

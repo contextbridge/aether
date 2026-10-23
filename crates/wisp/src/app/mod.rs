@@ -1,6 +1,7 @@
 use crate::app::keybindings::Keybindings;
 use crate::app::message::Message;
 use crate::command::{Command, CommandResult, HostCommandResult};
+use crate::conversation::plan_tracker::PlanTracker;
 use crate::conversation::progress_indicator::{ProgressIndicator, ProgressPhase};
 use crate::conversation::status_line::{ContextUsageDisplay, StatusLineModel};
 use crate::session::platform::{BrowserOpener, ClipboardWriter, default_browser_opener, default_clipboard_writer};
@@ -55,6 +56,7 @@ impl ExitState {
 /// renderer draws each frame.
 pub struct App {
     core: SessionCore,
+    plan_tracker: PlanTracker,
     ui: UiConfig,
     route: Route,
     overlay: Option<Overlay>,
@@ -98,23 +100,15 @@ impl App {
         session: Session,
         settings: UiSettings,
     ) -> (Self, mpsc::UnboundedReceiver<AcpEvent>, acp_utils::client::AcpClientHandle) {
-        let Session { client, response, working_dir, workspace_status, workspace_access } = session;
+        let (session, handle, events) = session.into_core(&crate::client_info().name);
         let mut app = Self::new(AppConfig {
-            session: SessionCoreConfig {
-                initialize_response: client.initialize_response,
-                session_response: response,
-                working_dir,
-                workspace_status,
-                workspace_access,
-                client_name: crate::client_info().name,
-            },
+            session,
             settings,
             browser_opener: default_browser_opener(),
             clipboard_writer: default_clipboard_writer(),
         });
-        let effects = app.core.refresh_workspace_status();
-        app.apply_effects(effects);
-        (app, client.event_rx, client.handle)
+        app.update_core(SessionCore::refresh_workspace_status);
+        (app, events, handle)
     }
 
     pub fn new(config: AppConfig) -> Self {
@@ -132,6 +126,7 @@ impl App {
         };
         let mut app = Self {
             core: SessionCore::new(config.session),
+            plan_tracker: PlanTracker::default(),
             ui,
             route: Route::Conversation,
             overlay: None,
@@ -161,6 +156,7 @@ impl App {
             Message::Tick(now) => self.on_tick(now),
         }
 
+        self.plan_tracker.sync(self.core.conversation().plan(), Instant::now());
         self.refresh_progress();
         self.take_commands()
     }
@@ -170,17 +166,12 @@ impl App {
     }
 
     pub fn on_acp_event(&mut self, event: AcpEvent) {
-        let effects = self.core.on_acp_event(event);
-        self.apply_effects(effects);
+        self.update_core(|core| core.on_acp_event(event));
     }
 
     pub fn on_command_result(&mut self, result: CommandResult) {
-        match result {
-            CommandResult::Host(result) => self.on_host_result(result),
-            result => {
-                let effects = self.core.on_command_result(result);
-                self.apply_effects(effects);
-            }
+        if let Some(result) = self.update_core(|core| core.on_command_result(result)) {
+            self.on_unhandled_result(result);
         }
     }
 
@@ -194,7 +185,7 @@ impl App {
             self.spinner_tick = self.spinner_tick.wrapping_add(1);
         }
         self.progress.on_tick(now);
-        self.core.on_tick(now);
+        self.plan_tracker.on_tick(now);
     }
 
     pub fn wants_tick(&self) -> bool {
@@ -210,7 +201,7 @@ impl App {
             || self.core.conversation().is_compacting()
             || self.progress.is_active()
             || self.exit_state.is_confirming()
-            || self.core.plan_tracker().has_completed_in_grace_period()
+            || self.plan_tracker.has_completed_in_grace_period()
     }
 
     pub fn has_navigation(&self) -> bool {
@@ -334,13 +325,13 @@ impl App {
     }
 
     pub fn plan_entries(&self) -> Vec<PlanEntry> {
-        self.core.plan_tracker().current_entries()
+        self.plan_tracker.current_entries()
     }
 
     /// Reaches past the renderer for the integration tests, which assert on the
     /// state a frame is drawn from rather than on the frame.
     pub fn has_plan(&self) -> bool {
-        self.core.plan_tracker().has_entries()
+        self.plan_tracker.has_entries()
     }
 
     fn on_host_result(&mut self, result: HostCommandResult) {

@@ -218,10 +218,16 @@ impl FakeAgent {
         Agent.v2().name("fake-agent").with_handler(self)
     }
 
-    pub async fn build(self) -> Result<crate::client::AcpClient, crate::client::AcpClientError> {
+    /// Serves the agent in memory on the current `LocalSet`, returning the client's end of the
+    /// transport.
+    pub fn serve(self) -> super::Channel {
         let (agent, client) = super::Channel::duplex();
         tokio::task::spawn_local(self.agent().connect_to(agent));
-        crate::client::connect_acp_client(client, super::initialize_request()).await
+        client
+    }
+
+    pub async fn build(self) -> Result<crate::client::AcpClient, crate::client::AcpClientError> {
+        crate::client::connect_acp_client(self.serve(), super::initialize_request()).await
     }
 }
 

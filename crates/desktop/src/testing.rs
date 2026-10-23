@@ -6,26 +6,23 @@ use crate::clock::Clock;
 use crate::history::{History, git_root};
 use crate::registry::{Registry, STATE_FILE};
 use crate::target::{ConnectError, ConnectMode, Connector, ConnectorFuture, InstanceId, SessionTarget, client_info};
-use crate::threads::{Thread, ThreadManager};
-use crate::{
-    DesktopApp, DesktopConfig, DesktopTheme, cli::DEFAULT_AGENT_COMMAND, init, runtime, window_options, window_size,
-};
+use crate::threads::{Thread, ThreadManager, ThreadStatus};
+use crate::{DesktopApp, DesktopConfig, cli::DEFAULT_AGENT_COMMAND, init, window_options, window_size};
 use acp_utils::testing::{Channel, FakeAgent};
 use aether_sessions::SessionStore;
-use aether_sessions::testing::TestStore;
+use aether_sessions::testing::{TestStore, session_meta, user_message};
 use chrono::{DateTime, Utc};
+use clankerdiff_gpui::ui::testing::WindowDriver;
+use clankerdiff_gpui_shell::runtime;
 use client_core::session::{Connection, Session};
 use client_core::testing::{FakeGit, FakeGitDiffServer};
 use gpui::{
-    AnyWindowHandle, App, AppContext, Bounds, Element, ElementId, Entity, Global, GlobalElementId, HighlightStyle,
-    Hsla, InspectorElementId, IntoElement, KeyUpEvent, Keystroke, LayoutId, Modifiers, MouseButton, MouseDownEvent,
-    MouseUpEvent, Pixels, Point, ScrollDelta, ScrollWheelEvent, SharedString, Size, StyledText,
-    SystemNotificationResponse, TestAppContext, VisualTestContext, Window, WindowHandle, WindowId, point, px, size,
+    App, AppContext, Bounds, Entity, Pixels, Size, SystemNotificationResponse, TestAppContext, VisualTestContext,
+    WindowHandle, point, px, size,
 };
 use std::collections::{HashMap, VecDeque};
 use std::io;
-use std::ops::Range;
-use std::panic::Location;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use tokio::runtime::{Builder, Runtime};
@@ -39,36 +36,16 @@ pub const DEFAULT_NOW: &str = "2026-01-07T12:00:00Z";
 /// directory, for as long as it runs.
 pub const FAKE_AGENT_LOCK_FILE: &str = "agent.lock";
 
-/// Text and effective foreground styles observed while the production element paints.
-#[derive(Clone, Debug)]
-pub struct PaintedText {
-    pub text: SharedString,
-    pub highlights: Vec<(Range<usize>, HighlightStyle)>,
-    pub foreground: Hsla,
-}
-
-impl PaintedText {
-    /// The effective foreground at a UTF-8 byte offset in this text.
-    pub fn color_at(&self, offset: usize) -> Hsla {
-        self.highlights
-            .iter()
-            .find(|(range, _)| range.contains(&offset))
-            .and_then(|(_, style)| style.color)
-            .unwrap_or(self.foreground)
-    }
-}
-
-/// Configures and opens a [`DesktopHarness`].
 pub struct DesktopHarnessBuilder {
     window_size: Option<Size<Pixels>>,
     connector: FakeConnector,
     projects: Vec<PathBuf>,
     sessions: TestStore,
+    saved_sessions: bool,
     state_dir: Option<PathBuf>,
     now: DateTime<Utc>,
 }
 
-/// A [`Clock`] stopped at one moment.
 pub struct FakeClock(pub DateTime<Utc>);
 
 impl Clock for FakeClock {
@@ -101,6 +78,7 @@ impl Default for DesktopHarnessBuilder {
             connector: FakeConnector::default(),
             projects: Vec::new(),
             sessions: TestStore::new(),
+            saved_sessions: false,
             state_dir: None,
             now: parse_time(DEFAULT_NOW),
         }
@@ -115,24 +93,51 @@ impl DesktopHarnessBuilder {
     }
 
     /// Runs the app as if it were `now`, an RFC 3339 time, instead of [`DEFAULT_NOW`].
-    ///
-    /// # Panics
-    ///
-    /// Panics if `now` is not an RFC 3339 time.
     pub fn now(mut self, now: &str) -> Self {
         self.now = parse_time(now);
         self
     }
 
-    /// Connects the app's threads through `connector`.
+    /// Connects the app's threads through `connector`, for tests that script agents without
+    /// adding their projects.
     pub fn connector(mut self, connector: FakeConnector) -> Self {
         self.connector = connector;
         self
     }
 
+    /// Adds `cwd` as a project and scripts `agent` as the next agent a thread there talks to.
+    pub fn agent(mut self, cwd: impl Into<PathBuf>, agent: FakeAgent) -> Self {
+        let cwd = cwd.into();
+        self.connector = self.connector.agent(&cwd, agent);
+        self.project(cwd)
+    }
+
+    /// Serves `git` as the repository every agent in `cwd` diffs.
+    pub fn git(mut self, cwd: impl Into<PathBuf>, git: FakeGit) -> Self {
+        self.connector = self.connector.git(cwd, git);
+        self
+    }
+
     /// Adds `root` as a project before the app opens, as if through "Add project".
     pub fn project(mut self, root: impl Into<PathBuf>) -> Self {
-        self.projects.push(root.into());
+        let root = root.into();
+        if !self.projects.contains(&root) {
+            self.projects.push(root);
+        }
+        self
+    }
+
+    /// Saves a session that ran in `cwd` at `created_at`, titled by its first `prompt` if it has
+    /// one. [`build`](Self::build) then waits for the app to read history.
+    pub fn session<'a>(
+        mut self,
+        session_id: &str,
+        cwd: &str,
+        created_at: &str,
+        prompt: impl Into<Option<&'a str>>,
+    ) -> Self {
+        save_session(&self.sessions, session_id, cwd, created_at, prompt.into());
+        self.saved_sessions = true;
         self
     }
 
@@ -144,18 +149,6 @@ impl DesktopHarnessBuilder {
         self
     }
 
-    /// Reads history from `sessions` instead of an empty store. The harness keeps the store, so a
-    /// test can write more sessions to it through [`DesktopHarness::sessions`].
-    pub fn history(mut self, sessions: TestStore) -> Self {
-        self.sessions = sessions;
-        self
-    }
-
-    /// Opens the configured app and settles the first frame.
-    ///
-    /// # Panics
-    ///
-    /// Panics if gpui cannot open or draw the test window.
     pub fn build(self, cx: &mut TestAppContext) -> DesktopHarness {
         // Single-threaded and driven only by `run_until`, so agent connections and the gpui test
         // scheduler take turns on the test thread instead of racing each other.
@@ -164,17 +157,16 @@ impl DesktopHarnessBuilder {
             runtime::install(cx, runtime.handle().clone());
             init(cx);
         });
-        let registry = cx.new(|cx| {
-            let mut registry = Registry::load(self.state_dir.map(|dir| dir.join(STATE_FILE)), cx);
+        let registry = cx.new(|cx| Registry::load(self.state_dir.map(|dir| dir.join(STATE_FILE)), cx));
+        Registry::update(&registry, cx, |state| {
             for root in self.projects {
-                registry.add_project(root, cx);
+                state.add_project(root);
             }
-            registry
         });
         let window_size = self.window_size.unwrap_or_else(|| cx.read(|cx| window_size(&registry, cx)));
         let bounds = Bounds::new(point(px(0.0), px(0.0)), window_size);
         let config = DesktopConfig {
-            connector: Arc::new(self.connector),
+            connector: Arc::new(self.connector.clone()),
             clock: Arc::new(FakeClock(self.now)),
             agents: Agents::new(
                 AgentCommand::parse(DEFAULT_AGENT_COMMAND).expect("the default agent command parses"),
@@ -187,17 +179,30 @@ impl DesktopHarnessBuilder {
             cx.open_window(window_options(bounds), |window, cx| cx.new(|cx| DesktopApp::new(config, window, cx)))
                 .expect("open the gpui test window")
         });
-        let harness = DesktopHarness { window, runtime, sessions: self.sessions };
+        let harness = DesktopHarness {
+            window,
+            driver: WindowDriver::new(window),
+            runtime,
+            connector: self.connector,
+            sessions: self.sessions,
+        };
         // The app activates itself once its window opens, which brings the window to the front.
         harness.activate(cx);
+        if self.saved_sessions {
+            let history = harness.history(cx);
+            harness.run_until(cx, |cx| !history.read(cx).projects().is_empty());
+        }
         harness
     }
 }
 
-/// A rendered [`DesktopApp`] driven through gpui's test platform.
+/// A rendered [`DesktopApp`] driven through gpui's test platform. It dereferences to the
+/// [`WindowDriver`] that clicks, types and measures in its window.
 pub struct DesktopHarness {
     window: WindowHandle<DesktopApp>,
+    driver: WindowDriver,
     runtime: Runtime,
+    connector: FakeConnector,
     sessions: TestStore,
 }
 
@@ -304,18 +309,21 @@ impl Connector for FakeConnector {
     }
 }
 
+impl Deref for DesktopHarness {
+    type Target = WindowDriver;
+
+    fn deref(&self) -> &WindowDriver {
+        &self.driver
+    }
+}
+
 impl DesktopHarness {
-    /// The app's threads.
     pub fn threads(&self, cx: &TestAppContext) -> Entity<ThreadManager> {
         cx.read(|cx| self.app(cx).threads().clone())
     }
 
-    /// The selected thread, if any.
     pub fn selected_thread(&self, cx: &TestAppContext) -> Option<Entity<Thread>> {
-        cx.read(|cx| {
-            let threads = self.app(cx).threads().read(cx);
-            threads.selected().and_then(|id| threads.thread(id, cx)).cloned()
-        })
+        cx.read(|cx| self.app(cx).threads().read(cx).selected().cloned())
     }
 
     /// Starts a thread in `cwd` with its project's default agent, and selects it.
@@ -324,6 +332,28 @@ impl DesktopHarness {
         let (threads, agents) = cx.read(|cx| (self.app(cx).threads().clone(), self.app(cx).agents().clone()));
         let agent = cx.read(|cx| agents.read(cx).catalog(&git_root(&cwd)).default_agent().clone());
         threads.update(cx, |threads, cx| threads.new_thread(cwd, agent, cx))
+    }
+
+    /// Starts a thread in `cwd` like [`new_thread`](Self::new_thread) and waits for its agent to
+    /// connect.
+    pub fn start_thread(&self, cx: &mut TestAppContext, cwd: impl Into<PathBuf>) -> Entity<Thread> {
+        let thread = self.new_thread(cx, cwd);
+        self.run_until(cx, |cx| thread.read(cx).status() == ThreadStatus::Idle);
+        thread
+    }
+
+    /// Types `prompt` into the selected thread's composer, sends it, and waits for the agent's
+    /// turn on it to end.
+    pub fn send(&self, cx: &mut TestAppContext, thread: &Entity<Thread>, prompt: &str) {
+        self.until_answered(cx, thread, prompt, |harness, cx| {
+            harness.simulate_input(cx, prompt);
+            harness.simulate_keystrokes(cx, "enter");
+        });
+    }
+
+    /// Submits `prompt` to `thread`, selected or not, and waits for the agent's turn on it to end.
+    pub fn submit(&self, cx: &mut TestAppContext, thread: &Entity<Thread>, prompt: &str) {
+        self.until_answered(cx, thread, prompt, |_, cx| thread.update(cx, |thread, cx| thread.submit(prompt, cx)));
     }
 
     pub fn agents(&self, cx: &TestAppContext) -> Entity<Agents> {
@@ -338,12 +368,21 @@ impl DesktopHarness {
         cx.read(|cx| self.app(cx).registry().clone())
     }
 
+    /// The connector the app's threads reach their agents through. Clones share its scripts.
+    pub fn connector(&self) -> &FakeConnector {
+        &self.connector
+    }
+
+    /// Saves a session in the store the app reads history from, as an agent would.
+    pub fn save_session(&self, session_id: &str, cwd: &str, created_at: &str, prompt: Option<&str>) {
+        save_session(&self.sessions, session_id, cwd, created_at, prompt);
+    }
+
     /// The title the sidebar lists for the row tagged `selector`, if it lists that row.
     pub fn row_title(&self, cx: &TestAppContext, selector: &str) -> Option<String> {
         cx.read(|cx| self.app(cx).sidebar().read(cx).row_title(selector))
     }
 
-    /// The title in the selected thread's header, if a thread is selected.
     pub fn header_title(&self, cx: &TestAppContext) -> Option<String> {
         cx.read(|cx| {
             let app = self.app(cx);
@@ -352,12 +391,6 @@ impl DesktopHarness {
         })
     }
 
-    /// The store the app reads history from.
-    pub fn sessions(&self) -> &TestStore {
-        &self.sessions
-    }
-
-    /// The text in the selected thread's composer, if a thread is selected.
     pub fn composer_text(&self, cx: &TestAppContext) -> Option<String> {
         cx.read(|cx| {
             let app = self.app(cx);
@@ -367,7 +400,6 @@ impl DesktopHarness {
         })
     }
 
-    /// The label of the selected thread's Changes tab, if a thread is selected.
     pub fn changes_label(&self, cx: &TestAppContext) -> Option<String> {
         cx.read(|cx| {
             let app = self.app(cx);
@@ -399,121 +431,7 @@ impl DesktopHarness {
         }
     }
 
-    /// Draws and settles the test window, then delivers the frame a view asked for while drawing,
-    /// as a display would.
-    ///
-    /// # Panics
-    ///
-    /// Panics if gpui cannot draw the test window.
-    pub fn draw(&self, cx: &mut TestAppContext) {
-        cx.update_window(*self.window, |_, window, cx| {
-            window.draw(cx).clear(cx);
-            if window.simulate_next_frame(cx) > 0 {
-                window.draw(cx).clear(cx);
-            }
-        })
-        .expect("draw the gpui test window");
-        cx.run_until_parked();
-    }
-
-    pub fn simulate_keystrokes(&self, cx: &mut TestAppContext, keystrokes: &str) {
-        cx.simulate_keystrokes(*self.window, keystrokes);
-        self.draw(cx);
-    }
-
-    /// Presses and releases one key, including the keyup that activates focused buttons.
-    pub fn press_key(&self, cx: &mut TestAppContext, key: &str) {
-        self.simulate_keystrokes(cx, key);
-        VisualTestContext::from_window(*self.window, cx)
-            .simulate_event(KeyUpEvent { keystroke: Keystroke::parse(key).expect("a valid test keystroke") });
-        self.draw(cx);
-    }
-
-    pub fn simulate_input(&self, cx: &mut TestAppContext, text: &str) {
-        cx.simulate_input(*self.window, text);
-        self.draw(cx);
-    }
-
-    /// Clicks the centre of the element tagged with `selector`.
-    pub fn click(&self, cx: &mut TestAppContext, selector: &'static str) -> Result<(), HarnessError> {
-        let bounds = self.bounds(cx, selector).ok_or(HarnessError::MissingElement(selector))?;
-        VisualTestContext::from_window(*self.window, cx).simulate_click(bounds.center(), Modifiers::default());
-        self.draw(cx);
-        Ok(())
-    }
-
-    /// Double-clicks the centre of the element tagged with `selector`.
-    pub fn double_click(&self, cx: &mut TestAppContext, selector: &'static str) -> Result<(), HarnessError> {
-        let position = self.bounds(cx, selector).ok_or(HarnessError::MissingElement(selector))?.center();
-        let mut window = VisualTestContext::from_window(*self.window, cx);
-        for click_count in 1..=2 {
-            let modifiers = Modifiers::default();
-            window.simulate_event(MouseDownEvent {
-                position,
-                modifiers,
-                button: MouseButton::Left,
-                click_count,
-                first_mouse: false,
-            });
-            window.simulate_event(MouseUpEvent { position, modifiers, button: MouseButton::Left, click_count });
-        }
-        self.draw(cx);
-        Ok(())
-    }
-
-    /// Drags the element tagged with `selector` sideways, from its centre to `x`.
-    pub fn drag(&self, cx: &mut TestAppContext, selector: &'static str, x: Pixels) -> Result<(), HarnessError> {
-        let from = self.bounds(cx, selector).ok_or(HarnessError::MissingElement(selector))?.center();
-        self.drag_to(cx, selector, point(x, from.y))
-    }
-
-    /// Drags the element tagged with `selector` from its centre to `to`.
-    pub fn drag_to(
-        &self,
-        cx: &mut TestAppContext,
-        selector: &'static str,
-        to: Point<Pixels>,
-    ) -> Result<(), HarnessError> {
-        let from = self.bounds(cx, selector).ok_or(HarnessError::MissingElement(selector))?.center();
-        let mut window = VisualTestContext::from_window(*self.window, cx);
-        window.simulate_mouse_down(from, MouseButton::Left, Modifiers::default());
-        // A drag starts only once the pointer has moved some way from where it was pressed.
-        window.simulate_mouse_move(from + point(px(4.0), px(0.0)), MouseButton::Left, Modifiers::default());
-        window.simulate_mouse_move(to, MouseButton::Left, Modifiers::default());
-        window.simulate_mouse_up(to, MouseButton::Left, Modifiers::default());
-        self.draw(cx);
-        Ok(())
-    }
-
-    /// Moves the pointer over the centre of the element tagged with `selector`.
-    pub fn hover(&self, cx: &mut TestAppContext, selector: &'static str) -> Result<(), HarnessError> {
-        let bounds = self.bounds(cx, selector).ok_or(HarnessError::MissingElement(selector))?;
-        VisualTestContext::from_window(*self.window, cx).simulate_mouse_move(
-            bounds.center(),
-            None,
-            Modifiers::default(),
-        );
-        self.draw(cx);
-        Ok(())
-    }
-
-    /// Right-clicks the centre of the element tagged with `selector`.
-    pub fn right_click(&self, cx: &mut TestAppContext, selector: &'static str) -> Result<(), HarnessError> {
-        let center = self.bounds(cx, selector).ok_or(HarnessError::MissingElement(selector))?.center();
-        let mut window = VisualTestContext::from_window(*self.window, cx);
-        window.simulate_mouse_down(center, MouseButton::Right, Modifiers::default());
-        window.simulate_mouse_up(center, MouseButton::Right, Modifiers::default());
-        self.draw(cx);
-        // A menu paints a frame after the frame that opens it, once it knows where its row is.
-        self.draw(cx);
-        Ok(())
-    }
-
     /// Brings the window to the front, as if the user switched back to the app.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the test window has closed.
     pub fn activate(&self, cx: &mut TestAppContext) {
         cx.update_window(*self.window, |_, window, _| window.activate_window()).expect("the test window is open");
         self.draw(cx);
@@ -525,11 +443,6 @@ impl DesktopHarness {
         self.draw(cx);
     }
 
-    /// Whether the window is in front.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the test window has closed.
     pub fn is_active(&self, cx: &mut TestAppContext) -> bool {
         cx.update_window(*self.window, |_, window, _| window.is_window_active()).expect("the test window is open")
     }
@@ -544,67 +457,27 @@ impl DesktopHarness {
         self.draw(cx);
     }
 
-    /// Scrolls the element tagged `selector` by `lines` lines, upwards for positive `lines`, as
-    /// if with the mouse wheel over its centre.
-    pub fn scroll(&self, cx: &mut TestAppContext, selector: &'static str, lines: f32) -> Result<(), HarnessError> {
-        let position = self.bounds(cx, selector).ok_or(HarnessError::MissingElement(selector))?.center();
-        VisualTestContext::from_window(*self.window, cx).simulate_event(ScrollWheelEvent {
-            position,
-            delta: ScrollDelta::Lines(point(0.0, lines)),
-            ..ScrollWheelEvent::default()
-        });
-        self.draw(cx);
-        Ok(())
-    }
-
-    /// Resizes the window, as if the user dragged its edge.
-    pub fn resize(&self, cx: &mut TestAppContext, width: f32, height: f32) {
-        cx.simulate_window_resize(self.window.into(), size(px(width), px(height)));
-        self.draw(cx);
-    }
-
-    /// Returns the painted bounds of the element tagged with `selector`.
-    pub fn bounds(&self, cx: &mut TestAppContext, selector: &'static str) -> Option<Bounds<Pixels>> {
-        self.draw(cx);
-        VisualTestContext::from_window(*self.window, cx).debug_bounds(selector)
-    }
-
-    /// The window's interface size, in pixels per rem.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the test window has closed.
-    pub fn rem_size(&self, cx: &mut TestAppContext) -> Pixels {
-        self.draw(cx);
-        cx.update_window(*self.window, |_, window, _| window.rem_size()).expect("the test window is open")
-    }
-
-    /// The last paint of this exact text in this window, including styles and inherited foreground.
-    /// Retained across frames because gpui can reuse previously painted list rows.
-    pub fn painted_text(&self, cx: &mut TestAppContext, text: &str) -> Option<PaintedText> {
-        self.draw(cx);
-        let window = AnyWindowHandle::from(self.window).window_id();
-        cx.read(|cx| cx.try_global::<PaintedTexts>()?.0.get(&window)?.get(text).cloned())
-    }
-
-    /// Reads the installed app theme.
-    pub fn theme(&self, cx: &TestAppContext) -> DesktopTheme {
-        cx.read(|cx| DesktopTheme::global(cx).clone())
-    }
-
     fn app<'a>(&self, cx: &'a App) -> &'a DesktopApp {
         self.window.read(cx).expect("the test window is open")
     }
-}
 
-#[derive(Debug, thiserror::Error)]
-pub enum HarnessError {
-    #[error("no painted element is tagged `{0}`")]
-    MissingElement(&'static str),
-}
-
-pub(crate) fn observe_text(text: SharedString, highlights: Vec<(Range<usize>, HighlightStyle)>) -> impl IntoElement {
-    ObservedText { inner: StyledText::new(text.clone()).with_highlights(highlights.clone()), text, highlights }
+    /// Runs `send` and waits until `thread` is idle with `prompt` once more in its conversation.
+    fn until_answered(
+        &self,
+        cx: &mut TestAppContext,
+        thread: &Entity<Thread>,
+        prompt: &str,
+        send: impl FnOnce(&Self, &mut TestAppContext),
+    ) {
+        let times_sent = |cx: &App| {
+            thread.read(cx).core().map_or(0, |core| {
+                core.conversation().items().iter().filter(|item| item.text().is_some_and(|text| text == prompt)).count()
+            })
+        };
+        let expected = cx.read(times_sent) + 1;
+        send(self, cx);
+        self.run_until(cx, |cx| thread.read(cx).status() == ThreadStatus::Idle && times_sent(cx) == expected);
+    }
 }
 
 #[derive(Default)]
@@ -636,81 +509,15 @@ impl FakeConnectorState {
     }
 }
 
+fn save_session(store: &TestStore, session_id: &str, cwd: &str, created_at: &str, prompt: Option<&str>) {
+    let mut meta = session_meta(session_id, created_at);
+    meta.cwd = cwd.into();
+    store.append_meta(session_id, &meta);
+    if let Some(prompt) = prompt {
+        store.append(session_id, &user_message(prompt));
+    }
+}
+
 fn parse_time(time: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(time).expect("an RFC 3339 time").to_utc()
-}
-
-#[derive(Default)]
-struct PaintedTexts(HashMap<WindowId, HashMap<SharedString, PaintedText>>);
-
-impl Global for PaintedTexts {}
-
-struct ObservedText {
-    inner: StyledText,
-    text: SharedString,
-    highlights: Vec<(Range<usize>, HighlightStyle)>,
-}
-
-impl IntoElement for ObservedText {
-    type Element = Self;
-
-    fn into_element(self) -> Self {
-        self
-    }
-}
-
-impl Element for ObservedText {
-    type RequestLayoutState = <StyledText as Element>::RequestLayoutState;
-    type PrepaintState = <StyledText as Element>::PrepaintState;
-
-    fn id(&self) -> Option<ElementId> {
-        None
-    }
-
-    fn source_location(&self) -> Option<&'static Location<'static>> {
-        None
-    }
-
-    fn request_layout(
-        &mut self,
-        id: Option<&GlobalElementId>,
-        inspector: Option<&InspectorElementId>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> (LayoutId, Self::RequestLayoutState) {
-        self.inner.request_layout(id, inspector, window, cx)
-    }
-
-    fn prepaint(
-        &mut self,
-        id: Option<&GlobalElementId>,
-        inspector: Option<&InspectorElementId>,
-        bounds: Bounds<Pixels>,
-        layout: &mut Self::RequestLayoutState,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Self::PrepaintState {
-        self.inner.prepaint(id, inspector, bounds, layout, window, cx);
-    }
-
-    fn paint(
-        &mut self,
-        id: Option<&GlobalElementId>,
-        inspector: Option<&InspectorElementId>,
-        bounds: Bounds<Pixels>,
-        layout: &mut Self::RequestLayoutState,
-        prepaint: &mut Self::PrepaintState,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        self.inner.paint(id, inspector, bounds, layout, prepaint, window, cx);
-        cx.default_global::<PaintedTexts>().0.entry(window.window_handle().window_id()).or_default().insert(
-            self.text.clone(),
-            PaintedText {
-                text: self.text.clone(),
-                highlights: self.highlights.clone(),
-                foreground: window.text_style().color,
-            },
-        );
-    }
 }

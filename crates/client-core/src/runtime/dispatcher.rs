@@ -24,15 +24,21 @@ pub struct NoHost;
 
 /// Executes [`Command`]s against an agent connection, the local filesystem,
 /// the git review client, and the host's [`HostExecutor`].
-pub struct CommandDispatcher<T: HostExecutor> {
+pub struct CommandDispatcher<T: HostExecutor = NoHost> {
     client_handle: AcpClientHandle,
     tasks: TaskSupervisor<T::Result>,
     git_review: GitReviewRuntime,
     host: T,
 }
 
+impl CommandDispatcher {
+    pub fn new(client_handle: AcpClientHandle) -> Self {
+        Self::with_host(client_handle, NoHost)
+    }
+}
+
 impl<T: HostExecutor> CommandDispatcher<T> {
-    pub fn new(client_handle: AcpClientHandle, host: T) -> Self {
+    pub fn with_host(client_handle: AcpClientHandle, host: T) -> Self {
         Self {
             git_review: GitReviewRuntime::new(client_handle.clone()),
             client_handle,

@@ -1,9 +1,9 @@
-use super::thread::{Thread, ThreadEvent, ThreadId};
+use super::thread::{Thread, ThreadEvent};
 use crate::agents::{AgentProfile, Agents};
 use crate::history::git_root;
 use crate::target::{ConnectMode, Connector, SessionTarget};
 use agent_client_protocol::schema::v2::SessionId;
-use gpui::{App, AppContext, Context, Entity, EventEmitter};
+use gpui::{App, AppContext, Context, Entity, EntityId, EventEmitter};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -16,18 +16,20 @@ pub struct ThreadManager {
     connector: Arc<dyn Connector>,
     agents: Entity<Agents>,
     threads: Vec<Entity<Thread>>,
-    selected: Option<ThreadId>,
-    unread: HashSet<ThreadId>,
+    selected: Option<Entity<Thread>>,
+    unread: HashSet<EntityId>,
     /// Whether the app's window is in front. While it is not, no thread is watched.
     window_active: bool,
-    next_id: u64,
+    opened: usize,
 }
 
-/// A thread the user is not [watching](ThreadManager::is_watched) did something they should see.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A thread finished a turn or needs input.
+#[derive(Debug)]
 pub struct Attention {
-    pub thread: ThreadId,
+    pub thread: Entity<Thread>,
     pub event: ThreadEvent,
+    /// Whether the user was [watching](ThreadManager::is_watched) the thread, and so saw it.
+    pub watched: bool,
 }
 
 impl ThreadManager {
@@ -41,7 +43,7 @@ impl ThreadManager {
             selected: None,
             unread: HashSet::new(),
             window_active: false,
-            next_id: 0,
+            opened: 0,
         }
     }
 
@@ -50,24 +52,19 @@ impl ThreadManager {
         &self.threads
     }
 
-    pub fn thread(&self, id: ThreadId, cx: &App) -> Option<&Entity<Thread>> {
-        self.threads.iter().find(|thread| thread.read(cx).id() == id)
-    }
-
-    /// The live thread that has the session `session_id` open, if any.
     pub fn thread_with_session(&self, session_id: &SessionId, cx: &App) -> Option<&Entity<Thread>> {
         self.threads.iter().find(|thread| thread.read(cx).session_id() == Some(session_id))
     }
 
-    pub fn selected(&self) -> Option<ThreadId> {
-        self.selected
+    pub fn selected(&self) -> Option<&Entity<Thread>> {
+        self.selected.as_ref()
     }
 
     /// Selects the thread, which marks what it did as seen.
-    pub fn select(&mut self, id: ThreadId, cx: &mut Context<Self>) {
-        if self.thread(id, cx).is_some() {
-            self.selected = Some(id);
-            self.unread.remove(&id);
+    pub fn select(&mut self, thread: &Entity<Thread>, cx: &mut Context<Self>) {
+        if self.threads.contains(thread) {
+            self.selected = Some(thread.clone());
+            self.unread.remove(&thread.entity_id());
             cx.notify();
         }
     }
@@ -76,22 +73,22 @@ impl ThreadManager {
     /// selected thread did meanwhile as seen.
     pub fn set_window_active(&mut self, active: bool, cx: &mut Context<Self>) {
         self.window_active = active;
-        if let Some(id) = self.selected.filter(|_| active) {
-            self.unread.remove(&id);
+        if let Some(selected) = self.selected.as_ref().filter(|_| active) {
+            self.unread.remove(&selected.entity_id());
         }
         cx.notify();
     }
 
     /// Whether the user is watching the thread, so that what it does is seen as it happens: it is
     /// selected, in the window in front.
-    pub fn is_watched(&self, id: ThreadId) -> bool {
-        self.window_active && self.selected == Some(id)
+    pub fn is_watched(&self, thread: &Entity<Thread>) -> bool {
+        self.window_active && self.selected.as_ref() == Some(thread)
     }
 
     /// Whether the thread finished a turn while it was not [watched](Self::is_watched), and has
     /// not been watched since.
-    pub fn is_unread(&self, id: ThreadId) -> bool {
-        self.unread.contains(&id)
+    pub fn is_unread(&self, thread: &Entity<Thread>) -> bool {
+        self.unread.contains(&thread.entity_id())
     }
 
     /// Starts a thread with a fresh session of `agent` in `cwd`, and selects it.
@@ -110,58 +107,65 @@ impl ThreadManager {
             let agent = self.agents.read(cx).catalog(&git_root(&cwd)).default_agent().clone();
             return self.open(SessionTarget::new(cwd, agent), ConnectMode::Resume(session_id), cx);
         };
-        let id = thread.read(cx).id();
-        self.reconnect(id, cx);
-        self.select(id, cx);
+        self.reconnect(&thread, cx);
+        self.select(&thread, cx);
         thread
     }
 
     /// Connects the thread again if its connection failed or closed, resuming its session when it
     /// has one. A thread that is connecting or connected is left alone.
-    pub fn reconnect(&mut self, id: ThreadId, cx: &mut Context<Self>) {
+    pub fn reconnect(&mut self, thread: &Entity<Thread>, cx: &mut Context<Self>) {
         let connector = self.connector.clone();
-        if let Some(thread) = self.thread(id, cx).cloned() {
+        if self.threads.contains(thread) {
             thread.update(cx, |thread, cx| thread.reconnect(connector, cx));
         }
     }
 
     /// Ends the thread's agent, and any instance it was launched on, and removes the thread. Its
     /// session, once saved, shows in history again, from where it can be resumed.
-    pub fn stop(&mut self, id: ThreadId, cx: &mut Context<Self>) {
-        let Some(index) = self.threads.iter().position(|thread| thread.read(cx).id() == id) else {
+    pub fn stop(&mut self, thread: &Entity<Thread>, cx: &mut Context<Self>) {
+        let Some(index) = self.threads.iter().position(|listed| listed == thread) else {
             return;
         };
         // Stopped explicitly because other holders of the entity would otherwise keep its agent alive.
         let connector = self.connector.clone();
         self.threads.remove(index).update(cx, |thread, cx| thread.stop(connector, cx));
-        self.unread.remove(&id);
-        if self.selected == Some(id) {
+        self.unread.remove(&thread.entity_id());
+        if self.selected.as_ref() == Some(thread) {
             self.selected = None;
         }
         cx.notify();
     }
 
     fn open(&mut self, target: SessionTarget, mode: ConnectMode, cx: &mut Context<Self>) -> Entity<Thread> {
-        let id = ThreadId::new(self.next_id);
-        self.next_id += 1;
+        let number = self.opened;
+        self.opened += 1;
         let connector = self.connector.clone();
-        let thread = cx.new(|cx| Thread::connect(id, target, mode, connector, cx));
-        cx.subscribe(&thread, move |this, _, event: &ThreadEvent, cx| this.on_thread_event(id, event, cx)).detach();
+        let thread = cx.new(|cx| Thread::connect(number, target, mode, connector, cx));
+        cx.subscribe(&thread, |this, thread, event: &ThreadEvent, cx| this.on_thread_event(thread, event, cx)).detach();
         self.threads.push(thread.clone());
-        self.selected = Some(id);
+        self.selected = Some(thread.clone());
         cx.notify();
         thread
     }
 
-    fn on_thread_event(&mut self, id: ThreadId, event: &ThreadEvent, cx: &mut Context<Self>) {
-        if self.is_watched(id) || self.thread(id, cx).is_none() {
+    fn on_thread_event(&mut self, thread: Entity<Thread>, event: &ThreadEvent, cx: &mut Context<Self>) {
+        if !self.threads.contains(&thread) {
             return;
         }
-        if *event == ThreadEvent::TurnFinished {
-            self.unread.insert(id);
-            cx.notify();
+        match event {
+            // Observers of the manager list its threads.
+            ThreadEvent::RowChanged => cx.notify(),
+            ThreadEvent::TurnFinished | ThreadEvent::NeedsInput => {
+                let watched = self.is_watched(&thread);
+                if !watched && *event == ThreadEvent::TurnFinished {
+                    self.unread.insert(thread.entity_id());
+                    cx.notify();
+                }
+                cx.emit(Attention { thread, event: event.clone(), watched });
+            }
+            _ => {}
         }
-        cx.emit(Attention { thread: id, event: event.clone() });
     }
 }
 

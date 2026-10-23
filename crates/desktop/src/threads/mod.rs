@@ -6,5 +6,5 @@ mod status;
 mod thread;
 
 pub use manager::{Attention, ThreadManager};
-pub use status::{ConnectionPhase, ThreadStatus};
-pub use thread::{PromptSearchEvent, ReviewEvent, Thread, ThreadEvent, ThreadId};
+pub use status::ThreadStatus;
+pub use thread::{Thread, ThreadEvent};

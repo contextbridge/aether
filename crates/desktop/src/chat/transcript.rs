@@ -1,41 +1,41 @@
 use super::code::SharedHighlighter;
-use super::diff::DiffCache;
-use super::markdown::{MarkdownRenderer, StreamedMarkdown};
+use super::markdown::code_actions;
 use super::notice::notice;
 use super::thinking::thinking_block;
 use super::tool_card::ToolRenderer;
 use crate::theme::DesktopTheme;
 use crate::threads::{Thread, ThreadStatus};
 use crate::ui::UiTheme;
-use crate::ui::tokens::{CONTENT_MAX_WIDTH, RADIUS_CONTAINER, rem};
-use crate::ui::{Button, ButtonVariant, EmptyState, IconName, ListScrollbar, NoticeTone};
+use crate::ui::tokens::{CONTENT_MAX_WIDTH, rem};
+use crate::ui::{Button, ButtonVariant, EmptyState, IconName, ListScrollbar, NoticeTone, SurfaceExt};
 use acp_utils::conversation::{
     Conversation, ConversationContent, ConversationId, ConversationItem, ConversationItemId, Revision,
 };
+use clankerdiff_gpui::DiffPreviewCache;
 use client_core::session_core::SessionCore;
 use gpui::{
-    AnyElement, Context, Entity, FollowMode, ListAlignment, ListState, Subscription, Window, div, list, prelude::*, px,
+    AnyElement, App, Context, Entity, FollowMode, ListAlignment, ListState, Subscription, Window, div, list,
+    prelude::*, px,
 };
+use gpui_base::{TextView, TextViewState};
 use std::collections::{HashMap, HashSet};
 
 /// A thread's conversation, one list row per item: prompts, the agent's replies as Markdown,
 /// its reasoning, its tool calls and the app's notices.
 ///
 /// It follows the latest item as the agent streams, until the user scrolls up. Then a
-/// "Jump to latest" pill, tagged `jump-to-latest`, scrolls back down and follows again.
+/// "Jump to latest" pill scrolls back down and follows again.
 pub(crate) struct Transcript {
     thread: Entity<Thread>,
     list: ListState,
     /// The conversation the list rows were last synced to, with each row's item revision then.
     synced: Option<ConversationId>,
     revisions: Vec<Revision>,
-    /// Each reply's Markdown, parsed as it streams in so that a new chunk reparses only the
-    /// blocks it touches.
-    markdown: HashMap<ConversationItemId, StreamedMarkdown>,
+    replies: HashMap<ConversationItemId, Reply>,
     /// The tool calls and reasoning the user unfolded.
     expanded: HashSet<ConversationItemId>,
     highlighter: SharedHighlighter,
-    patches: DiffCache,
+    patches: DiffPreviewCache,
     _thread_changed: Subscription,
 }
 
@@ -54,38 +54,65 @@ impl Transcript {
             list,
             synced: None,
             revisions: Vec::new(),
-            markdown: HashMap::new(),
+            replies: HashMap::new(),
             expanded: HashSet::new(),
             highlighter: SharedHighlighter::global(cx),
-            patches: DiffCache::default(),
+            patches: DiffPreviewCache::default(),
             _thread_changed: thread_changed,
         }
     }
 
-    /// Tells the list which rows were added, changed or replaced since it last rendered.
-    fn sync(&mut self, conversation: Option<&Conversation>) {
+    /// Tells the list which rows were added, changed or replaced since it last rendered, and
+    /// returns the text of the replies among them.
+    fn sync(&mut self, cx: &App) -> Vec<(usize, ConversationItemId, String)> {
+        let conversation = self.thread.read(cx).core().map(SessionCore::conversation);
         let id = conversation.map(Conversation::id);
-        let revisions: Vec<Revision> = conversation
-            .map(|conversation| conversation.items().iter().map(ConversationItem::revision).collect())
-            .unwrap_or_default();
-        if id != self.synced || revisions.len() < self.revisions.len() {
+        let items = conversation.map(Conversation::items).unwrap_or_default();
+        let revisions: Vec<Revision> = items.iter().map(ConversationItem::revision).collect();
+        let changed: Vec<usize> = if id != self.synced || revisions.len() < self.revisions.len() {
             self.list.reset(revisions.len());
-            self.markdown.clear();
+            self.replies.clear();
             self.patches.clear();
             self.expanded.clear();
+            (0..revisions.len()).collect()
         } else {
-            for (index, (old, new)) in self.revisions.iter().zip(&revisions).enumerate() {
-                if old != new {
-                    self.list.remeasure_items(index..index + 1);
-                }
+            let changed: Vec<usize> =
+                (0..revisions.len()).filter(|&index| self.revisions.get(index) != Some(&revisions[index])).collect();
+            for &index in changed.iter().take_while(|&&index| index < self.revisions.len()) {
+                self.list.remeasure_items(index..index + 1);
             }
             self.list.splice(self.revisions.len()..self.revisions.len(), revisions.len() - self.revisions.len());
-        }
+            changed
+        };
         self.synced = id;
         self.revisions = revisions;
+        changed
+            .into_iter()
+            .filter_map(|index| {
+                let item = &items[index];
+                matches!(item.content(), ConversationContent::Assistant(_))
+                    .then(|| (index, item.id(), item.text().unwrap_or_default().into_owned()))
+            })
+            .collect()
     }
 
-    /// Folds or unfolds the item at `index`.
+    /// Hands a reply's latest text to its Markdown view, which parses it in the background. The
+    /// row is remeasured whenever a parse lands, since that is when its height changes.
+    fn update_reply(&mut self, index: usize, id: ConversationItemId, text: String, cx: &mut Context<Self>) {
+        if let Some(reply) = self.replies.get_mut(&id) {
+            match text.strip_prefix(reply.text.as_str()) {
+                Some("") => {}
+                Some(appended) => reply.view.update(cx, |view, cx| view.push_str(appended, cx)),
+                None => reply.view.update(cx, |view, cx| view.set_text(&text, cx)),
+            }
+            reply.text = text;
+            return;
+        }
+        let view = cx.new(|cx| TextViewState::markdown(&text, cx));
+        let parsed = cx.observe(&view, move |this, _, _| this.list.remeasure_items(index..index + 1));
+        self.replies.insert(id, Reply { view, text, _parsed: parsed });
+    }
+
     fn toggle(&mut self, id: ConversationItemId, index: usize, cx: &mut Context<Self>) {
         if !self.expanded.remove(&id) {
             self.expanded.insert(id);
@@ -116,24 +143,15 @@ impl Transcript {
             ConversationContent::User(_) => div()
                 .px_3()
                 .py_2()
-                .rounded(rem(RADIUS_CONTAINER))
-                .border_1()
-                .border_color(theme.colors.border)
-                .bg(theme.colors.surface)
+                .surface(theme)
                 .child(item.text().unwrap_or_default().into_owned())
                 .into_any_element(),
-            ConversationContent::Assistant(_) => {
-                let markdown = self.markdown.entry(id).or_default();
-                markdown.sync(&item.text().unwrap_or_default(), !item.is_open());
-                self.highlighter.with(|highlighter| {
-                    markdown.render(MarkdownRenderer::new(
-                        index.to_string(),
-                        desktop_theme.review(),
-                        &theme,
-                        highlighter,
-                    ))
-                })
-            }
+            ConversationContent::Assistant(_) => match self.replies.get(&id) {
+                Some(reply) => TextView::new(&reply.view)
+                    .code_block_actions(move |block, _, _| code_actions(index, block, &theme))
+                    .into_any_element(),
+                None => div().into_any_element(),
+            },
             ConversationContent::Thought(_) => {
                 let text = item.text().unwrap_or_default().into_owned();
                 thinking_block(text, item.is_open(), index, expanded, &theme, toggle)
@@ -156,11 +174,13 @@ impl Transcript {
 
 impl Render for Transcript {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        for (index, id, text) in self.sync(cx) {
+            self.update_reply(index, id, text, cx);
+        }
         let theme = DesktopTheme::global(cx).ui();
         let thread = self.thread.clone();
         let thread = thread.read(cx);
         let conversation = thread.core().map(SessionCore::conversation);
-        self.sync(conversation);
         let transcript = div().debug_selector(|| "transcript".to_owned()).relative().size_full();
         if conversation.is_none_or(|conversation| conversation.items().is_empty()) {
             return transcript.child(empty_state(&thread.status(), &theme));
@@ -183,6 +203,13 @@ impl Render for Transcript {
 
 /// Rows measured beyond the viewport, so scrolling does not reveal unmeasured rows.
 const OVERDRAW: f32 = 400.0;
+
+/// A reply's Markdown view and the text it was last handed.
+struct Reply {
+    view: Entity<TextViewState>,
+    text: String,
+    _parsed: Subscription,
+}
 
 fn empty_state(status: &ThreadStatus, theme: &UiTheme) -> EmptyState {
     match status {

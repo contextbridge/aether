@@ -112,7 +112,7 @@ fn a_project_with_only_the_builtin_agent_starts_a_thread_with_it_at_once(cx: &mu
 
     harness.click(cx, "project-alpha-new-thread").unwrap();
 
-    assert_eq!(agent_of(&selected(&harness, cx), cx), "aether");
+    assert_eq!(agent_of(&harness.selected_thread(cx).unwrap(), cx), "aether");
 }
 
 #[gpui::test]
@@ -123,7 +123,7 @@ fn a_project_with_several_agents_starts_a_thread_with_the_one_chosen_from_its_me
     harness.click(cx, "project-alpha-new-thread").unwrap();
     harness.click(cx, "new-thread-agent-claude").unwrap();
 
-    let thread = selected(&harness, cx);
+    let thread = harness.selected_thread(cx).unwrap();
     harness.run_until(cx, |cx| thread.read(cx).status() == ThreadStatus::Idle);
     assert_eq!(agent_of(&thread, cx), "claude");
 }
@@ -136,12 +136,12 @@ fn the_new_thread_shortcut_starts_the_agent_last_chosen_in_the_project(cx: &mut 
     let harness = project.harness(connector, cx);
     harness.click(cx, "project-alpha-new-thread").unwrap();
     harness.click(cx, "new-thread-agent-claude").unwrap();
-    let first = selected(&harness, cx);
+    let first = harness.selected_thread(cx).unwrap();
     harness.run_until(cx, |cx| first.read(cx).status() == ThreadStatus::Idle);
 
     harness.simulate_keystrokes(cx, "secondary-n");
 
-    let second = selected(&harness, cx);
+    let second = harness.selected_thread(cx).unwrap();
     assert_ne!(first.entity_id(), second.entity_id());
     assert_eq!(agent_of(&second, cx), "claude");
 }
@@ -169,17 +169,16 @@ fn a_launched_instance_is_reused_on_reconnect_and_terminated_when_its_thread_sto
     let harness = project.harness(connector.clone(), cx);
     harness.click(cx, "project-alpha-new-thread").unwrap();
     harness.click(cx, "new-thread-agent-vm").unwrap();
-    let thread = selected(&harness, cx);
+    let thread = harness.selected_thread(cx).unwrap();
     harness.run_until(cx, |cx| thread.read(cx).status() == ThreadStatus::Idle);
     let launched = connector.instances();
 
     connector.kill_agents(&project.root);
     harness.run_until(cx, |cx| thread.read(cx).status().can_reconnect());
-    let id = thread.read_with(cx, |thread, _| thread.id());
-    harness.threads(cx).update(cx, |threads, cx| threads.reconnect(id, cx));
+    harness.threads(cx).update(cx, |threads, cx| threads.reconnect(&thread, cx));
     harness.run_until(cx, |cx| thread.read(cx).status() == ThreadStatus::Idle);
     let reconnected = connector.instances();
-    harness.threads(cx).update(cx, |threads, cx| threads.stop(id, cx));
+    harness.threads(cx).update(cx, |threads, cx| threads.stop(&thread, cx));
     harness.run_until(cx, |_| connector.instances().is_empty());
 
     assert_eq!(launched, [InstanceId::new("instance-0")]);
@@ -213,10 +212,6 @@ fn agents(user_file: Option<PathBuf>) -> Agents {
 
 fn names(catalog: &AgentCatalog) -> Vec<String> {
     catalog.agents().iter().map(|agent| agent.name.clone()).collect()
-}
-
-fn selected(harness: &DesktopHarness, cx: &TestAppContext) -> Entity<Thread> {
-    harness.selected_thread(cx).expect("a thread is selected")
 }
 
 fn agent_of(thread: &Entity<Thread>, cx: &TestAppContext) -> String {

@@ -1,8 +1,6 @@
 use crate::ui::UiTheme;
 use clankerdiff_theme::ReviewTheme;
 use gpui::{App, Global, SharedString, WindowAppearance};
-use gpui_base::input::InputEditorStyle;
-use serde::{Deserialize, Serialize};
 
 /// The app-wide theme, installed as a gpui [`Global`].
 ///
@@ -28,10 +26,6 @@ impl DesktopTheme {
         Self { pair, ui: UiTheme::new(&review), review }
     }
 
-    /// Returns the installed theme.
-    ///
-    /// # Panics
-    ///
     /// Panics if no window has installed a theme yet.
     pub fn global(cx: &App) -> &Self {
         cx.global::<Self>()
@@ -49,25 +43,10 @@ impl DesktopTheme {
         self.ui
     }
 
-    /// How text inputs paint in this theme.
-    pub(crate) fn editor_style(&self) -> InputEditorStyle {
-        let colors = self.ui.colors;
-        let mut selection = colors.accent;
-        selection.a = 0.3;
-        InputEditorStyle {
-            foreground: colors.text,
-            muted_foreground: colors.text_muted,
-            background: colors.surface,
-            border: colors.border,
-            selection,
-            caret: colors.text,
-            ..InputEditorStyle::default()
-        }
-    }
-
-    /// Installs the theme in `pair` that matches `appearance`.
     pub(crate) fn install(pair: ThemePair, appearance: WindowAppearance, cx: &mut App) {
-        cx.set_global(Self::new(pair, appearance));
+        let theme = Self::new(pair, appearance);
+        crate::chat::install_markdown(&theme.review, &theme.ui, cx);
+        cx.set_global(theme);
     }
 }
 
@@ -77,7 +56,7 @@ impl Global for DesktopTheme {}
 /// system appearance changes.
 ///
 /// Values are clankerdiff built-in theme ids, as listed by [`ReviewTheme::catalog`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThemePair {
     pub light: SharedString,
     pub dark: SharedString,
@@ -87,7 +66,6 @@ impl ThemePair {
     pub const DEFAULT: Self =
         Self { light: SharedString::new_static("github-light"), dark: SharedString::new_static("github-dark") };
 
-    /// Returns the id of the theme in this pair that matches `appearance`.
     pub fn theme_id(&self, appearance: WindowAppearance) -> &str {
         match appearance {
             WindowAppearance::Light | WindowAppearance::VibrantLight => &self.light,

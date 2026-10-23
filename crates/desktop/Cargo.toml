@@ -53,13 +53,13 @@ client_core = { package = "aether-client-core", path = "../client-core", version
 clankerdiff-client = { workspace = true }
 clankerdiff-core = { workspace = true }
 clankerdiff-gpui = { workspace = true }
+clankerdiff-gpui-shell = { workspace = true }
 clankerdiff-markdown = { workspace = true }
 clankerdiff-syntax = { workspace = true }
 clankerdiff-theme = { workspace = true }
 gpui = { workspace = true }
 gpui-base = { workspace = true }
 gpui_platform = { workspace = true }
-nucleo = { workspace = true }
 clap = { workspace = true }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 serde = { workspace = true }
@@ -75,8 +75,3 @@ utils = { package = "aether-utils", path = "../utils", version = "0.3.0" }
 [dev-dependencies]
 client_core = { package = "aether-client-core", path = "../client-core", features = ["testing"], version = "0.1.0" }
 tempfile = { workspace = true }
-
-[target.'cfg(target_os = "macos")'.dependencies]
-objc2 = "0.6"
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSEvent", "NSGraphicsContext", "NSResponder", "objc2-core-foundation"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSGeometry", "objc2-core-foundation"] }

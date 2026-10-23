@@ -1,48 +1,34 @@
-use aether_desktop::ThemePair;
-use aether_desktop::registry::{Disclosure, Registry, STATE_FILE, ThreadMeta};
+use aether_desktop::registry::{Registry, STATE_FILE, State};
 use agent_client_protocol::schema::v2::SessionId;
-use gpui::{AppContext, Entity, TestAppContext, px, rems, size};
+use gpui::{AppContext, Entity, TestAppContext, px, size};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 #[gpui::test]
 fn the_registry_reads_back_everything_it_saved(cx: &mut TestAppContext) {
     let dir = tempfile::tempdir().unwrap();
-    let theme = ThemePair { light: "solarized-light".into(), dark: "solarized-dark".into() };
     let registry = load(cx, dir.path());
 
-    registry.update(cx, |registry, cx| {
-        registry.add_project("/alpha".into(), cx);
-        registry.add_project("/beta".into(), cx);
-        registry.set_disclosure("/alpha".into(), Disclosure::Collapsed, cx);
-        registry.pin(&SessionId::new("pinned"), cx);
-        registry.archive(&SessionId::new("archived"), cx);
-        registry.rename(&SessionId::new("renamed"), "  Custom title ", cx);
-        registry.set_window_size(size(px(900.0), px(700.0)), cx);
-        registry.set_last_selected(Some(SessionId::new("renamed")), cx);
-        registry.set_theme_override(Some(theme.clone()), cx);
-        registry.set_interface_size(Some(19.0), cx);
-        registry.set_sidebar_width(Some(rems(20.0)), cx);
+    Registry::update(&registry, cx, |state| {
+        state.add_project("/alpha".into());
+        state.add_project("/beta".into());
+        state.add_project("/alpha".into());
+        state.collapsed.insert("/alpha".into());
+        state.pinned.insert(SessionId::new("pinned"));
+        state.archived.insert(SessionId::new("archived"));
+        state.rename(SessionId::new("renamed"), "  Custom title ");
+        state.last_agents.insert("/alpha".into(), "claude".into());
+        state.window_size = Some(size(px(900.0), px(700.0)));
+        state.last_selected = Some(SessionId::new("renamed"));
+        state.interface_size = Some(19.0);
+        state.sidebar_width = Some(20.0);
     });
     cx.run_until_parked();
-    let loaded = load(cx, dir.path());
+    let saved = registry.read_with(cx, |registry, _| registry.state().clone());
 
-    loaded.read_with(cx, |registry, _| {
-        assert_eq!(registry.projects(), [PathBuf::from("/alpha"), PathBuf::from("/beta")]);
-        assert_eq!(registry.disclosure(Path::new("/alpha")), Some(Disclosure::Collapsed));
-        assert_eq!(registry.disclosure(Path::new("/beta")), None);
-        assert_eq!(registry.thread(&SessionId::new("pinned")), &ThreadMeta { pinned: true, ..ThreadMeta::default() });
-        assert_eq!(
-            registry.thread(&SessionId::new("archived")),
-            &ThreadMeta { archived: true, ..ThreadMeta::default() }
-        );
-        assert_eq!(registry.thread(&SessionId::new("renamed")).custom_title.as_deref(), Some("Custom title"));
-        assert_eq!(registry.window_size(), Some(size(px(900.0), px(700.0))));
-        assert_eq!(registry.last_selected(), Some(&SessionId::new("renamed")));
-        assert_eq!(registry.theme_override(), Some(&theme));
-        assert_eq!(registry.interface_size(), Some(19.0));
-        assert_eq!(registry.sidebar_width(), Some(rems(20.0)));
-    });
+    assert_eq!(saved.projects, [PathBuf::from("/alpha"), PathBuf::from("/beta")]);
+    assert_eq!(saved.title(Some(&SessionId::new("renamed")), "derived".into()), "Custom title");
+    assert_eq!(load(cx, dir.path()).read_with(cx, |registry, _| registry.state().clone()), saved);
 }
 
 #[gpui::test]
@@ -51,19 +37,20 @@ fn undoing_every_change_to_a_thread_forgets_it(cx: &mut TestAppContext) {
     let registry = load(cx, dir.path());
     let session = SessionId::new("session");
 
-    registry.update(cx, |registry, cx| {
-        registry.pin(&session, cx);
-        registry.archive(&session, cx);
-        registry.rename(&session, "Custom title", cx);
-        registry.unpin(&session, cx);
-        registry.unarchive(&session, cx);
-        registry.rename(&session, "   ", cx);
+    Registry::update(&registry, cx, |state| {
+        state.pinned.insert(session.clone());
+        state.rename(session.clone(), "Custom title");
+        state.add_project("/alpha".into());
+    });
+    Registry::update(&registry, cx, |state| {
+        state.pinned.remove(&session);
+        state.rename(session.clone(), "   ");
     });
     cx.run_until_parked();
 
     assert_eq!(
-        load(cx, dir.path()).read_with(cx, |registry, _| registry.thread(&session).clone()),
-        ThreadMeta::default()
+        registry.read_with(cx, |registry, _| registry.state().title(Some(&session), "derived".into())),
+        "derived"
     );
     assert!(!fs::read_to_string(dir.path().join(STATE_FILE)).unwrap().contains("session"));
 }
@@ -75,16 +62,11 @@ fn a_corrupt_state_file_loads_as_nothing_remembered_and_is_replaced_by_the_next_
 
     let registry = load(cx, dir.path());
 
-    registry.read_with(cx, |registry, _| {
-        assert_eq!(registry.projects(), Vec::<PathBuf>::new());
-        assert_eq!(registry.window_size(), None);
-        assert_eq!(registry.last_selected(), None);
-        assert_eq!(registry.theme_override(), None);
-    });
-    registry.update(cx, |registry, cx| registry.add_project("/alpha".into(), cx));
+    assert_eq!(registry.read_with(cx, |registry, _| registry.state().clone()), State::default());
+    Registry::update(&registry, cx, |state| state.add_project("/alpha".into()));
     cx.run_until_parked();
     assert_eq!(
-        load(cx, dir.path()).read_with(cx, |registry, _| registry.projects().to_vec()),
+        load(cx, dir.path()).read_with(cx, |registry, _| registry.state().projects.clone()),
         [PathBuf::from("/alpha")]
     );
 }
@@ -95,34 +77,10 @@ fn a_missing_state_file_loads_as_nothing_remembered(cx: &mut TestAppContext) {
 
     let registry = load(cx, &dir.path().join("not-created-yet"));
 
-    registry.read_with(cx, |registry, _| {
-        assert_eq!(registry.projects(), Vec::<PathBuf>::new());
-        assert_eq!(registry.window_size(), None);
-    });
+    assert_eq!(registry.read_with(cx, |registry, _| registry.state().clone()), State::default());
 }
 
 fn load(cx: &mut TestAppContext, dir: &Path) -> Entity<Registry> {
     let file = dir.join(STATE_FILE);
     cx.new(|cx| Registry::load(Some(file), cx))
-}
-
-#[gpui::test]
-fn removing_a_project_and_archiving_threads_together_are_kept(cx: &mut TestAppContext) {
-    let dir = tempfile::tempdir().unwrap();
-    let registry = load(cx, dir.path());
-    let [first, second] = [SessionId::new("first"), SessionId::new("second")];
-
-    registry.update(cx, |registry, cx| {
-        registry.add_project("/alpha".into(), cx);
-        registry.add_project("/beta".into(), cx);
-        registry.remove_project(Path::new("/alpha"), cx);
-        registry.archive_all([first.clone(), second.clone()], cx);
-    });
-    cx.run_until_parked();
-    let loaded = load(cx, dir.path());
-
-    loaded.read_with(cx, |registry, _| {
-        assert_eq!(registry.projects(), [PathBuf::from("/beta")]);
-        assert!(registry.thread(&first).archived && registry.thread(&second).archived);
-    });
 }

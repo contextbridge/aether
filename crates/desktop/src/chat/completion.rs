@@ -1,17 +1,13 @@
 use super::composer::Composer;
-use crate::fuzzy;
-use crate::ui::UiTheme;
-use crate::ui::tokens::{RADIUS_CONTAINER, rem};
-use crate::ui::{ListRow, Typography, TypographyExt};
+use crate::ui::tokens::rem;
+use crate::ui::{PickerItem, PickerList, SurfaceExt, UiTheme, fuzzy_filter};
 use client_core::command_entry::CommandEntry;
 use client_core::composer::attachment::PromptAttachment;
-use gpui::{AnyElement, ClickEvent, Context, div, prelude::*};
+use gpui::{AnyElement, Context, div, prelude::*};
 use gpui_base::input::InlineTokenSpan;
 use std::ops::Range;
 
 /// The `/` commands or `@` files that complete what the user is typing, with one highlighted.
-///
-/// It is tagged `completion-menu`, and each entry `completion-item-<n>`.
 pub(crate) struct CompletionMenu {
     token: ActiveToken,
     items: Vec<CompletionItem>,
@@ -43,10 +39,9 @@ pub(crate) enum CompletionItem {
 }
 
 impl CompletionMenu {
-    /// Offers the `commands` whose names match the token.
     pub(crate) fn commands(token: ActiveToken, text: &str, commands: &[CommandEntry]) -> Self {
         let query = token.query(text);
-        let indices = fuzzy_or_all(query, commands.iter().map(|command| command.name.clone()));
+        let indices = best_matches(query, commands.iter().map(|command| &command.name));
         let items = indices.into_iter().map(|index| CompletionItem::Command(commands[index].clone())).collect();
         Self { token, items, loading: false, highlighted: 0 }
     }
@@ -56,7 +51,7 @@ impl CompletionMenu {
     pub(crate) fn files(token: ActiveToken, text: &str, files: Option<&[PromptAttachment]>) -> Self {
         let query = token.query(text);
         let items = files.map_or_else(Vec::new, |files| {
-            fuzzy_or_all(query, files.iter().map(|file| file.display_name.clone()))
+            best_matches(query, files.iter().map(|file| &file.display_name))
                 .into_iter()
                 .map(|index| CompletionItem::File(files[index].clone()))
                 .collect()
@@ -76,66 +71,39 @@ impl CompletionMenu {
         self.highlighted
     }
 
-    /// Moves the highlight `by` entries, stopping at either end of the list.
     pub(crate) fn step(&mut self, by: isize) {
         let last = self.items.len().saturating_sub(1);
         self.highlighted = self.highlighted.saturating_add_signed(by).min(last);
     }
 
     pub(crate) fn render(&self, theme: &UiTheme, cx: &mut Context<Composer>) -> AnyElement {
-        let mut menu = div()
-            .id("completion-menu")
+        let empty = match (self.token.trigger, self.loading) {
+            (Trigger::File, true) => "Indexing files…",
+            (Trigger::File, false) => "No matching files",
+            (Trigger::Command, _) => "No matching commands",
+        };
+        let items = self.items.iter().enumerate().map(|(position, item)| match item {
+            CompletionItem::Command(command) => {
+                PickerItem::new(format!("item-{position}"), format!("/{}", command.name))
+                    .detail(command.description.clone())
+            }
+            CompletionItem::File(file) => PickerItem::new(format!("item-{position}"), file.display_name.clone()),
+        });
+        div()
             .debug_selector(|| "completion-menu".to_owned())
-            .max_h(rem(MENU_HEIGHT))
-            .overflow_y_scroll()
-            .p_1()
-            .flex()
-            .flex_col()
-            .rounded(rem(RADIUS_CONTAINER))
-            .border_1()
-            .border_color(theme.colors.border)
-            .bg(theme.colors.surface)
-            .shadow_lg();
-        if self.items.is_empty() {
-            let message = match (self.token.trigger, self.loading) {
-                (Trigger::File, true) => "Indexing files…",
-                (Trigger::File, false) => "No matching files",
-                (Trigger::Command, _) => "No matching commands",
-            };
-            return menu
-                .child(
-                    div()
-                        .px_2()
-                        .py_1()
-                        .typography(Typography::Small)
-                        .text_color(theme.colors.text_muted)
-                        .child(message),
-                )
-                .into_any_element();
-        }
-        for (position, item) in self.items.iter().enumerate() {
-            let (label, detail) = match item {
-                CompletionItem::Command(command) => (format!("/{}", command.name), command.description.clone()),
-                CompletionItem::File(file) => (file.display_name.clone(), String::new()),
-            };
-            let row = ListRow::new(format!("completion-item-{position}"), *theme)
-                .selected(position == self.highlighted)
-                .on_click(cx.listener(move |composer, _: &ClickEvent, window, cx| {
-                    composer.accept_completion(position, window, cx);
-                }))
-                .child(div().flex_none().child(label))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .typography(Typography::Small)
-                        .text_color(theme.colors.text_muted)
-                        .child(detail),
-                );
-            menu = menu.child(row);
-        }
-        menu.into_any_element()
+            .surface(*theme)
+            .shadow_lg()
+            .child(
+                PickerList::new("completion", *theme)
+                    .items(items)
+                    .highlighted(Some(self.highlighted))
+                    .empty(empty)
+                    .max_height(rem(MENU_HEIGHT))
+                    .on_choose(cx.listener(|composer, position: &usize, window, cx| {
+                        composer.accept_completion(*position, window, cx);
+                    })),
+            )
+            .into_any_element()
     }
 }
 
@@ -168,8 +136,8 @@ impl ActiveToken {
 const MAX_ITEMS: usize = 50;
 const MENU_HEIGHT: f32 = 240.0;
 
-fn fuzzy_or_all(query: &str, keys: impl ExactSizeIterator<Item = String>) -> Vec<usize> {
-    let mut indices = if query.is_empty() { (0..keys.len()).collect() } else { fuzzy::filter(query, keys) };
+fn best_matches<T: AsRef<str>>(query: &str, keys: impl IntoIterator<Item = T>) -> Vec<usize> {
+    let mut indices = fuzzy_filter(query, keys);
     indices.truncate(MAX_ITEMS);
     indices
 }

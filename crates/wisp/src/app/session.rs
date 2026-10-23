@@ -4,22 +4,20 @@ use crate::command::{Command, HostCommand};
 use crate::settings::overlay::{ProviderLoginStatus, SettingsChange, SettingsOverlay};
 use crate::surfaces::input::UiOutput;
 use acp_utils::config_option_id::THEME_CONFIG_ID;
+use acp_utils::notifications::AetherCapabilities;
 use client_core::command_entry::CommandEntry;
+use client_core::session_core::SessionCore;
 
 impl App {
     pub(super) fn dispatch_builtin_command(&mut self, cmd: &CommandEntry) {
         self.composer.clear();
-        let effects = match cmd.name.as_str() {
-            "clear" => self.core.new_session(),
-            "resume" => self.core.list_sessions(),
-            "settings" => {
-                self.open_settings();
-                return;
-            }
-            "move" => self.core.begin_workspace_move(),
-            _ => return,
-        };
-        self.apply_effects(effects);
+        match cmd.name.as_str() {
+            "clear" => self.update_core(SessionCore::new_session),
+            "resume" => self.update_core(SessionCore::list_sessions),
+            "settings" => self.open_settings(),
+            "move" => self.update_core(SessionCore::begin_workspace_move),
+            _ => {}
+        }
     }
 
     fn open_settings(&mut self) {
@@ -45,42 +43,27 @@ impl App {
                 if change.config_id == THEME_CONFIG_ID {
                     self.apply_theme_change(&change.new_value);
                 } else {
-                    let effects = self.core.set_config_option(&change.config_id, &change.new_value);
-                    self.apply_effects(effects);
+                    self.update_core(|core| core.set_config_option(&change.config_id, &change.new_value));
                 }
             }
-            UiOutput::AuthenticateServer(server_name) => {
-                let effects = self.core.authenticate_mcp_server(server_name);
-                self.apply_effects(effects);
-            }
+            UiOutput::AuthenticateServer(server_name) => self.update_core(|core| core.authenticate_mcp_server(server_name)),
             UiOutput::AuthenticateProvider(method_id) => {
                 if let Some(Overlay::Settings(overlay)) = self.overlay.as_mut() {
                     overlay.set_provider_status(&method_id, ProviderLoginStatus::Authenticating);
                 }
-                let effects = self.core.authenticate(method_id);
-                self.apply_effects(effects);
+                self.update_core(|core| core.authenticate(method_id));
             }
-            UiOutput::ResumeSession { session_id, cwd } => {
-                let effects = self.core.resume_session(&session_id, &cwd);
-                self.apply_effects(effects);
-            }
-            UiOutput::PreviewSession(session_id) => {
-                let effects = self.core.preview_session(session_id);
-                self.apply_effects(effects);
-            }
+            UiOutput::ResumeSession { session_id, cwd } => self.update_core(|core| core.resume_session(&session_id, &cwd)),
+            UiOutput::PreviewSession(session_id) => self.update_core(|core| core.preview_session(session_id)),
             UiOutput::MoveWorkspace(target) => {
                 self.close_overlay();
-                let effects = self.core.move_workspace(target);
-                self.apply_effects(effects);
+                self.update_core(|core| core.move_workspace(target));
             }
             UiOutput::ArtifactReviewed(summary) => {
                 self.notify(&summary);
                 self.close_active();
             }
-            UiOutput::SubmitReview(prompt) => {
-                let effects = self.core.submit_review(&prompt);
-                self.apply_effects(effects);
-            }
+            UiOutput::SubmitReview(prompt) => self.update_core(|core| core.submit_review(&prompt)),
             UiOutput::GitReview(command) => self.queue(Command::GitReview(command)),
         }
     }
@@ -92,8 +75,7 @@ impl App {
 
     pub(super) fn open_route(&mut self, route: Route) {
         if let Route::GitReview(_) = &self.route {
-            let effects = self.core.close_git_review();
-            self.apply_effects(effects);
+            self.update_core(SessionCore::close_git_review);
         }
         if matches!(route, Route::GitReview(_) | Route::ArtifactReview(_)) {
             self.queue(Command::Host(HostCommand::ListReviewThemes));
@@ -133,4 +115,21 @@ impl App {
     pub(super) fn notify(&mut self, message: &str) {
         self.core.notify(message);
     }
+}
+
+/// The commands Wisp runs itself, given what the agent supports.
+pub(super) fn builtin_commands(capabilities: &AetherCapabilities) -> Vec<CommandEntry> {
+    let mut commands = vec![
+        builtin("clear", "Start a new session"),
+        builtin("resume", "Resume a previous session"),
+        builtin("settings", "Configure agent options"),
+    ];
+    if capabilities.workspace_move {
+        commands.push(builtin("move", "Move session to another workspace"));
+    }
+    commands
+}
+
+fn builtin(name: &str, description: &str) -> CommandEntry {
+    CommandEntry { name: name.to_string(), description: description.to_string(), has_input: false, hint: None, builtin: true }
 }

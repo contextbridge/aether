@@ -1,137 +1,78 @@
-use crate::support::{save_session, wait_for_history};
+use crate::support::choose;
+use crate::thread_menu::row_order;
 use acp_utils::testing::FakeAgent;
-use aether_desktop::ThemePair;
 use aether_desktop::registry::{Registry, STATE_FILE};
-use aether_desktop::sidebar::DEFAULT_SIDEBAR_WIDTH;
-use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder, FakeConnector};
+use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder};
 use aether_desktop::threads::ThreadStatus;
-use aether_sessions::testing::TestStore;
+use aether_desktop::ui::interface_size::DEFAULT_INTERFACE_SIZE;
 use agent_client_protocol::schema::v2::SessionId;
-use clankerdiff_theme::ThemeId;
-use gpui::{AppContext, TestAppContext, px, size};
+use gpui::{AppContext, TestAppContext, point, px};
 use std::path::{Path, PathBuf};
 
 #[gpui::test]
-fn an_added_project_is_listed_on_the_next_launch(first: &mut TestAppContext, second: &mut TestAppContext) {
+fn the_next_launch_restores_what_the_user_changed(first: &mut TestAppContext, second: &mut TestAppContext) {
     let state = tempfile::tempdir().unwrap();
-    let harness = DesktopHarnessBuilder::default().state_dir(state.path()).build(first);
+    let harness = launch(first, state.path());
     harness.click(first, "add-project").unwrap();
     harness.click(first, "add-project-browse").unwrap();
     first.simulate_path_prompt_response(|_| Some(vec![PathBuf::from("/picked")]));
-    first.run_until_parked();
-
-    let relaunched = DesktopHarnessBuilder::default().state_dir(state.path()).build(second);
-
-    assert!(relaunched.bounds(second, "project-picked").is_some());
-}
-
-#[gpui::test]
-fn a_projects_disclosure_is_kept_across_launches(first: &mut TestAppContext, second: &mut TestAppContext) {
-    let state = tempfile::tempdir().unwrap();
-    let harness = launch(first, state.path(), saved_in_alpha(), FakeConnector::default());
-    assert!(harness.bounds(first, "history-row-saved").is_some(), "a project starts expanded");
-    harness.click(first, "project-alpha-toggle").unwrap();
-    first.run_until_parked();
-
-    let relaunched = launch(second, state.path(), saved_in_alpha(), FakeConnector::default());
-
-    assert!(relaunched.bounds(second, "history-row-saved").is_none());
-}
-
-#[gpui::test]
-fn the_last_selected_session_is_resumed_and_selected_on_launch(
-    first: &mut TestAppContext,
-    second: &mut TestAppContext,
-) {
-    let state = tempfile::tempdir().unwrap();
-    let harness = launch(first, state.path(), saved_in_alpha(), resuming("saved", "an earlier answer"));
-    let thread = harness
-        .threads(first)
-        .update(first, |threads, cx| threads.resume(SessionId::new("saved"), "/alpha".into(), cx));
-    harness.run_until(first, |cx| thread.read(cx).status() == ThreadStatus::Idle);
-
-    let connector = resuming("saved", "an earlier answer");
-    let relaunched = launch(second, state.path(), saved_in_alpha(), connector.clone());
-    let threads = relaunched.threads(second);
-    relaunched.run_until(second, |cx| {
-        let threads = threads.read(cx);
-        threads
-            .selected()
-            .and_then(|id| threads.thread(id, cx))
-            .is_some_and(|thread| thread.read(cx).status() == ThreadStatus::Idle)
-    });
-
-    let thread = relaunched.selected_thread(second).expect("the session is selected again");
-    assert_eq!(thread.read_with(second, |thread, _| thread.session_id().cloned()), Some(SessionId::new("saved")));
-    assert_eq!(connector.live_agents("/alpha"), 1);
-    assert!(relaunched.bounds(second, "thread-row-0").is_some(), "its project expands to show it");
-}
-
-#[gpui::test]
-fn a_last_selected_session_missing_from_history_is_not_resumed(
-    first: &mut TestAppContext,
-    second: &mut TestAppContext,
-) {
-    let state = tempfile::tempdir().unwrap();
-    let registry = first.new(|cx| Registry::load(Some(state.path().join(STATE_FILE)), cx));
-    registry.update(first, |registry, cx| registry.set_last_selected(Some(SessionId::new("deleted")), cx));
-    first.run_until_parked();
-
-    let relaunched = launch(second, state.path(), saved_in_alpha(), FakeConnector::default());
-    wait_for_history(&relaunched, second);
-
-    assert!(relaunched.selected_thread(second).is_none());
-}
-
-#[gpui::test]
-fn the_window_opens_at_the_size_it_last_had(first: &mut TestAppContext, second: &mut TestAppContext) {
-    let state = tempfile::tempdir().unwrap();
-    let harness = DesktopHarnessBuilder::default().state_dir(state.path()).build(first);
+    harness.click(first, "project-beta").unwrap();
+    choose(&harness, first, "history-row-pinned", "menu-pin");
+    choose(&harness, first, "history-row-gone", "menu-archive");
+    choose(&harness, first, "history-row-renamed", "menu-rename");
+    harness.simulate_input(first, "Renamed");
+    harness.simulate_keystrokes(first, "enter");
+    harness.click(first, "history-row-saved").unwrap();
+    let resumed = harness.selected_thread(first).expect("the resumed session is selected");
+    harness.run_until(first, |cx| resumed.read(cx).status() == ThreadStatus::Idle);
+    harness.simulate_keystrokes(first, "secondary-= secondary-=");
+    harness.drag(first, "sidebar-resize-handle", point(px(400.0), px(300.0))).unwrap();
     harness.resize(first, 900.0, 700.0);
     first.run_until_parked();
 
-    let relaunched = DesktopHarnessBuilder::default().state_dir(state.path()).build(second);
+    let relaunched = launch(second, state.path());
+    let threads = relaunched.threads(second);
+    relaunched.run_until(second, |cx| {
+        threads.read(cx).selected().is_some_and(|thread| thread.read(cx).status() == ThreadStatus::Idle)
+    });
 
-    let main = relaunched.bounds(second, "main").expect("main region is painted");
-    let sidebar_width = DEFAULT_SIDEBAR_WIDTH.to_pixels(relaunched.rem_size(second));
-    assert_eq!(main.size, size(px(900.0) - sidebar_width, px(700.0)));
+    let thread = relaunched.selected_thread(second).expect("the last selected session is selected again");
+    assert_eq!(thread.read_with(second, |thread, _| thread.session_id().cloned()), Some(SessionId::new("saved")));
+    assert!(relaunched.bounds(second, "project-picked").is_some(), "an added project is listed");
+    assert!(relaunched.bounds(second, "history-row-hidden").is_none(), "a collapsed project stays collapsed");
+    assert_eq!(row_order(&relaunched, second, &["history-row-pinned", "thread-row-0"]), [0, 1], "pins are kept");
+    assert!(relaunched.bounds(second, "history-row-gone").is_none(), "archived rows stay archived");
+    assert_eq!(relaunched.row_title(second, "history-row-renamed").as_deref(), Some("Renamed"));
+    assert_eq!(relaunched.rem_size(second), px(DEFAULT_INTERFACE_SIZE + 2.0));
+    let sidebar = relaunched.bounds(second, "sidebar").expect("the sidebar is painted");
+    let main = relaunched.bounds(second, "main").expect("the main region is painted");
+    assert!((sidebar.size.width - px(400.0)).abs() < px(0.5), "the sidebar keeps its width: {sidebar:?}");
+    assert_eq!((sidebar.size.width + main.size.width, main.size.height), (px(900.0), px(700.0)));
 }
 
 #[gpui::test]
-fn the_saved_theme_override_is_installed_on_launch(first: &mut TestAppContext, second: &mut TestAppContext) {
+fn a_last_selected_session_missing_from_history_is_not_resumed(cx: &mut TestAppContext) {
     let state = tempfile::tempdir().unwrap();
-    let registry = first.new(|cx| Registry::load(Some(state.path().join(STATE_FILE)), cx));
-    let theme = ThemePair { light: "solarized-light".into(), dark: "solarized-dark".into() };
-    registry.update(first, |registry, cx| registry.set_theme_override(Some(theme), cx));
-    first.run_until_parked();
+    let registry = cx.new(|cx| Registry::load(Some(state.path().join(STATE_FILE)), cx));
+    Registry::update(&registry, cx, |state| state.last_selected = Some(SessionId::new("deleted")));
+    cx.run_until_parked();
 
-    let relaunched = DesktopHarnessBuilder::default().state_dir(state.path()).build(second);
+    let relaunched = launch(cx, state.path());
 
-    // gpui's test windows report a light appearance.
-    assert_eq!(relaunched.theme(second).review().id(), &ThemeId::Builtin("solarized-light".to_owned()));
+    assert!(relaunched.selected_thread(cx).is_none());
 }
 
-/// One saved session, `saved`, that ran in `/alpha`.
-fn saved_in_alpha() -> TestStore {
-    let sessions = TestStore::new();
-    save_session(&sessions, "saved", "/alpha", "2026-01-01T00:00:00Z", Some("earlier prompt"));
-    sessions
-}
-
-/// A connector whose one agent in `/alpha` resumes `session_id`, replaying `answer`.
-fn resuming(session_id: &str, answer: &str) -> FakeConnector {
-    FakeConnector::default().agent("/alpha", FakeAgent::default().replay_message(session_id, answer))
-}
-
-/// Opens the app over the state kept in `state`, with `sessions` in history, and waits for
-/// history to be read.
-fn launch(cx: &mut TestAppContext, state: &Path, sessions: TestStore, connector: FakeConnector) -> DesktopHarness {
-    let harness = DesktopHarnessBuilder::default()
+/// Opens the app over the state kept in `state`, with saved sessions in `/alpha` and `/beta` and
+/// an agent in `/alpha` that resumes `saved`.
+fn launch(cx: &mut TestAppContext, state: &Path) -> DesktopHarness {
+    DesktopHarnessBuilder::default()
         .state_dir(state)
-        .history(sessions)
-        .connector(connector)
-        .project("/alpha")
-        .build(cx);
-    wait_for_history(&harness, cx);
-    harness
+        .agent("/alpha", FakeAgent::default().replay_message("saved", "an earlier answer"))
+        .project("/beta")
+        .session("saved", "/alpha", "2026-01-01T00:00:00Z", "saved prompt")
+        .session("pinned", "/alpha", "2026-01-02T00:00:00Z", "pinned prompt")
+        .session("gone", "/alpha", "2026-01-03T00:00:00Z", "gone prompt")
+        .session("renamed", "/alpha", "2026-01-04T00:00:00Z", "renamed prompt")
+        .session("hidden", "/beta", "2026-01-01T00:00:00Z", "beta prompt")
+        .build(cx)
 }

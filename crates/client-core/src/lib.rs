@@ -13,7 +13,6 @@ pub mod command_entry;
 pub mod composer;
 pub mod elicitation;
 pub mod error;
-pub mod plan_tracker;
 pub mod request;
 pub mod runtime;
 pub mod session;

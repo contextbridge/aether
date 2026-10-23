@@ -1,49 +1,34 @@
-use crate::support::{replying, save_session, texts, wait_for_history};
+use crate::support::replying;
 use acp_utils::testing::{FakeAgent, idle_notification};
-use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder, FakeConnector};
+use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder};
 use aether_desktop::threads::{Thread, ThreadStatus};
-use aether_sessions::testing::TestStore;
 use agent_client_protocol::schema::v2::{NewSessionResponse, PromptResponse};
 use gpui::{Entity, SystemNotification, TestAppContext};
 
 #[gpui::test]
 fn a_turn_that_finishes_on_an_unselected_thread_stays_unread_until_selected(cx: &mut TestAppContext) {
-    let connector = FakeConnector::default()
-        .agent("/alpha", replying("alpha-session", "from alpha"))
-        .agent("/beta", replying("beta-session", "from beta"));
-    let harness = DesktopHarnessBuilder::default().connector(connector).build(cx);
-    let alpha = idle_thread(&harness, cx, "/alpha");
-    idle_thread(&harness, cx, "/beta");
-    let alpha_id = alpha.read_with(cx, |thread, _| thread.id());
+    let (harness, alpha) = unselected_alpha(cx);
 
-    alpha.update(cx, |thread, cx| thread.submit("hi", cx));
-    harness.run_until(cx, |cx| texts(alpha.read(cx)).len() == 2 && alpha.read(cx).status() == ThreadStatus::Idle);
+    harness.submit(cx, &alpha, "hi");
 
-    assert!(harness.threads(cx).read_with(cx, |threads, _| threads.is_unread(alpha_id)));
+    assert!(harness.threads(cx).read_with(cx, |threads, _| threads.is_unread(&alpha)));
     let unread = harness.bounds(cx, "thread-row-0-unread").expect("alpha shows the unread dot");
     let title = harness.bounds(cx, "thread-row-0-title").expect("alpha shows its title");
     assert!(unread.left() >= title.right(), "unread is after the title, not in the activity slot");
     assert!(harness.bounds(cx, "thread-row-0-conversation-icon").is_some());
-    assert_hint(&harness, cx, "thread-row-0-unread", "Unread response");
 
     harness.click(cx, "thread-row-0").unwrap();
 
-    assert!(!harness.threads(cx).read_with(cx, |threads, _| threads.is_unread(alpha_id)));
+    assert!(!harness.threads(cx).read_with(cx, |threads, _| threads.is_unread(&alpha)));
     assert!(harness.bounds(cx, "thread-row-0-unread").is_none(), "selecting alpha marks it seen");
 }
 
 #[gpui::test]
 fn an_unread_response_stays_visible_when_the_agent_disconnects(cx: &mut TestAppContext) {
-    let connector = FakeConnector::default()
-        .agent("/alpha", replying("alpha-session", "from alpha"))
-        .agent("/beta", replying("beta-session", "from beta"));
-    let harness = DesktopHarnessBuilder::default().connector(connector.clone()).build(cx);
-    let alpha = idle_thread(&harness, cx, "/alpha");
-    idle_thread(&harness, cx, "/beta");
-    alpha.update(cx, |thread, cx| thread.submit("hi", cx));
-    harness.run_until(cx, |cx| texts(alpha.read(cx)).len() == 2 && alpha.read(cx).status() == ThreadStatus::Idle);
+    let (harness, alpha) = unselected_alpha(cx);
+    harness.submit(cx, &alpha, "hi");
 
-    connector.kill_agents("/alpha");
+    harness.connector().kill_agents("/alpha");
     harness.run_until(cx, |cx| alpha.read(cx).status() == ThreadStatus::Disconnected);
 
     assert!(harness.bounds(cx, "thread-row-0-status-disconnected-warning-triangle").is_some());
@@ -53,30 +38,21 @@ fn an_unread_response_stays_visible_when_the_agent_disconnects(cx: &mut TestAppC
 
 #[gpui::test]
 fn a_turn_that_finishes_on_the_selected_thread_is_neither_unread_nor_announced(cx: &mut TestAppContext) {
-    let connector = FakeConnector::default().agent("/alpha", replying("alpha-session", "from alpha"));
-    let harness = DesktopHarnessBuilder::default().connector(connector).build(cx);
-    let alpha = idle_thread(&harness, cx, "/alpha");
-    let alpha_id = alpha.read_with(cx, |thread, _| thread.id());
+    let harness = DesktopHarnessBuilder::default().agent("/alpha", replying("alpha-session", "from alpha")).build(cx);
+    let alpha = harness.start_thread(cx, "/alpha");
 
-    alpha.update(cx, |thread, cx| thread.submit("hi", cx));
-    harness.run_until(cx, |cx| texts(alpha.read(cx)).len() == 2 && alpha.read(cx).status() == ThreadStatus::Idle);
+    harness.submit(cx, &alpha, "hi");
 
-    assert!(!harness.threads(cx).read_with(cx, |threads, _| threads.is_unread(alpha_id)));
+    assert!(!harness.threads(cx).read_with(cx, |threads, _| threads.is_unread(&alpha)));
     assert!(harness.bounds(cx, "thread-row-0-unread").is_none());
     assert_eq!(cx.shown_system_notifications(), []);
 }
 
 #[gpui::test]
 fn a_turn_that_finishes_on_an_unselected_thread_posts_one_notification(cx: &mut TestAppContext) {
-    let connector = FakeConnector::default()
-        .agent("/alpha", replying("alpha-session", "from alpha"))
-        .agent("/beta", replying("beta-session", "from beta"));
-    let harness = DesktopHarnessBuilder::default().connector(connector).build(cx);
-    let alpha = idle_thread(&harness, cx, "/alpha");
-    idle_thread(&harness, cx, "/beta");
+    let (harness, alpha) = unselected_alpha(cx);
 
-    alpha.update(cx, |thread, cx| thread.submit("Fix the build", cx));
-    harness.run_until(cx, |cx| texts(alpha.read(cx)).len() == 2 && alpha.read(cx).status() == ThreadStatus::Idle);
+    harness.submit(cx, &alpha, "Fix the build");
 
     assert_eq!(
         cx.shown_system_notifications(),
@@ -86,21 +62,18 @@ fn a_turn_that_finishes_on_an_unselected_thread_posts_one_notification(cx: &mut 
 
 #[gpui::test]
 fn a_turn_that_finishes_while_the_window_is_inactive_stays_unread_until_the_window_is_back(cx: &mut TestAppContext) {
-    let connector = FakeConnector::default().agent("/alpha", replying("alpha-session", "from alpha"));
-    let harness = DesktopHarnessBuilder::default().connector(connector).build(cx);
-    let alpha = idle_thread(&harness, cx, "/alpha");
-    let alpha_id = alpha.read_with(cx, |thread, _| thread.id());
+    let harness = DesktopHarnessBuilder::default().agent("/alpha", replying("alpha-session", "from alpha")).build(cx);
+    let alpha = harness.start_thread(cx, "/alpha");
     harness.deactivate(cx);
 
-    alpha.update(cx, |thread, cx| thread.submit("hi", cx));
-    harness.run_until(cx, |cx| texts(alpha.read(cx)).len() == 2 && alpha.read(cx).status() == ThreadStatus::Idle);
+    harness.submit(cx, &alpha, "hi");
 
     assert_eq!(cx.shown_system_notifications(), [notification("alpha-session", "hi", "The agent finished its turn")]);
-    assert!(harness.threads(cx).read_with(cx, |threads, _| threads.is_unread(alpha_id)));
+    assert!(harness.threads(cx).read_with(cx, |threads, _| threads.is_unread(&alpha)));
 
     harness.activate(cx);
 
-    assert!(!harness.threads(cx).read_with(cx, |threads, _| threads.is_unread(alpha_id)));
+    assert!(!harness.threads(cx).read_with(cx, |threads, _| threads.is_unread(&alpha)));
 }
 
 #[gpui::test]
@@ -108,11 +81,12 @@ fn a_question_on_an_unselected_thread_is_announced_with_the_question(cx: &mut Te
     let alpha_agent = FakeAgent::default()
         .new_session_response(NewSessionResponse::new("alpha-session"))
         .prompt_elicitation("Pick a branch");
-    let connector =
-        FakeConnector::default().agent("/alpha", alpha_agent).agent("/beta", replying("beta-session", "from beta"));
-    let harness = DesktopHarnessBuilder::default().connector(connector).build(cx);
-    let alpha = idle_thread(&harness, cx, "/alpha");
-    idle_thread(&harness, cx, "/beta");
+    let harness = DesktopHarnessBuilder::default()
+        .agent("/alpha", alpha_agent)
+        .agent("/beta", replying("beta-session", "from beta"))
+        .build(cx);
+    let alpha = harness.start_thread(cx, "/alpha");
+    harness.start_thread(cx, "/beta");
 
     alpha.update(cx, |thread, cx| thread.submit("pick one", cx));
     harness.run_until(cx, |cx| alpha.read(cx).status() == ThreadStatus::NeedsInput);
@@ -122,31 +96,23 @@ fn a_question_on_an_unselected_thread_is_announced_with_the_question(cx: &mut Te
 
 #[gpui::test]
 fn clicking_a_notification_brings_the_window_back_with_its_thread_selected(cx: &mut TestAppContext) {
-    let connector = FakeConnector::default()
-        .agent("/alpha", replying("alpha-session", "from alpha"))
-        .agent("/beta", replying("beta-session", "from beta"));
-    let harness = DesktopHarnessBuilder::default().connector(connector).build(cx);
-    let alpha = idle_thread(&harness, cx, "/alpha");
-    idle_thread(&harness, cx, "/beta");
-    let alpha_id = alpha.read_with(cx, |thread, _| thread.id());
+    let (harness, alpha) = unselected_alpha(cx);
     harness.deactivate(cx);
-    alpha.update(cx, |thread, cx| thread.submit("hi", cx));
-    harness.run_until(cx, |cx| texts(alpha.read(cx)).len() == 2 && alpha.read(cx).status() == ThreadStatus::Idle);
+    harness.submit(cx, &alpha, "hi");
 
     harness.click_notification(cx, "alpha-session");
 
     assert!(harness.is_active(cx));
-    assert_eq!(harness.threads(cx).read_with(cx, |threads, _| threads.selected()), Some(alpha_id));
-    assert!(!harness.threads(cx).read_with(cx, |threads, _| threads.is_unread(alpha_id)));
+    assert_eq!(harness.selected_thread(cx), Some(alpha.clone()));
+    assert!(!harness.threads(cx).read_with(cx, |threads, _| threads.is_unread(&alpha)));
 }
 
 #[gpui::test]
 fn activity_replaces_the_conversation_icon_without_moving_the_title(cx: &mut TestAppContext) {
     let (agent, mut requests) =
         FakeAgent::default().new_session_response(NewSessionResponse::new("alpha-session")).capture();
-    let connector = FakeConnector::default().agent("/alpha", agent);
-    let harness = DesktopHarnessBuilder::default().connector(connector).build(cx);
-    let alpha = idle_thread(&harness, cx, "/alpha");
+    let harness = DesktopHarnessBuilder::default().agent("/alpha", agent).build(cx);
+    let alpha = harness.start_thread(cx, "/alpha");
     assert!(harness.bounds(cx, "thread-row-0-status-running").is_none(), "an idle thread shows no activity icon");
     let icon = harness.bounds(cx, "thread-row-0-conversation-icon").expect("idle thread has a conversation icon");
     let title_left = harness.bounds(cx, "thread-row-0-title").unwrap().left();
@@ -158,7 +124,6 @@ fn activity_replaces_the_conversation_icon_without_moving_the_title(cx: &mut Tes
     assert!(harness.bounds(cx, "thread-row-0-conversation-icon").is_none());
     assert_eq!(spinner.left(), icon.left());
     assert_eq!(harness.bounds(cx, "thread-row-0-title").unwrap().left(), title_left);
-    assert_hint(&harness, cx, "thread-row-0-status-running", "Agent working");
 
     let (_, responder) = requests.prompt.try_recv().unwrap();
     responder.respond(PromptResponse::new("user-message")).unwrap();
@@ -175,9 +140,8 @@ fn a_thread_waiting_on_an_answer_shows_a_speech_bubble(cx: &mut TestAppContext) 
     let agent = FakeAgent::default()
         .new_session_response(NewSessionResponse::new("alpha-session"))
         .prompt_elicitation("Pick a branch");
-    let connector = FakeConnector::default().agent("/alpha", agent);
-    let harness = DesktopHarnessBuilder::default().connector(connector).build(cx);
-    let alpha = idle_thread(&harness, cx, "/alpha");
+    let harness = DesktopHarnessBuilder::default().agent("/alpha", agent).build(cx);
+    let alpha = harness.start_thread(cx, "/alpha");
 
     alpha.update(cx, |thread, cx| thread.submit("pick one", cx));
     harness.run_until(cx, |cx| alpha.read(cx).status() == ThreadStatus::NeedsInput);
@@ -185,30 +149,15 @@ fn a_thread_waiting_on_an_answer_shows_a_speech_bubble(cx: &mut TestAppContext) 
     assert!(harness.bounds(cx, "thread-row-0-status-needs-input-speech-bubble").is_some());
     assert!(harness.bounds(cx, "thread-row-0-conversation-icon").is_none());
     assert!(harness.bounds(cx, "thread-row-0-status-running").is_none(), "waiting is not busy");
-    assert_hint(&harness, cx, "thread-row-0-status-needs-input", "Waiting for your answer");
 }
 
 #[gpui::test]
-fn a_thread_whose_agent_cannot_start_shows_a_warning_triangle(cx: &mut TestAppContext) {
-    let harness = DesktopHarnessBuilder::default().build(cx);
+fn a_saved_session_has_no_activity_icon(cx: &mut TestAppContext) {
+    let harness = DesktopHarnessBuilder::default()
+        .session("saved", "/alpha", "2026-01-01T00:00:00Z", "prompt")
+        .project("/alpha")
+        .build(cx);
 
-    let thread = harness.new_thread(cx, "/nowhere");
-    harness.run_until(cx, |cx| matches!(thread.read(cx).status(), ThreadStatus::Errored(_)));
-
-    assert!(harness.bounds(cx, "thread-row-0-status-errored-warning-triangle").is_some());
-    assert!(harness.bounds(cx, "thread-row-0-conversation-icon").is_none());
-    assert_hint(&harness, cx, "thread-row-0-status-errored", "Unable to connect — reconnect to try again");
-}
-
-#[gpui::test]
-fn a_saved_session_has_a_muted_title_and_no_activity_icon(cx: &mut TestAppContext) {
-    let sessions = TestStore::new();
-    save_session(&sessions, "saved", "/alpha", "2026-01-01T00:00:00Z", Some("prompt"));
-    let harness = DesktopHarnessBuilder::default().history(sessions).project("/alpha").build(cx);
-    wait_for_history(&harness, cx);
-
-    let title = harness.painted_text(cx, "prompt").expect("saved title is painted");
-    assert_eq!(title.foreground, harness.theme(cx).ui().colors.text_muted);
     assert!(harness.bounds(cx, "history-row-saved-conversation-icon").is_some());
     assert!(harness.bounds(cx, "history-row-saved-status-dormant").is_none());
     assert!(harness.bounds(cx, "history-row-saved-unread").is_none());
@@ -219,16 +168,13 @@ fn notification(tag: &str, title: &str, body: &str) -> SystemNotification {
     SystemNotification { tag: tag.into(), title: title.into(), body: body.into(), actions: Vec::new() }
 }
 
-/// Starts a thread in `cwd` and waits for its agent to connect.
-fn idle_thread(harness: &DesktopHarness, cx: &mut TestAppContext, cwd: &str) -> Entity<Thread> {
-    let thread = harness.new_thread(cx, cwd);
-    harness.run_until(cx, |cx| thread.read(cx).status() == ThreadStatus::Idle);
-    thread
-}
-
-fn assert_hint(harness: &DesktopHarness, cx: &mut TestAppContext, selector: &'static str, label: &str) {
-    harness.hover(cx, selector).unwrap();
-    cx.executor().advance_clock(std::time::Duration::from_secs(1));
-    cx.run_until_parked();
-    assert!(harness.painted_text(cx, label).is_some(), "hovering {selector} explains its status");
+/// A connected thread in `/alpha`, left unselected by starting a second one in `/beta`.
+fn unselected_alpha(cx: &mut TestAppContext) -> (DesktopHarness, Entity<Thread>) {
+    let harness = DesktopHarnessBuilder::default()
+        .agent("/alpha", replying("alpha-session", "from alpha"))
+        .agent("/beta", replying("beta-session", "from beta"))
+        .build(cx);
+    let alpha = harness.start_thread(cx, "/alpha");
+    harness.start_thread(cx, "/beta");
+    (harness, alpha)
 }

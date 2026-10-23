@@ -1,17 +1,15 @@
 use crate::theme::DesktopTheme;
 use crate::threads::Thread;
-use crate::ui::tokens::{CONTENT_MAX_WIDTH, ICON_SIZE_SMALL, RADIUS_CONTAINER, rem};
-use crate::ui::{Icon, IconName, Typography, TypographyExt};
+use crate::ui::tokens::{CONTENT_MAX_WIDTH, ICON_SIZE_SMALL, rem};
+use crate::ui::{Disclosure, Icon, IconName, SurfaceExt, Typography, TypographyExt};
 use acp_utils::conversation::Conversation;
 use agent_client_protocol::schema::v2 as acp;
 use client_core::session_core::SessionCore;
 use gpui::{Context, Entity, Subscription, Window, div, prelude::*};
 
 /// The agent's plan for its turn, kept in view above the composer. It shows every entry with its
-/// progress, and folds down to a one-line count when clicked.
-///
-/// It is tagged `plan-panel`, its header `plan-header`, and each entry `plan-entry-<n>`. Once
-/// every entry is done and the turn has ended, it hides.
+/// progress, and folds down to a one-line count when clicked. Once every entry is done and the
+/// turn has ended, it hides.
 pub(crate) struct PlanPanel {
     thread: Entity<Thread>,
     collapsed: bool,
@@ -35,19 +33,11 @@ impl Render for PlanPanel {
         };
         let done = entries.iter().filter(|entry| is_done(&entry.status)).count();
         let collapsed = self.collapsed;
-        let chevron = if collapsed { IconName::ChevronRight } else { IconName::ChevronDown };
-        let header = div()
-            .id("plan-header")
-            .debug_selector(|| "plan-header".to_owned())
-            .flex()
-            .items_center()
-            .gap_2()
-            .cursor_pointer()
-            .on_click(cx.listener(|this, _, _, cx| {
+        let header = Disclosure::new("plan-header", !collapsed, theme)
+            .on_toggle(cx.listener(|this, _, _, cx| {
                 this.collapsed = !this.collapsed;
                 cx.notify();
             }))
-            .child(Icon::new(chevron, colors.text_muted).size(ICON_SIZE_SMALL))
             .child(div().typography(Typography::Label).text_color(colors.text_secondary).child("Plan"))
             .child(
                 div()
@@ -64,10 +54,7 @@ impl Render for PlanPanel {
             .flex()
             .flex_col()
             .gap_1()
-            .rounded(rem(RADIUS_CONTAINER))
-            .border_1()
-            .border_color(colors.border)
-            .bg(colors.surface)
+            .surface(theme)
             .typography(Typography::Small)
             .child(header);
         if !collapsed {

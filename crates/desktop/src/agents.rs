@@ -61,7 +61,6 @@ pub struct AgentCatalog {
     problems: Vec<JsonFileError>,
 }
 
-/// An agent a project offers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentProfile {
     pub name: String,
@@ -136,7 +135,6 @@ pub fn default_agents_file() -> Option<PathBuf> {
     utils::path::aether_home().map(|home| home.join("desktop").join(AGENTS_FILE))
 }
 
-/// Where `project` defines its agents.
 pub fn project_agents_file(project: &Path) -> PathBuf {
     project.join(".aether").join(AGENTS_FILE)
 }

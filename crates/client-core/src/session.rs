@@ -1,6 +1,7 @@
 use crate::error::ClientError;
+use crate::session_core::SessionCoreConfig;
 use crate::workspace_status::{WorkspaceAccess, WorkspaceStatus, initial_workspace_status};
-use acp_utils::client::{AcpClient, AcpClientError, connect_acp_client, initialize_request};
+use acp_utils::client::{AcpClient, AcpClientError, AcpClientHandle, AcpEvent, connect_acp_client, initialize_request};
 use acp_utils::notifications::{RemoteServerInfo, SessionPreviewParams};
 use agent_client_protocol::schema::v2::{
     Implementation, NewSessionRequest, NewSessionResponse, ReplayFrom, ReplayFromStart, ResumeSessionRequest, SessionId,
@@ -9,6 +10,7 @@ use agent_client_protocol::{AcpAgent, Client, ConnectTo};
 use std::env::current_dir;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use tokio::sync::mpsc::UnboundedReceiver;
 
 /// An initialized agent connection with an open session.
 pub struct Session {
@@ -55,6 +57,21 @@ impl Session {
         Connection::connect_to(client_info, agent, working_dir).await?.new_session().await
     }
 
+    /// Splits the session into what a [`SessionCore`](crate::session_core::SessionCore) starts
+    /// from, the handle its commands go through, and the events that feed it.
+    pub fn into_core(self, client_name: &str) -> (SessionCoreConfig, AcpClientHandle, UnboundedReceiver<AcpEvent>) {
+        let Self { client, response, working_dir, workspace_status, workspace_access } = self;
+        let config = SessionCoreConfig {
+            initialize_response: client.initialize_response,
+            session_response: response,
+            working_dir,
+            workspace_status,
+            workspace_access,
+            client_name: client_name.to_owned(),
+        };
+        (config, client.handle, client.event_rx)
+    }
+
     fn remote(client: AcpClient, response: NewSessionResponse, working_dir: PathBuf) -> Self {
         let workspace_status = initial_workspace_status(&working_dir);
         Self { client, response, working_dir, workspace_status, workspace_access: WorkspaceAccess::Remote }
@@ -72,7 +89,6 @@ impl Connection {
         Ok(Self { client, working_dir })
     }
 
-    /// Open a new session in the connection's working directory.
     pub async fn new_session(self) -> Result<Session, ClientError> {
         let Self { client, working_dir } = self;
         let workspace_status = initial_workspace_status(&working_dir);

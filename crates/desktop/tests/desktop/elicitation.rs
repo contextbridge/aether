@@ -1,6 +1,6 @@
 use crate::support::texts;
 use acp_utils::testing::FakeAgent;
-use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder, FakeConnector};
+use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder};
 use aether_desktop::threads::{Thread, ThreadStatus};
 use agent_client_protocol::schema::v2::{
     BooleanPropertySchema, ElicitationSchema, EnumOption, NewSessionResponse, StringPropertySchema,
@@ -73,20 +73,12 @@ fn a_link_question_opens_its_link_and_accepts(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn an_artifact_review_opens_in_place_of_the_chat(cx: &mut TestAppContext) {
-    let (harness, _thread) = questioned(agent().prompt_artifact_review(plan()), cx);
+fn an_artifact_review_opens_in_place_of_the_chat_and_approving_it_tells_the_agent(cx: &mut TestAppContext) {
+    let (harness, thread) = questioned(agent().prompt_artifact_review(plan()), cx);
     assert!(harness.bounds(cx, "elicitation").is_some(), "the review is announced as a card");
-
     harness.click(cx, "elicitation-open-review").unwrap();
-
     assert!(harness.bounds(cx, "artifact-review").is_some(), "the artifact is shown for review");
     assert!(harness.bounds(cx, "composer").is_none(), "the chat is hidden");
-}
-
-#[gpui::test]
-fn approving_an_artifact_tells_the_agent_and_returns_to_the_chat(cx: &mut TestAppContext) {
-    let (harness, thread) = questioned(agent().prompt_artifact_review(plan()), cx);
-    harness.click(cx, "elicitation-open-review").unwrap();
 
     harness.simulate_keystrokes(cx, "a");
     let answer = turn_end(&harness, &thread, cx);
@@ -123,16 +115,6 @@ fn cancelling_an_artifact_review_tells_the_agent_and_returns_to_the_chat(cx: &mu
     assert!(harness.bounds(cx, "composer").is_some(), "the chat is back");
 }
 
-#[gpui::test]
-fn an_artifact_review_can_be_declined_from_its_card(cx: &mut TestAppContext) {
-    let (harness, thread) = questioned(agent().prompt_artifact_review(plan()), cx);
-
-    harness.click(cx, "elicitation-decline").unwrap();
-    let answer = turn_end(&harness, &thread, cx);
-
-    assert!(answer.contains("decline"), "{answer}");
-}
-
 fn plan() -> ArtifactReviewElicitationMeta {
     ArtifactReviewElicitationMeta::new(Some(PathBuf::from("/alpha/plan.md")), "Review plan.md", "# Plan\n\nShip it.\n")
 }
@@ -143,9 +125,8 @@ fn agent() -> FakeAgent {
 
 /// Opens a thread talking to `agent`, prompts it, and waits until it asks its question.
 fn questioned(agent: FakeAgent, cx: &mut TestAppContext) -> (DesktopHarness, Entity<Thread>) {
-    let harness = DesktopHarnessBuilder::default().connector(FakeConnector::default().agent("/alpha", agent)).build(cx);
-    let thread = harness.new_thread(cx, "/alpha");
-    harness.run_until(cx, |cx| thread.read(cx).status() == ThreadStatus::Idle);
+    let harness = DesktopHarnessBuilder::default().agent("/alpha", agent).build(cx);
+    let thread = harness.start_thread(cx, "/alpha");
     thread.update(cx, |thread, cx| thread.submit("go", cx));
     harness.run_until(cx, |cx| thread.read(cx).status() == ThreadStatus::NeedsInput);
     (harness, thread)

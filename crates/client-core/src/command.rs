@@ -19,14 +19,14 @@ use std::sync::Arc;
 /// Work a host asks the outside world to do. `T` carries the host's own
 /// commands, which its [`HostExecutor`](crate::runtime::HostExecutor) runs.
 #[derive(Debug, Clone)]
-pub enum Command<T> {
+pub enum Command<T = Infallible> {
     Agent(AgentCommand),
     GitReview(GitReviewCommand),
     Filesystem(FilesystemCommand),
     Host(T),
 }
 
-impl Command<Infallible> {
+impl Command {
     /// Widens a command without a host part into any host's command type.
     pub fn widen<T>(self) -> Command<T> {
         match self {
@@ -112,7 +112,7 @@ pub enum PromptRejection {
 }
 
 /// The outcome of a [`Command`]. `T` carries the results of host commands.
-pub enum CommandResult<T> {
+pub enum CommandResult<T = Infallible> {
     Prompt { request_id: RequestId, result: Result<(), PromptRejection> },
     Cancel(Result<(), String>),
     AuthenticateMcp(Result<(), String>),

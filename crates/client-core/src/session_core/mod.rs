@@ -3,8 +3,8 @@
 //! A [`SessionCore`] owns everything about one agent session that is not
 //! presentation: the session model, the conversation, the prompts in flight,
 //! and the operation the client is in the middle of. Hosts feed it agent
-//! events, command results, and user intents, and react to the [`Effect`]s it
-//! returns.
+//! events, command results, and user intents, then drain the [`Effect`]s those
+//! produced with [`SessionCore::take_effects`].
 
 mod acp_reducer;
 mod effect;
@@ -17,29 +17,25 @@ pub use foreground::ForegroundOperation;
 pub use prompts::QueuedPrompt;
 
 use crate::command::{AgentCommand, Command, CommandResult, GitReviewCommand};
-use crate::command_entry::{CommandEntry, builtin_commands};
-use crate::plan_tracker::PlanTracker;
+use crate::command_entry::CommandEntry;
 use crate::session_model::SessionModel;
 use crate::workspace_status::{WorkspaceAccess, WorkspaceStatus};
-use acp_utils::client::AcpEvent;
 use acp_utils::conversation::Conversation;
 use acp_utils::notifications::AetherCapabilities;
 use agent_client_protocol::schema::v2 as acp;
 use std::path::PathBuf;
-use std::time::Instant;
 
 /// One agent session's protocol state and the transitions over it.
 pub struct SessionCore {
     session: SessionModel,
     conversation: Conversation,
-    plan_tracker: PlanTracker,
     available_commands: Vec<CommandEntry>,
     foreground: ForegroundOperation,
     queued_prompts: Vec<QueuedPrompt>,
     /// How the work since the session was last settled ended, if any turn has.
     ended_turn: Option<TurnEnd>,
     client_name: String,
-    /// What the current transition owes its host, drained when it returns.
+    /// What the transitions since the host last drained them owe it.
     effects: Vec<Effect>,
 }
 
@@ -59,13 +55,11 @@ impl SessionCore {
         let capabilities = AetherCapabilities::from_meta(
             config.initialize_response.capabilities.session.as_ref().and_then(|session| session.meta.as_ref()),
         );
-        let available_commands = builtin_commands(&capabilities);
         let client_name = config.client_name.clone();
         Self {
             session: SessionModel::from_config(config, capabilities),
             conversation: Conversation::new(),
-            plan_tracker: PlanTracker::default(),
-            available_commands,
+            available_commands: Vec::new(),
             foreground: ForegroundOperation::Idle,
             queued_prompts: Vec::new(),
             ended_turn: None,
@@ -82,11 +76,7 @@ impl SessionCore {
         &self.conversation
     }
 
-    pub fn plan_tracker(&self) -> &PlanTracker {
-        &self.plan_tracker
-    }
-
-    /// The builtin commands followed by the ones the agent advertised.
+    /// The commands the agent advertised.
     pub fn available_commands(&self) -> &[CommandEntry] {
         &self.available_commands
     }
@@ -115,29 +105,26 @@ impl SessionCore {
         self.foreground.is_idle() && !self.waiting_for_response()
     }
 
-    /// Reduces one agent event.
-    pub fn on_acp_event(&mut self, event: AcpEvent) -> Vec<Effect> {
-        self.reduce_acp_event(event);
-        self.take_effects()
+    /// The effects produced since the last call, in order.
+    pub fn take_effects(&mut self) -> Vec<Effect> {
+        std::mem::take(&mut self.effects)
     }
 
-    /// Reduces the outcome of a command the host dispatched. Host results
-    /// (`CommandResult::Host`) are the host's own to reduce and are ignored.
-    pub fn on_command_result<T>(&mut self, result: CommandResult<T>) -> Vec<Effect> {
+    /// Reduces the outcome of a command the host dispatched, handing back the
+    /// results only the host reduces, such as git review state and listings.
+    pub fn on_command_result<T>(&mut self, result: CommandResult<T>) -> Option<CommandResult<T>> {
         match result {
             CommandResult::Prompt { request_id, result } => self.finish_prompt(request_id, result),
-            CommandResult::Cancel(result) | CommandResult::AuthenticateMcp(result) => {
-                if let Err(error) = result {
-                    self.raise_notice(&error);
-                }
+            CommandResult::Cancel(Err(error))
+            | CommandResult::AuthenticateMcp(Err(error))
+            | CommandResult::BackgroundFailed(error) => self.notify(&error),
+            CommandResult::NewSession(Ok(response)) => {
+                self.on_new_session(response.session_id, response.config_options);
             }
-            CommandResult::NewSession(result) => match result {
-                Ok(response) => self.on_new_session(response.session_id, response.config_options),
-                Err(error) => {
-                    self.foreground = ForegroundOperation::Idle;
-                    self.raise_notice(&format!("Failed to create new session: {error}"));
-                }
-            },
+            CommandResult::NewSession(Err(error)) => {
+                self.foreground = ForegroundOperation::Idle;
+                self.notify(&format!("Failed to create new session: {error}"));
+            }
             CommandResult::ResumeSession { session_id, result } => self.on_resume_result(&session_id, result),
             CommandResult::ConfigOptionsUpdated { conversation_id, result }
                 if conversation_id == self.conversation.id() =>
@@ -149,45 +136,23 @@ impl SessionCore {
                     }
                     Err(error) => {
                         tracing::warn!("set_session_config_option failed: {error}");
-                        self.raise_notice(&format!("Failed to update setting: {error}"));
+                        self.notify(&format!("Failed to update setting: {error}"));
                     }
                 }
             }
-            CommandResult::ConfigOptionsUpdated { .. } | CommandResult::Host(_) => {}
-            CommandResult::AuthenticationCompleted { method_id, result } => {
-                if let Err(error) = &result {
-                    tracing::warn!("Provider authentication failed for {method_id}: {error}");
-                }
-                self.effects.push(Effect::AuthenticationFinished { method_id, result: result.map(drop) });
-            }
-            CommandResult::FilesIndexed { request_id, files } => {
-                self.effects.push(Effect::FilesIndexed { request_id, files });
-            }
-            CommandResult::GitReview(state) => self.effects.push(Effect::GitReviewState(state)),
-            CommandResult::GitReviewAction(result) => self.effects.push(Effect::GitReviewActionFinished(result)),
+            CommandResult::Cancel(Ok(()))
+            | CommandResult::AuthenticateMcp(Ok(()))
+            | CommandResult::ConfigOptionsUpdated { .. } => {}
             CommandResult::SubmissionPrepared(outcome) => self.finish_submission(outcome),
             CommandResult::WorkspaceResolved { cwd, status } => {
                 if self.session.working_dir() == cwd {
                     self.session.set_workspace_status(status);
                 }
             }
-            CommandResult::SessionsListed(Ok(response)) => {
-                let current_id = self.session.session_id();
-                let others = response.sessions.into_iter().filter(|session| session.session_id != *current_id);
-                self.effects.push(Effect::SessionsListed(others.collect()));
-            }
-            CommandResult::SessionsListed(Err(error)) => {
-                self.raise_notice(&format!("Failed to list sessions: {error}"));
-            }
-            CommandResult::PromptSearchResults { query, result } => {
-                self.effects.push(Effect::PromptSearchResults { query, result });
-            }
-            CommandResult::SessionPreviewLoaded { session_id, result } => {
-                self.effects.push(Effect::SessionPreviewLoaded { session_id, result });
-            }
-            CommandResult::WorkspacesListed(Ok(response)) => {
-                self.effects.push(Effect::WorkspacesListed(response.workspaces));
+            CommandResult::SessionsListed(Err(error)) => self.notify(&format!("Failed to list sessions: {error}")),
+            result @ CommandResult::WorkspacesListed(Ok(_)) => {
                 self.foreground = ForegroundOperation::PickingWorkspace;
+                return Some(result);
             }
             CommandResult::WorkspacesListed(Err(error)) => {
                 self.abandon_workspace_move(&format!("Failed to list workspaces: {error}"));
@@ -196,82 +161,66 @@ impl SessionCore {
             CommandResult::WorkspaceMoved(Err(error)) => {
                 self.abandon_workspace_move(&format!("Workspace move failed: {error}"));
             }
-            CommandResult::BackgroundFailed(error) => self.raise_notice(&error),
+            result @ (CommandResult::AuthenticationCompleted { .. }
+            | CommandResult::FilesIndexed { .. }
+            | CommandResult::GitReview(_)
+            | CommandResult::GitReviewAction(_)
+            | CommandResult::SessionsListed(Ok(_))
+            | CommandResult::PromptSearchResults { .. }
+            | CommandResult::SessionPreviewLoaded { .. }
+            | CommandResult::Host(_)) => return Some(result),
         }
-        self.take_effects()
-    }
-
-    /// Advances the clock completed plan entries expire against.
-    pub fn on_tick(&mut self, now: Instant) {
-        self.plan_tracker.on_tick(now);
-        self.plan_tracker.sync(self.conversation.plan(), Instant::now());
+        None
     }
 
     /// Asks the agent to cancel the running turn, if there is one.
-    pub fn cancel(&mut self) -> Vec<Effect> {
+    pub fn cancel(&mut self) {
         if self.waiting_for_response() {
             self.dispatch(AgentCommand::Cancel { session_id: self.session.session_id().clone() });
         }
-        self.take_effects()
     }
 
     /// Selects `value` for `config_id`: the local state changes at once and the
     /// agent is asked to apply it, confirming or correcting it in its reply.
-    pub fn set_config_option(&mut self, config_id: &str, value: &str) -> Vec<Effect> {
+    pub fn set_config_option(&mut self, config_id: &str, value: &str) {
         self.session.update_config_option_value(config_id, value);
         self.request_config_option(config_id, value);
-        self.take_effects()
     }
 
-    pub fn authenticate(&mut self, method_id: String) -> Vec<Effect> {
+    pub fn authenticate(&mut self, method_id: String) {
         self.dispatch(AgentCommand::Authenticate { method_id });
-        self.take_effects()
     }
 
-    pub fn authenticate_mcp_server(&mut self, server_name: String) -> Vec<Effect> {
+    pub fn authenticate_mcp_server(&mut self, server_name: String) {
         self.dispatch(AgentCommand::AuthenticateMcpServer {
             session_id: self.session.session_id().clone(),
             server_name,
         });
-        self.take_effects()
     }
 
-    /// Starts a git review of the session's working tree. Review state
-    /// arrives as [`Effect::GitReviewState`] until it is closed.
-    pub fn open_git_review(&mut self) -> Vec<Effect> {
-        self.effects.push(Effect::Dispatch(Command::GitReview(GitReviewCommand::Open {
-            session_id: self.session.session_id().0.to_string(),
-        })));
-        self.take_effects()
+    /// Starts a git review of the session's working tree. Its state arrives as
+    /// [`CommandResult::GitReview`] until it is closed.
+    pub fn open_git_review(&mut self) {
+        let session_id = self.session.session_id().0.to_string();
+        self.effects.push(Effect::Dispatch(Command::GitReview(GitReviewCommand::Open { session_id })));
     }
 
-    pub fn close_git_review(&mut self) -> Vec<Effect> {
+    pub fn close_git_review(&mut self) {
         self.effects.push(Effect::Dispatch(Command::GitReview(GitReviewCommand::Close)));
-        self.take_effects()
     }
 
     /// Asks the agent where the session's workspace is checked out.
-    pub fn refresh_workspace_status(&mut self) -> Vec<Effect> {
+    pub fn refresh_workspace_status(&mut self) {
         self.resolve_workspace(self.session.working_dir().to_path_buf());
-        self.take_effects()
     }
 
-    /// Appends the host's own notice for information outside the agent's
-    /// output. Unlike the notices the core raises, it is not echoed back as an
-    /// [`Effect::Notice`].
+    /// Appends a notice for information outside the agent's own output.
     pub fn notify(&mut self, message: &str) {
         self.conversation.append_notice(format!("[{}] {message}", self.client_name));
     }
 
     fn dispatch(&mut self, command: AgentCommand) {
         self.effects.push(Effect::Dispatch(Command::Agent(command)));
-    }
-
-    /// A notice the core raised itself, which hosts may also surface outside
-    /// the conversation.
-    fn raise_notice(&mut self, message: &str) {
-        self.notify(message);
-        self.effects.push(Effect::Notice(message.to_string()));
     }
 
     /// Drops all conversation state atomically before starting a new session.
@@ -292,11 +241,6 @@ impl SessionCore {
         if !self.waiting_for_response() && self.ended_turn.take() == Some(TurnEnd::Finished) {
             self.effects.push(Effect::TurnFinished);
         }
-    }
-
-    fn take_effects(&mut self) -> Vec<Effect> {
-        self.plan_tracker.sync(self.conversation.plan(), Instant::now());
-        std::mem::take(&mut self.effects)
     }
 }
 

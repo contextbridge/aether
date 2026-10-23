@@ -1,12 +1,11 @@
 use super::completion::{ActiveToken, CompletionItem, CompletionMenu, Trigger};
-use super::config_picker::{ConfigPicker, ConfigPickerEvent};
 use super::footer::{config_selector, context_meter, queued_prompts};
 use super::prompt_search::{PromptSearch, PromptSearchOutcome};
 use crate::file_index::FileIndex;
 use crate::theme::DesktopTheme;
 use crate::threads::{Thread, ThreadStatus};
-use crate::ui::tokens::{CONTENT_MAX_WIDTH, GROUP_HEIGHT, RADIUS_CONTAINER, rem};
-use crate::ui::{Button, ButtonVariant, IconButton, IconName};
+use crate::ui::tokens::{CONTENT_MAX_WIDTH, GROUP_HEIGHT, rem};
+use crate::ui::{Button, ButtonVariant, IconButton, IconName, PickerItem, SearchPicker, SearchPickerEvent, SurfaceExt};
 use client_core::composer::attachment::PromptAttachment;
 use client_core::composer::prompt_history::PromptHistory;
 use client_core::composer::submission::Submission;
@@ -40,14 +39,13 @@ pub(crate) struct Composer {
     /// Where the token starts whose menu the user dismissed, so it stays shut while they type on.
     dismissed: Option<usize>,
     search: Option<(Entity<PromptSearch>, Subscription)>,
-    /// The open picker, with the id of the option it picks a value for.
     config_picker: Option<OpenPicker>,
     _subscriptions: Vec<Subscription>,
 }
 
 impl Composer {
     pub(crate) fn new(thread: Entity<Thread>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let style = DesktopTheme::global(cx).editor_style();
+        let style = DesktopTheme::global(cx).ui().editor_style();
         let input = cx.new(|cx| {
             let mut input = TextareaState::new(window, cx)
                 .auto_grow(MIN_ROWS, MAX_ROWS)
@@ -74,7 +72,7 @@ impl Composer {
                 }
             }),
             cx.observe_global::<DesktopTheme>(|this, cx| {
-                let style = DesktopTheme::global(cx).editor_style();
+                let style = DesktopTheme::global(cx).ui().editor_style();
                 this.input.update(cx, |input, cx| {
                     input.set_editor_style(style);
                     cx.notify();
@@ -94,7 +92,6 @@ impl Composer {
         }
     }
 
-    /// The prompt being written.
     pub(crate) fn text(&self, cx: &App) -> SharedString {
         self.input.read(cx).value()
     }
@@ -169,16 +166,8 @@ impl Composer {
         self.completion = match token.trigger {
             Trigger::Command => {
                 let thread = self.thread.read(cx);
-                let commands: Vec<_> = thread
-                    .core()
-                    .map(SessionCore::available_commands)
-                    .unwrap_or_default()
-                    .iter()
-                    // The builtins are wisp's own: the app has its own controls for what they do.
-                    .filter(|command| !command.builtin)
-                    .cloned()
-                    .collect();
-                (!commands.is_empty()).then(|| CompletionMenu::commands(token, &text, &commands))
+                let commands = thread.core().map(SessionCore::available_commands).unwrap_or_default();
+                (!commands.is_empty()).then(|| CompletionMenu::commands(token, &text, commands))
             }
             Trigger::File => {
                 let root = self.root(cx);
@@ -267,11 +256,39 @@ impl Composer {
         let Some(select) = option.select() else {
             return;
         };
-        let (values, current) = (select.values.to_vec(), select.current_value.to_owned());
-        let picker = cx.new(|cx| ConfigPicker::new(&option.id, option.name.clone(), values, current, window, cx));
-        let subscription = cx.subscribe_in(&picker, window, move |this, _, event: &ConfigPickerEvent, window, cx| {
-            if let ConfigPickerEvent::Chose(value) = event {
-                this.thread.update(cx, |thread, cx| thread.set_config_option(&option_id, value, cx));
+        let values = select.values.to_vec();
+        let current = values.iter().position(|value| value.value == select.current_value).unwrap_or(0);
+        let items = values
+            .iter()
+            .map(|value| {
+                let item = PickerItem::new(value.value.clone(), value.name.clone())
+                    .keywords(value.value.clone())
+                    .disabled(value.is_disabled)
+                    .checked(value.value == select.current_value);
+                if value.is_disabled { item.detail("unavailable") } else { item }
+            })
+            .collect();
+        let theme = DesktopTheme::global(cx).ui();
+        let picker = cx.new(|cx| {
+            let picker = SearchPicker::new(format!("config-{}-picker", option.id), items, theme, cx)
+                .title(option.name.clone())
+                .width(rem(CONFIG_PICKER_WIDTH))
+                .max_list_height(rem(CONFIG_LIST_MAX_HEIGHT))
+                .highlight(current);
+            if values.len() > CONFIG_SEARCH_THRESHOLD {
+                picker.searchable(format!("Search {}…", option.name.to_lowercase()), window, cx)
+            } else {
+                picker
+            }
+        });
+        let subscription = cx.subscribe_in(&picker, window, move |this, _, event: &SearchPickerEvent, window, cx| {
+            match event {
+                SearchPickerEvent::Chose(index) => {
+                    let value = &values[*index].value;
+                    this.thread.update(cx, |thread, cx| thread.set_config_option(&option_id, value, cx));
+                }
+                SearchPickerEvent::Dismissed => {}
+                SearchPickerEvent::Query(_) => return,
             }
             this.close_config_picker(window, cx);
         });
@@ -360,8 +377,6 @@ impl Composer {
             .child(Textarea::new(&self.input))
     }
 
-    /// The toolbar along the bottom of the composer: the session's options and how full the
-    /// context is, then Stop while a turn runs and Send.
     fn render_toolbar(&self, cx: &mut Context<Self>) -> Div {
         let theme = DesktopTheme::global(cx).ui();
         let running = matches!(self.thread.read(cx).status(), ThreadStatus::Running | ThreadStatus::NeedsInput);
@@ -439,10 +454,8 @@ impl Render for Composer {
             .flex()
             .flex_col()
             .gap_1()
-            .rounded(rem(RADIUS_CONTAINER))
-            .border_1()
-            .border_color(if focused { theme.colors.accent } else { theme.colors.border })
-            .bg(theme.colors.surface)
+            .surface(theme)
+            .when(focused, |editor| editor.border_color(theme.colors.accent))
             .child(self.render_input(cx))
             .child(self.render_toolbar(cx));
         div().debug_selector(|| "composer".to_owned()).flex_none().w_full().px_4().pt_2().pb_4().child(
@@ -461,15 +474,19 @@ impl Render for Composer {
     }
 }
 
-/// A picker the composer has open, for the session option `option_id`.
 struct OpenPicker {
     option_id: String,
-    picker: Entity<ConfigPicker>,
+    picker: Entity<SearchPicker>,
     _subscription: Subscription,
 }
 
 const MIN_ROWS: usize = 1;
 const MAX_ROWS: usize = 12;
+/// Options with more values than this can be searched.
+const CONFIG_SEARCH_THRESHOLD: usize = 8;
+const CONFIG_PICKER_WIDTH: f32 = 288.0;
+/// Tall enough for ten rows, short enough to fit above the composer in the smallest window.
+const CONFIG_LIST_MAX_HEIGHT: f32 = 288.0;
 
 fn mention_text(file: &PromptAttachment) -> String {
     format!("@{}", file.display_name)
