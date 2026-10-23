@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.10](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.8.9...aether-mcp-servers-v0.8.10) - 2026-10-23
+
+### Other
+
+- updated the following local packages: aether-lspd
+
 ## [0.8.9](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.8.8...aether-mcp-servers-v0.8.9) - 2026-10-20
 
 ### Fixed
