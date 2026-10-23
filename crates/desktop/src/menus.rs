@@ -1,5 +1,5 @@
 use crate::app::{OpenThreadSwitcher, SelectNextThread, SelectPreviousThread, ShowChanges, ShowChat};
-use crate::sidebar::NewThread;
+use crate::sidebar::{NewThread, ToggleSidebar};
 use crate::ui::interface_size::{DecreaseInterfaceSize, IncreaseInterfaceSize, ResetInterfaceSize};
 use gpui::{App, Menu, MenuItem};
 
@@ -11,6 +11,8 @@ pub(crate) fn install(cx: &mut App) {
         name: "View".into(),
         disabled: false,
         items: vec![
+            MenuItem::action("Toggle Sidebar", ToggleSidebar),
+            MenuItem::separator(),
             MenuItem::action("Bigger", IncreaseInterfaceSize),
             MenuItem::action("Smaller", DecreaseInterfaceSize),
             MenuItem::action("Actual Size", ResetInterfaceSize),

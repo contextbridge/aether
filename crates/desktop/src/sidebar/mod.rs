@@ -49,6 +49,7 @@ actions!(
     [
         /// Starts a thread in the selected thread's project, or else in the first project.
         NewThread,
+        ToggleSidebar,
     ]
 );
 
@@ -123,6 +124,10 @@ impl Sidebar {
     /// The width the user dragged the sidebar to, or else its default width.
     pub(crate) fn width(&self, cx: &App) -> Rems {
         self.registry.read(cx).state().sidebar_width.map_or(DEFAULT_SIDEBAR_WIDTH, rems)
+    }
+
+    pub(crate) fn collapsed(&self, cx: &App) -> bool {
+        self.registry.read(cx).state().sidebar_collapsed
     }
 
     pub fn row_title(&self, selector: &str) -> Option<String> {
@@ -431,6 +436,7 @@ impl Sidebar {
             .flex()
             .items_center()
             .gap_1()
+            .child(toggle_button(true, theme))
             .child(
                 div()
                     .flex_1()
@@ -822,6 +828,12 @@ impl Row {
         let (pinned, archived) = (has(&registry.pinned), has(&registry.archived));
         Self { selector, kind, title: registry.title(session_id.as_ref(), title), session_id, pinned, archived }
     }
+}
+
+pub(crate) fn toggle_button(open: bool, theme: &UiTheme) -> IconButton {
+    PanelSide::Left
+        .toggle_button("toggle-sidebar", open, "sidebar", *theme)
+        .on_click(|_, window, cx| window.dispatch_action(Box::new(ToggleSidebar), cx))
 }
 
 /// The pinned rows first, then the others in their order, of which only the first `limit`

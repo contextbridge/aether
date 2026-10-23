@@ -3,6 +3,7 @@ use crate::changes::{Changes, Dismissed};
 use crate::chat::{Composer, PlanPanel, Transcript};
 use crate::elicitation::{ElicitationCard, OpenReview};
 use crate::registry::Registry;
+use crate::sidebar;
 use crate::theme::DesktopTheme;
 use crate::threads::{Thread, ThreadEvent};
 use crate::ui::tokens::{BAR_HEIGHT, rem};
@@ -38,6 +39,7 @@ struct Header {
     changes_label: String,
     /// Whether the agent waits on an artifact review, which the Review tab shows.
     reviewing: bool,
+    sidebar_collapsed: bool,
 }
 
 /// What a thread's main area shows. The Review tab exists only while the agent waits on a review.
@@ -175,6 +177,7 @@ impl Render for ThreadView {
             .gap_3()
             .border_b_1()
             .border_color(theme.colors.border)
+            .when(self.header.sidebar_collapsed, |header| header.child(sidebar::toggle_button(false, &theme)))
             .child(
                 div()
                     .flex_1()
@@ -229,7 +232,8 @@ impl Header {
             None => "Changes".to_owned(),
         };
         let reviewing = pending_review(thread.read(cx)).is_some();
-        Self { title: Self::title(thread, registry, cx), changes_label, reviewing }
+        let sidebar_collapsed = registry.read(cx).state().sidebar_collapsed;
+        Self { title: Self::title(thread, registry, cx), changes_label, reviewing, sidebar_collapsed }
     }
 
     fn title(thread: &Entity<Thread>, registry: &Entity<Registry>, cx: &App) -> String {

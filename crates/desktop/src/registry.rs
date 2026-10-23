@@ -44,6 +44,7 @@ pub struct State {
     pub interface_size: Option<f32>,
     /// In rems, so it scales with the interface size.
     pub sidebar_width: Option<f32>,
+    pub sidebar_collapsed: bool,
 }
 
 /// Where the app keeps its state: `~/.aether/desktop/state.json`, or `None` without a home

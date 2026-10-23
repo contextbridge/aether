@@ -5,13 +5,14 @@ use crate::history::History;
 use crate::menus::APP_NAME;
 use crate::notification;
 use crate::registry::Registry;
-use crate::sidebar::{NewThread, Sidebar};
+use crate::sidebar::{self, NewThread, Sidebar, ToggleSidebar};
 use crate::switcher::{self, SwitchTarget};
 use crate::target::Connector;
 use crate::theme::{DesktopTheme, ThemePair};
 use crate::thread_view::{ThreadTab, ThreadView};
 use crate::threads::{Attention, Thread, ThreadEvent, ThreadManager};
 use crate::ui::interface_size::DEFAULT_INTERFACE_SIZE;
+use crate::ui::tokens::{BAR_HEIGHT, rem};
 use crate::ui::window_chrome;
 use crate::ui::{
     EmptyState, InterfaceSize, NoticeTone, SearchPicker, SearchPickerEvent, Typography, TypographyExt, UI_FONT,
@@ -155,6 +156,7 @@ impl DesktopApp {
     pub fn bind_keys(cx: &mut App) {
         cx.bind_keys([
             KeyBinding::new("secondary-n", NewThread, None),
+            KeyBinding::new("secondary-b", ToggleSidebar, None),
             KeyBinding::new("secondary-k", OpenThreadSwitcher, None),
             KeyBinding::new("secondary-]", SelectNextThread, None),
             KeyBinding::new("secondary-[", SelectPreviousThread, None),
@@ -290,6 +292,11 @@ impl DesktopApp {
         }
     }
 
+    fn toggle_sidebar(&self, cx: &mut Context<Self>) {
+        Registry::update(&self.registry, cx, |state| state.sidebar_collapsed = !state.sidebar_collapsed);
+        cx.notify();
+    }
+
     /// Remembers the interface size, forgetting it at the default so the app follows the
     /// platform's default again.
     fn remember_interface_size(&self, cx: &mut App) {
@@ -338,18 +345,41 @@ impl Render for DesktopApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         InterfaceSize::apply(window, cx);
         let theme = DesktopTheme::global(cx).ui();
-        let sidebar_width = self.sidebar.read(cx).width(cx);
+        let shown = self.sidebar.read(cx);
+        let sidebar_panel = (!shown.collapsed(cx)).then(|| {
+            let width = shown.width(cx);
+            self.sidebar.clone().cached(StyleRefinement::default().flex_none().w(width).h_full())
+        });
         let selected = self.threads.read(cx).selected().and_then(|thread| self.thread_view(thread));
         let main = div().debug_selector(|| "main".to_owned()).flex_1().min_w_0().h_full().child(match selected {
             Some(view) => view.clone().cached(StyleRefinement::default().size_full()).into_any_element(),
-            None => {
-                EmptyState::new("No thread selected", "Select a thread, or start a new one", NoticeTone::Neutral, theme)
-                    .into_any_element()
-            }
+            None => div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .when(sidebar_panel.is_none(), |main| {
+                    main.child(
+                        div()
+                            .flex_none()
+                            .h(rem(BAR_HEIGHT))
+                            .px_4()
+                            .flex()
+                            .items_center()
+                            .child(sidebar::toggle_button(false, &theme)),
+                    )
+                })
+                .child(div().flex_1().min_h_0().child(EmptyState::new(
+                    "No thread selected",
+                    "Select a thread, or start a new one",
+                    NoticeTone::Neutral,
+                    theme,
+                )))
+                .into_any_element(),
         });
         let content = div()
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(|this, _: &NewThread, _, cx| this.sidebar.update(cx, Sidebar::new_thread)))
+            .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_sidebar(cx)))
             .on_action(cx.listener(|this, _: &SelectNextThread, _, cx| this.step_selection(1, cx)))
             .on_action(cx.listener(|this, _: &SelectPreviousThread, _, cx| this.step_selection(-1, cx)))
             .on_action(cx.listener(|this, _: &OpenThreadSwitcher, window, cx| this.open_switcher(window, cx)))
@@ -363,7 +393,7 @@ impl Render for DesktopApp {
             .font_family(UI_FONT)
             .typography(Typography::Body)
             .child(TextSelectionLayer)
-            .child(self.sidebar.clone().cached(StyleRefinement::default().flex_none().w(sidebar_width).h_full()))
+            .children(sidebar_panel)
             .child(main)
             .children(self.switcher.as_ref().map(|(picker, _)| {
                 let dismiss = cx.listener(|this, _: &MouseDownEvent, window, cx| this.close_switcher(window, cx));

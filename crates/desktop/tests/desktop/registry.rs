@@ -22,6 +22,7 @@ fn the_registry_reads_back_everything_it_saved(cx: &mut TestAppContext) {
         state.last_selected = Some(SessionId::new("renamed"));
         state.interface_size = Some(19.0);
         state.sidebar_width = Some(20.0);
+        state.sidebar_collapsed = true;
     });
     cx.run_until_parked();
     let saved = registry.read_with(cx, |registry, _| registry.state().clone());
