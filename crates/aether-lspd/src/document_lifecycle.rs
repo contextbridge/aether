@@ -16,6 +16,7 @@ struct DocumentEntry {
     open_holders: usize,
     content_hash: Option<u64>,
     needs_refresh: bool,
+    needs_save: bool,
 }
 
 pub(crate) enum AcquireAction {
@@ -38,6 +39,18 @@ impl DocumentLifecycle {
 
     pub(crate) fn forget_uri(&self, uri: &Uri) {
         self.documents.lock().unwrap_or_else(PoisonError::into_inner).remove(uri);
+    }
+
+    pub(crate) fn mark_written(&self, uri: &Uri) {
+        self.documents.lock().unwrap_or_else(PoisonError::into_inner).entry(uri.clone()).or_default().needs_save = true;
+    }
+
+    pub(crate) fn take_pending_save(&self, uri: &Uri) -> bool {
+        self.documents
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get_mut(uri)
+            .is_some_and(|entry| std::mem::take(&mut entry.needs_save))
     }
 
     pub(crate) async fn acquire(&self, uri: &Uri) -> AcquireAction {
@@ -201,6 +214,17 @@ mod tests {
         assert_eq!(lifecycle.filter_watcher_changes(vec![changed(&uri)]), Vec::<FileEvent>::new());
         assert!(matches!(lifecycle.release(&uri), ReleaseAction::Unchanged));
         assert!(matches!(lifecycle.release(&uri), ReleaseAction::CloseAndRefresh));
+    }
+
+    #[tokio::test]
+    async fn pending_save_is_taken_once() {
+        let (_temp, uri, lifecycle) = open_fixture().await;
+        assert!(!lifecycle.take_pending_save(&uri));
+
+        lifecycle.mark_written(&uri);
+
+        assert!(lifecycle.take_pending_save(&uri));
+        assert!(!lifecycle.take_pending_save(&uri));
     }
 
     async fn open_fixture() -> (TempDir, Uri, DocumentLifecycle) {
