@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.7](https://github.com/contextbridge/aether/compare/aether-lspd-v0.3.6...aether-lspd-v0.3.7) - 2026-10-23
+
+### Fixed
+
+- *(lspd)* only send didSave for files the agent wrote ([#625](https://github.com/contextbridge/aether/pull/625))
+
 ## [0.3.6](https://github.com/contextbridge/aether/compare/aether-lspd-v0.3.5...aether-lspd-v0.3.6) - 2026-10-20
 
 ### Other
