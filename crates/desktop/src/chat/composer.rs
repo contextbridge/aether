@@ -5,7 +5,7 @@ use crate::file_index::FileIndex;
 use crate::theme::DesktopTheme;
 use crate::threads::{Thread, ThreadStatus};
 use crate::ui::tokens::{CONTENT_MAX_WIDTH, GROUP_HEIGHT, rem};
-use crate::ui::{Button, ButtonVariant, IconButton, IconName, PickerItem, SearchPicker, SearchPickerEvent, SurfaceExt};
+use crate::ui::{IconButton, IconName, PickerItem, SearchPicker, SearchPickerEvent, SurfaceExt};
 use client_core::composer::attachment::PromptAttachment;
 use client_core::composer::prompt_history::PromptHistory;
 use client_core::composer::submission::Submission;
@@ -64,6 +64,7 @@ impl Composer {
                     this.history.reset();
                     this.recalling = false;
                     this.refresh_completion(cx);
+                    cx.notify();
                 }
             }),
             cx.observe_global::<FileIndex>(|this, cx| {
@@ -183,6 +184,10 @@ impl Composer {
     /// The directory `@` mentions are relative to.
     fn root(&self, cx: &App) -> PathBuf {
         self.thread.read(cx).target().cwd().to_path_buf()
+    }
+
+    fn running(&self, cx: &App) -> bool {
+        matches!(self.thread.read(cx).status(), ThreadStatus::Running | ThreadStatus::NeedsInput)
     }
 
     fn dismiss_completion(&mut self, cx: &mut Context<Self>) {
@@ -360,6 +365,13 @@ impl Composer {
                     cx.stop_propagation();
                 }
             }))
+            .on_action(cx.listener(|this, _: &Escape, _, cx| {
+                if this.running(cx) {
+                    this.thread.update(cx, Thread::cancel);
+                } else {
+                    cx.propagate();
+                }
+            }))
             // The textarea inserts Shift+Enter's newline itself and passes every other Enter up
             // here. Handling it marks the keystroke handled, so it is not also typed as a newline.
             .on_action(cx.listener(|this, enter: &Enter, window, cx| {
@@ -379,7 +391,6 @@ impl Composer {
 
     fn render_toolbar(&self, cx: &mut Context<Self>) -> Div {
         let theme = DesktopTheme::global(cx).ui();
-        let running = matches!(self.thread.read(cx).status(), ThreadStatus::Running | ThreadStatus::NeedsInput);
         let footer = self.thread.read(cx).core().map(|core| {
             let selectors: Vec<_> = core
                 .session()
@@ -414,14 +425,13 @@ impl Composer {
                 .child(div().flex_1())
                 .children(meter)
         });
-        let stop = running.then(|| {
-            Button::new("stop", "Stop", theme)
-                .icon(IconName::Square)
-                .variant(ButtonVariant::Destructive)
+        let action = if self.running(cx) && self.text(cx).trim().is_empty() {
+            IconButton::new("stop", IconName::Square, "Stop (Esc)", theme)
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.thread.update(cx, Thread::cancel)))
-        });
-        let send = IconButton::new("send", IconName::ArrowUp, "Send", theme)
-            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.send(window, cx)));
+        } else {
+            IconButton::new("send", IconName::ArrowUp, "Send", theme)
+                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.send(window, cx)))
+        };
         div()
             .h(rem(GROUP_HEIGHT))
             .px_1()
@@ -431,8 +441,7 @@ impl Composer {
             .gap_2()
             .children(footer)
             .when(self.thread.read(cx).core().is_none(), |toolbar| toolbar.child(div().flex_1()))
-            .children(stop)
-            .child(send)
+            .child(action)
     }
 }
 

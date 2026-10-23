@@ -1,9 +1,11 @@
 use crate::support::{replying, texts};
-use acp_utils::testing::FakeAgent;
-use aether_desktop::testing::DesktopHarnessBuilder;
-use aether_desktop::threads::ThreadStatus;
+use acp_utils::testing::{FakeAgent, FakeAgentRequests};
+use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder};
+use aether_desktop::threads::{Thread, ThreadStatus};
 use agent_client_protocol::schema::v2::NewSessionResponse;
-use gpui::TestAppContext;
+use gpui::{Entity, TestAppContext};
+use std::fs;
+use std::path::PathBuf;
 
 #[gpui::test]
 fn enter_sends_the_prompt_and_clears_the_composer(cx: &mut TestAppContext) {
@@ -65,6 +67,58 @@ fn stop_cancels_the_running_turn(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn stop_takes_the_place_of_send_while_the_turn_runs(cx: &mut TestAppContext) {
+    let (harness, _, _requests) = working_thread(cx, "/alpha");
+
+    assert!(harness.bounds(cx, "stop").is_some());
+    assert!(harness.bounds(cx, "send").is_none());
+}
+
+#[gpui::test]
+fn a_prompt_written_during_the_turn_brings_send_back_to_queue_it(cx: &mut TestAppContext) {
+    let (harness, thread, _requests) = working_thread(cx, "/alpha");
+
+    harness.simulate_input(cx, "and then this");
+    assert!(harness.bounds(cx, "stop").is_none());
+    harness.click(cx, "send").unwrap();
+    harness.run_until(cx, |cx| thread.read(cx).core().is_some_and(|core| !core.queued_prompts().is_empty()));
+
+    assert_eq!(harness.composer_text(cx).as_deref(), Some(""));
+    assert!(harness.bounds(cx, "stop").is_some(), "the emptied composer offers stop again");
+}
+
+#[gpui::test]
+fn escape_stops_the_running_turn_and_keeps_the_draft(cx: &mut TestAppContext) {
+    let (harness, _, mut requests) = working_thread(cx, "/alpha");
+    harness.simulate_input(cx, "half a thought");
+
+    harness.simulate_keystrokes(cx, "escape");
+    harness.run_until(cx, |_| !requests.cancel.is_empty());
+
+    let cancel = requests.cancel.try_recv().unwrap();
+    assert_eq!(cancel.session_id.0.as_ref(), "alpha-session");
+    assert_eq!(harness.composer_text(cx).as_deref(), Some("half a thought"));
+}
+
+#[gpui::test]
+fn escape_closes_the_file_menu_before_it_stops_the_turn(cx: &mut TestAppContext) {
+    let workspace = tempfile::tempdir().unwrap();
+    let root = workspace.path().join("alpha");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("README.md"), "# alpha\n").unwrap();
+    let (harness, _, requests) = working_thread(cx, root);
+    harness.simulate_input(cx, "@read");
+    harness.run_until_painted(cx, "completion-item-0");
+
+    harness.simulate_keystrokes(cx, "escape");
+    assert!(harness.bounds(cx, "completion-menu").is_none());
+    harness.simulate_keystrokes(cx, "escape");
+    harness.run_until(cx, |_| !requests.cancel.is_empty());
+
+    assert_eq!(harness.composer_text(cx).as_deref(), Some("@read"));
+}
+
+#[gpui::test]
 fn each_thread_keeps_its_own_transcript_and_draft_across_selection(cx: &mut TestAppContext) {
     let harness = DesktopHarnessBuilder::default()
         .agent("/alpha", replying("alpha-session", "from alpha"))
@@ -85,4 +139,19 @@ fn each_thread_keeps_its_own_transcript_and_draft_across_selection(cx: &mut Test
     harness.send(cx, &beta, "two");
     assert_eq!(alpha.read_with(cx, |thread, _| texts(thread)), ["one", "from alpha"]);
     assert_eq!(beta.read_with(cx, |thread, _| texts(thread)), ["two", "from beta"]);
+}
+
+fn working_thread(
+    cx: &mut TestAppContext,
+    cwd: impl Into<PathBuf>,
+) -> (DesktopHarness, Entity<Thread>, FakeAgentRequests) {
+    let cwd = cwd.into();
+    let (agent, requests) =
+        FakeAgent::default().new_session_response(NewSessionResponse::new("alpha-session")).capture();
+    let harness = DesktopHarnessBuilder::default().agent(&cwd, agent).build(cx);
+    let thread = harness.start_thread(cx, &cwd);
+    harness.simulate_input(cx, "work forever");
+    harness.simulate_keystrokes(cx, "enter");
+    harness.run_until(cx, |_| !requests.prompt.is_empty());
+    (harness, thread, requests)
 }
