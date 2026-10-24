@@ -45,6 +45,16 @@ pub(crate) fn project_agent_event(msg: &AgentEvent, mode: NotificationMode, io: 
     }
 }
 
+pub(crate) fn stop_reason(outcome: &TurnOutcome) -> acp::StopReason {
+    match outcome {
+        TurnOutcome::Completed => acp::StopReason::EndTurn,
+        TurnOutcome::Failed { error, .. } => {
+            acp::ErrorStopReason::new().error(acp::Error::internal_error().data(error.clone())).into()
+        }
+        TurnOutcome::Cancelled => acp::StopReason::Cancelled,
+    }
+}
+
 /// Replace the session's itemized plan with the tool result's plan snapshot.
 pub(crate) fn try_extract_plan_notification(result_meta: Option<&ToolResultMeta>) -> Option<SessionUpdate> {
     let plan_meta = result_meta?.plan.as_ref()?;

@@ -73,7 +73,7 @@ async fn provider_failure_after_acceptance_reports_error_and_idle() {
         harness.prompt(&id, "hi").await.unwrap();
         let updates = harness.updates_until(&id, is_idle).await;
         assert!(updates.iter().any(|update| agent_message_contains(update, "provider failed")), "{updates:?}");
-        assert_idle(&updates, StopReason::EndTurn);
+        assert!(matches!(idle_stop_reason(&updates), Some(StopReason::Error(_))), "{updates:?}");
     })
     .await;
 }
@@ -312,7 +312,7 @@ async fn cancel_rejects_a_prompt_queued_behind_the_running_reply() -> TestResult
             !updates.iter().any(|update| matches!(update, SessionUpdate::UserMessage(_))),
             "a discarded prompt is never shown as inserted: {updates:?}"
         );
-        assert_idle(&updates, StopReason::Cancelled);
+        assert_eq!(idle_stop_reason(&updates), Some(&StopReason::Cancelled));
         assert_eq!(stored_prompts(&harness, &id), ["first"]);
         Ok(())
     })
@@ -413,11 +413,11 @@ fn agent_message_matches(update: &SessionUpdate, matches_text: impl Fn(&str) -> 
     ))
 }
 
-fn assert_idle(updates: &[SessionUpdate], stop_reason: StopReason) {
+fn idle_stop_reason(updates: &[SessionUpdate]) -> Option<&StopReason> {
     let Some(SessionUpdate::StateUpdate(StateUpdate::Idle(idle))) = updates.last() else {
         panic!("expected the turn to end idle: {updates:?}");
     };
-    assert_eq!(idle.stop_reason, Some(stop_reason));
+    idle.stop_reason.as_ref()
 }
 
 fn is_user_message(update: &SessionUpdate, id: &MessageId) -> bool {

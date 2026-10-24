@@ -41,7 +41,7 @@ use super::model::Modes;
 use super::prompts::{PromptQueue, SubmittedPrompt};
 use super::runtime::{AgentRuntime, RuntimeFactory};
 use crate::acp::protocol::commands::available_commands;
-use crate::acp::protocol::events::{NotificationMode, project_agent_event};
+use crate::acp::protocol::events::{NotificationMode, project_agent_event, stop_reason};
 use crate::acp::protocol::replay::replay_to_client;
 use crate::acp::state::validate_prompt_support;
 use crate::output::print_message;
@@ -530,6 +530,9 @@ impl SessionActor {
         if self.prompts.is_running()
             && let Some(outcome) = event.turn_outcome()
         {
+            if let TurnOutcome::Failed { error, .. } = outcome {
+                error!("Turn failed: {error}");
+            }
             self.finish_turn(stop_reason(outcome)).await;
         }
     }
@@ -656,17 +659,6 @@ async fn run_idle_command(cwd: PathBuf, command: String) {
             }
         }
         Err(error) => error!(%error, %command, "Failed to spawn idle command"),
-    }
-}
-
-fn stop_reason(outcome: &TurnOutcome) -> acp::StopReason {
-    match outcome {
-        TurnOutcome::Completed => acp::StopReason::EndTurn,
-        TurnOutcome::Failed { error, .. } => {
-            error!("Turn failed: {error}");
-            acp::StopReason::EndTurn
-        }
-        TurnOutcome::Cancelled => acp::StopReason::Cancelled,
     }
 }
 

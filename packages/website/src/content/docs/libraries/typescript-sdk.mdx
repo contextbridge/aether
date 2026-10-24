@@ -145,7 +145,7 @@ Unlike `AetherSession.start()`, headless runs are non-interactive, so there are 
 | `session_update`       | An ACP session update (agent text, tool calls, tool results, progress, etc.). Access `.update`. |
 | `usage`                | Per-call token usage and estimated cost, plus cumulative session totals. Access `.usage`.       |
 | `elicitation_complete` | A URL-mode elicitation finished. Access `.elicitationId`.                                       |
-| `result`               | The prompt finished. `.stopReason` describes why (e.g. `end_turn`, `cancelled`).                |
+| `result`               | The prompt finished. `.stopReason` describes why (e.g. `end_turn`, `cancelled`, `error`).       |
 | `error`                | An unrecoverable error occurred. Access `.error`.                                               |
 
 A `result` message is always emitted last (unless the stream errors), so it is a reliable place to stop consuming the iterator.
