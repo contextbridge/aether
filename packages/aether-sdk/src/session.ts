@@ -1,7 +1,7 @@
 import type { AetherAcpOptions, SessionUsageEvent } from "./generated/types.js";
 import { addAbortListener } from "node:events";
 import path from "node:path";
-import * as acp from "@agentclientprotocol/sdk/experimental/v2";
+import * as acp from "@agentclientprotocol/sdk/experimental/v2/unstable";
 import { AsyncQueue } from "./asyncQueue.js";
 import {
   startAgent,
@@ -10,7 +10,7 @@ import {
 } from "./agentProcess.js";
 import { AetherSdkError, abortedError, throwIfAborted } from "./errors.js";
 import { SDK_VERSION } from "./generated/sdk-version.js";
-import type { AetherMessage, AgentSelection } from "./types.js";
+import type { AetherMessage, AgentSelection, StopReason } from "./types.js";
 
 export type PermissionRequestHandler = (
   request: acp.RequestPermissionRequest,
@@ -276,7 +276,7 @@ export class AetherSession {
 
 type Turn = {
   accepted: boolean;
-  stopReason?: acp.StopReason;
+  stopReason?: StopReason;
   completed: boolean;
 };
 

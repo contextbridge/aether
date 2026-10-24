@@ -28,7 +28,7 @@
   },
   "dependencies": {
     "@aether-agent/cli": "^0.9.20",
-    "@agentclientprotocol/sdk": "^1.3.0",
+    "@agentclientprotocol/sdk": "^2.0.1",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "express": "^5.1.0",
     "zod": "^4.4.3"

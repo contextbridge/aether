@@ -294,11 +294,8 @@ fn map_display_update_to_notification(request: &ToolCallRequest, meta: &ToolResu
 }
 
 fn tool_display_meta(value: &str) -> serde_json::Map<String, serde_json::Value> {
-    let mut meta = serde_json::Map::new();
-    if !value.is_empty() {
-        meta.insert("display_value".into(), value.into());
-    }
-    meta
+    let value = if value.is_empty() { serde_json::Value::Null } else { value.into() };
+    serde_json::Map::from_iter([("display_value".to_string(), value)])
 }
 
 fn to_sub_agent_event(event: &AgentEvent) -> Option<SubAgentEvent> {

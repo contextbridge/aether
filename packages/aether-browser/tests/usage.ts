@@ -13,7 +13,7 @@ import type {
   PromptResponse,
   SessionUpdate,
   ToolCallUpdate,
-} from "@agentclientprotocol/sdk/experimental/v2";
+} from "@agentclientprotocol/sdk/experimental/v2/unstable";
 
 export async function usage(url: string): Promise<string> {
   await init();

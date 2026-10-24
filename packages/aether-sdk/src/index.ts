@@ -25,9 +25,10 @@ export type {
   AgentSelection,
   AetherMessage,
   SdkMcpToolDefinition,
+  StopReason,
 } from "./types.js";
 export type { AetherSdkErrorCode } from "./errors.js";
 export { runCommand } from "./childProcess.js";
 export { resolveEnv } from "./processEnv.js";
 export type * from "./generated/types.js";
-export * as acp from "@agentclientprotocol/sdk/experimental/v2";
+export * as acp from "@agentclientprotocol/sdk/experimental/v2/unstable";

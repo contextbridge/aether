@@ -26,11 +26,11 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "peerDependencies": {
-    "@agentclientprotocol/sdk": "^1.5.0"
+    "@agentclientprotocol/sdk": "^2.0.1"
   },
   "devDependencies": {
     "@aether-agent/schema-codegen": "workspace:*",
-    "@agentclientprotocol/sdk": "^1.5.0",
+    "@agentclientprotocol/sdk": "^2.0.1",
     "typescript": "^7.0.2"
   }
 }
