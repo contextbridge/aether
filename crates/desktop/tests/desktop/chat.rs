@@ -2,6 +2,7 @@ use crate::support::{replying, texts};
 use acp_utils::testing::{FakeAgent, FakeAgentRequests};
 use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder};
 use aether_desktop::threads::{Thread, ThreadStatus};
+use agent_client_protocol as acp;
 use agent_client_protocol::schema::v2::NewSessionResponse;
 use gpui::{Entity, TestAppContext};
 use std::fs;
@@ -85,6 +86,22 @@ fn a_prompt_written_during_the_turn_brings_send_back_to_queue_it(cx: &mut TestAp
 
     assert_eq!(harness.composer_text(cx).as_deref(), Some(""));
     assert!(harness.bounds(cx, "stop").is_some(), "the emptied composer offers stop again");
+}
+
+#[gpui::test]
+fn every_prompt_the_agent_rejects_at_once_is_given_back(cx: &mut TestAppContext) {
+    let (harness, thread, mut requests) = working_thread(cx, "/alpha");
+    harness.simulate_input(cx, "and then this");
+    harness.click(cx, "send").unwrap();
+    harness.run_until(cx, |_| requests.prompt.len() == 2);
+
+    for _ in 0..2 {
+        let (_, responder) = requests.prompt.try_recv().unwrap();
+        responder.respond_with_error(acp::Error::internal_error()).unwrap();
+    }
+    harness.run_until(cx, |cx| thread.read(cx).core().is_some_and(|core| core.queued_prompts().is_empty()));
+
+    assert_eq!(harness.composer_text(cx).as_deref(), Some("work forever\nand then this"));
 }
 
 #[gpui::test]

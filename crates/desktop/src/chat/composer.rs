@@ -56,7 +56,7 @@ impl Composer {
         });
         let subscriptions = vec![
             cx.observe_in(&thread, window, |this, _, window, cx| {
-                this.restore_submission(window, cx);
+                this.restore_submissions(window, cx);
                 cx.notify();
             }),
             cx.subscribe(&input, |this, _, event: &InputEvent, cx| {
@@ -310,12 +310,13 @@ impl Composer {
     }
 
     /// Gives back a prompt the agent never received, below anything written since.
-    fn restore_submission(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(submission) = self.thread.update(cx, |thread, _| thread.take_restored_submission()) else {
+    fn restore_submissions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let submissions = self.thread.update(cx, |thread, _| thread.take_restored_submissions());
+        if submissions.is_empty() {
             return;
-        };
+        }
         let draft = self.input.read(cx).content();
-        let content = restored_content(&draft, &submission);
+        let content = submissions.iter().fold(draft, |draft, submission| restored_content(&draft, submission));
         self.input.update(cx, |input, cx| input.set_value(content, window, cx));
     }
 

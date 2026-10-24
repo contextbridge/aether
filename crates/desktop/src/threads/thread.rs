@@ -49,7 +49,7 @@ pub struct Thread {
     /// The question the agent waits on. Replacing or dropping it cancels the agent's request.
     elicitation: Option<PendingElicitation>,
     /// A prompt that never reached the agent, for the composer to give back.
-    restored_submission: Option<Submission>,
+    restored_submissions: Vec<Submission>,
     /// The agent's view of the working tree's changes, kept current for as long as the session is
     /// open so the Changes tab's count stays live.
     review: Option<Arc<ClientState>>,
@@ -83,7 +83,7 @@ impl Thread {
             core: None,
             connection: ThreadStatus::Connecting,
             elicitation: None,
-            restored_submission: None,
+            restored_submissions: Vec::new(),
             review: None,
             driver: None,
         };
@@ -169,12 +169,12 @@ impl Thread {
         }
     }
 
-    pub fn take_restored_submission(&mut self) -> Option<Submission> {
-        self.restored_submission.take()
+    pub fn take_restored_submissions(&mut self) -> Vec<Submission> {
+        std::mem::take(&mut self.restored_submissions)
     }
 
     /// Sends `text` as a prompt, queued behind any running turn. Unless the agent is connected,
-    /// the prompt is given back as the [restored submission](Self::take_restored_submission).
+    /// the prompt is given back as the [restored submission](Self::take_restored_submissions).
     pub fn submit(&mut self, text: impl Into<String>, cx: &mut Context<Self>) {
         self.send(Submission { text: text.into(), ..Submission::default() }, cx);
     }
@@ -183,7 +183,7 @@ impl Thread {
     pub fn send(&mut self, submission: Submission, cx: &mut Context<Self>) {
         match self.connected_core() {
             Some(core) => core.submit(submission),
-            None => self.restored_submission = Some(submission),
+            None => self.restored_submissions.push(submission),
         }
         self.apply(cx);
     }
@@ -301,7 +301,7 @@ impl Thread {
                     self.elicitation = Some(PendingElicitation { elicitation, responder });
                     cx.emit(ThreadEvent::NeedsInput);
                 }
-                Effect::RestoreSubmission(submission) => self.restored_submission = Some(submission),
+                Effect::RestoreSubmission(submission) => self.restored_submissions.push(submission),
                 Effect::ConnectionClosed => {
                     self.connection = ThreadStatus::Disconnected;
                     self.elicitation = None;
