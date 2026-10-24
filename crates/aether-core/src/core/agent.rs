@@ -1,5 +1,5 @@
 use crate::context::{
-    CompactionConfig, CompactionError, CompactionResult, Compactor, SessionUsageTracker, TokenTracker,
+    CompactionConfig, CompactionError, CompactionResult, Compactor, ContextRecorder, SessionUsageTracker, TokenTracker,
 };
 use crate::core::prompt_cache_key::derive_prompt_cache_key;
 use crate::core::queued_input::QueuedInput;
@@ -16,7 +16,7 @@ use crate::mcp::tool_bridge::call_tool;
 use futures::{FutureExt, Stream};
 use llm::{
     AssistantReply, ChatMessage, Context, LlmCallPurpose, LlmError, LlmModel, LlmResponse, MessageId, ModelIdentity,
-    StopReason, StreamingModelProvider, TokenUsage, ToolCallError, ToolCallRequest, ToolCallResult,
+    StopReason, StreamingModelProvider, TokenUsage, ToolCallRequest,
 };
 use mcp_utils::client::{ToolCallEvent, ToolCallOptions};
 use std::collections::VecDeque;
@@ -60,6 +60,7 @@ enum StreamKey {
 pub struct Agent {
     llm: Arc<dyn StreamingModelProvider>,
     context: Context,
+    recorder: ContextRecorder,
     mcp: McpCatalog,
     message_tx: mpsc::Sender<AgentEvent>,
     observers: Observers,
@@ -124,6 +125,7 @@ impl Agent {
         Ok(Self {
             llm,
             context,
+            recorder: ContextRecorder::default(),
             mcp,
             message_tx,
             observers: Observers(observers),
@@ -252,16 +254,16 @@ impl Agent {
     }
 
     async fn on_iteration_complete(&mut self, id: MessageId, iteration: IterationState) {
-        let IterationState { content, completed_tool_calls, stop_reason, .. } = iteration;
+        let IterationState { content, stop_reason, .. } = iteration;
         let message_content = content.text();
         let reasoning_summary_text = content.reasoning();
-        let has_tool_calls = !completed_tool_calls.is_empty();
+        let has_tool_calls = self.recorder.has_tool_results();
         let has_content = !message_content.is_empty() || !reasoning_summary_text.is_empty() || has_tool_calls;
         let should_auto_continue = self.auto_continue.should_continue(stop_reason.as_ref());
 
         if has_content {
             let model = self.active_model.clone();
-            let message = self.context.push_assistant_turn(id.clone(), model, content, completed_tool_calls).clone();
+            let message = self.recorder.reply(id.clone(), model, content);
             self.emit(AgentEvent::Context(ContextEvent::ReplyRecorded { message })).await;
 
             self.emit(AgentEvent::text(&id, &message_content, StreamState::Complete)).await;
@@ -325,7 +327,6 @@ impl Agent {
 
     async fn on_user_clear_context(&mut self, state: &mut IterationState) {
         self.discard_in_flight_work(state).await;
-        self.context.clear_conversation();
         self.token_tracker.reset_current_usage();
         self.emit(AgentEvent::Context(ContextEvent::Cleared)).await;
         self.finish_turn(TurnOutcome::Cancelled).await;
@@ -333,7 +334,7 @@ impl Agent {
 
     async fn on_replace_conversation(&mut self, messages: Vec<ChatMessage>, state: &mut IterationState) {
         self.discard_in_flight_work(state).await;
-        self.context.replace_conversation(messages);
+        self.recorder.replace(&mut self.context, messages);
         self.emit(self.context_usage_message()).await;
         self.finish_turn(TurnOutcome::Cancelled).await;
     }
@@ -479,7 +480,6 @@ impl Agent {
         let content = vec![llm::ContentBlock::text(format!(
             "<system-notification>The LLM API stopped with reason '{reason}'. Continue from where you left off and finish your task.</system-notification>"
         ))];
-        self.context.add_message(ChatMessage::user_with_id(message_id.clone(), content.clone()));
         self.emit(AgentEvent::Turn(TurnEvent::AutoContinue {
             attempt: self.auto_continue.count,
             max_attempts: self.auto_continue.max,
@@ -640,12 +640,10 @@ impl Agent {
         let compaction_outcome = match result {
             Ok(result) => {
                 tracing::info!("Context compacted: {} messages removed", result.messages_removed);
-                let message_id = MessageId::new();
-                self.context = self.context.with_compacted_summary(message_id.clone(), &result.summary);
                 self.token_tracker.reset_current_usage();
                 self.emit(AgentEvent::Context(ContextEvent::CompactionResult {
                     compaction_id: compaction_id.clone(),
-                    message_id,
+                    message_id: MessageId::new(),
                     summary: result.summary,
                     messages_removed: result.messages_removed,
                 }))
@@ -679,13 +677,8 @@ impl Agent {
                 }
                 self.emit(AgentEvent::Tool(event)).await;
             }
-            ToolExecutionUpdate::Completed { result, event } => {
+            ToolExecutionUpdate::Completed(event) => {
                 self.streams.remove(&StreamKey::Tool(tool_id));
-                state.completed_tool_calls.push(result);
-                self.emit(AgentEvent::Tool(event)).await;
-            }
-            ToolExecutionUpdate::TaskCreated { result, event } => {
-                state.completed_tool_calls.push(Ok(result));
                 self.emit(AgentEvent::Tool(event)).await;
             }
             ToolExecutionUpdate::TaskFinished(outcome) => {
@@ -706,7 +699,6 @@ impl Agent {
     }
 
     async fn record_task_outcome(&mut self, outcome: TaskOutcome) {
-        self.context.add_message(outcome.context_message());
         self.emit(AgentEvent::Tool(outcome.into())).await;
     }
 
@@ -736,7 +728,7 @@ impl Agent {
         for input in inputs {
             match input {
                 QueuedInput::User { message_id, content } => {
-                    self.context.add_message(ChatMessage::user_with_id(message_id.clone(), content));
+                    self.recorder.record_user_message(&mut self.context, message_id.clone(), content);
                     self.emit(AgentEvent::Turn(TurnEvent::UserMessageInserted { message_id })).await;
                 }
                 QueuedInput::TaskOutcome(outcome) => self.record_task_outcome(*outcome).await,
@@ -745,6 +737,7 @@ impl Agent {
     }
 
     async fn emit(&mut self, message: AgentEvent) {
+        self.recorder.record(&mut self.context, &message);
         self.observers.on_event(&message);
 
         if let Err(e) = self.message_tx.send(message).await {
@@ -815,7 +808,6 @@ impl AutoContinue {
 struct IterationState {
     current_message_id: Option<MessageId>,
     content: AssistantReply,
-    completed_tool_calls: Vec<Result<ToolCallResult, ToolCallError>>,
     llm_done: bool,
     stop_reason: Option<StopReason>,
     retry_attempt: u32,

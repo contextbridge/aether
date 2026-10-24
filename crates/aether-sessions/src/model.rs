@@ -23,7 +23,6 @@ pub enum UserEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         display_content: Option<Vec<ContentBlock>>,
     },
-    ClearContext,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -55,7 +54,7 @@ impl SessionEvent {
                 let text = ContentBlock::join_text(display_content.as_deref().unwrap_or(content));
                 (!text.is_empty()).then_some(text)
             }
-            Self::User(UserEvent::ClearContext) | Self::Agent(_) | Self::Control(_) => None,
+            Self::Agent(_) | Self::Control(_) => None,
         }
     }
 

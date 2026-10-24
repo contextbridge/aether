@@ -1410,7 +1410,10 @@ mod tests {
             }
         }
         let mut context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
-        context.push_assistant_turn(MessageId::new(), Some(model.clone()), reply, results);
+        context.add_message(ChatMessage::assistant_reply(MessageId::new(), Some(model.clone()), reply, &results));
+        for result in results {
+            context.add_message(ChatMessage::ToolCallResult(result));
+        }
         context.add_message(ChatMessage::user("Continue"));
 
         let (captured, _) = fixture.run(&context).await;

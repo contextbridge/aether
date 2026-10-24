@@ -1,11 +1,10 @@
 use serde::{Deserialize, Serialize};
 
-use crate::catalog::LlmModel;
 use crate::model_settings::ModelSettings;
 use crate::reasoning::ReasoningEffort;
 use crate::types::IsoString;
 
-use super::{AssistantReply, ChatMessage, MessageId, ToolCallError, ToolCallResult, ToolDefinition};
+use super::{ChatMessage, MessageId, ToolDefinition};
 
 #[doc = include_str!("docs/context.md")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,20 +114,6 @@ impl Context {
         u32::try_from(total_bytes / 4).unwrap_or(u32::MAX)
     }
 
-    pub fn push_assistant_turn(
-        &mut self,
-        message_id: MessageId,
-        model: Option<LlmModel>,
-        mut content: AssistantReply,
-        results: Vec<Result<ToolCallResult, ToolCallError>>,
-    ) -> &ChatMessage {
-        content.pair_tool_calls(&results);
-        let reply_index = self.messages.len();
-        self.messages.push(ChatMessage::Assistant { message_id, model, content, timestamp: IsoString::now() });
-        self.messages.extend(results.into_iter().map(ChatMessage::ToolCallResult));
-        &self.messages[reply_index]
-    }
-
     /// Clear all non-system messages, retaining only system prompts.
     pub fn clear_conversation(&mut self) {
         self.messages.retain(super::chat_message::ChatMessage::is_system);
@@ -174,8 +159,8 @@ impl Context {
 mod tests {
     use super::*;
 
-    use crate::AssistantContent;
     use crate::testing::assistant_message;
+    use crate::{AssistantContent, ToolCallResult};
 
     fn create_test_context() -> Context {
         let messages = vec![
@@ -388,42 +373,6 @@ mod tests {
         let compacted = ctx.with_compacted_summary(MessageId::new(), "Summary of conversation");
 
         assert!(compacted.messages().iter().all(|message| encrypted_reasoning(message).is_empty()));
-    }
-
-    #[test]
-    fn assistant_turn_pairs_every_tool_call_with_a_result() {
-        let mut ctx = Context::new(vec![], vec![]);
-        let model: LlmModel = "anthropic:claude-opus-4-6".parse().unwrap();
-        let content = assistant_message()
-            .tool_call("call_1", "read", "{}")
-            .tool_call("call_cancelled", "read", "{}")
-            .build_reply();
-
-        let result = ToolCallResult {
-            id: "call_1".to_string(),
-            name: "read".to_string(),
-            arguments: "{}".to_string(),
-            result: "ok".to_string(),
-        };
-        let error = ToolCallError {
-            id: "call_retried".to_string(),
-            name: "bash".to_string(),
-            arguments: None,
-            error: "failed".to_string(),
-        };
-
-        let recorded = ctx
-            .push_assistant_turn(MessageId::new(), Some(model.clone()), content, vec![Ok(result), Err(error)])
-            .clone();
-
-        assert_eq!(ctx.messages()[0], recorded);
-        assert_eq!(ctx.message_count(), 3);
-        let ChatMessage::Assistant { model: author, content, .. } = recorded else {
-            panic!("expected assistant message")
-        };
-        let ids: Vec<_> = content.tool_calls().map(|call| call.id.as_str()).collect();
-        assert_eq!(ids, ["call_1", "call_retried"]);
-        assert_eq!(author, Some(model));
     }
 
     fn encrypted_reasoning(message: &ChatMessage) -> Vec<&str> {

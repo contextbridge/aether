@@ -42,7 +42,7 @@ pub(crate) fn replay_to_client(events: &[SessionEvent], io: &SessionIo) {
                 )));
             }
             SessionEvent::Agent(message) => project_agent_event(message, NotificationMode::Replay, io),
-            SessionEvent::User(_) | SessionEvent::Control(_) => {}
+            SessionEvent::Control(_) => {}
         }
     }
 }

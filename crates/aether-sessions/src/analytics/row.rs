@@ -77,7 +77,6 @@ impl From<&SessionEvent> for EventProjection {
             SessionEvent::User(UserEvent::Message { message_id, .. }) => {
                 Self { message_id: Some(message_id.to_string()), ..Self::new("user", "user_message") }
             }
-            SessionEvent::User(UserEvent::ClearContext) => Self::new("user", "clear_context"),
             SessionEvent::Control(SessionControlEvent::AgentSwitched { .. }) => Self::new("control", "agent_switched"),
             SessionEvent::Agent(event) => Self::from(event),
         }

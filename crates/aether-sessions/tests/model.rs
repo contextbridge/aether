@@ -4,7 +4,7 @@ use aether_core::events::{
 };
 use aether_sessions::model::last_session_usage;
 use aether_sessions::testing::{agent_switched, tool_call, turn_ended, user_message};
-use aether_sessions::{SessionEvent, UserEvent, last_agent_from_events};
+use aether_sessions::{SessionEvent, last_agent_from_events};
 use llm::testing::session_usage_event;
 use llm::{LlmCallPurpose, SessionUsageEvent, TokenUsage};
 
@@ -99,7 +99,7 @@ fn content_helpers_extract_user_text_only() {
 
     assert_eq!(message.user_content().as_deref(), Some("Hello"));
     assert_eq!(message.content().as_deref(), Some("Hello"));
-    assert!(SessionEvent::User(UserEvent::ClearContext).content().is_none());
+    assert!(agent_switched(None, Some("coder")).content().is_none());
 }
 
 #[test]

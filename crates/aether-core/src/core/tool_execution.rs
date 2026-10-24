@@ -1,6 +1,6 @@
-use crate::events::{SubAgentProgressPayload, TaskOutcome, ToolEvent, task_created_result};
+use crate::events::{SubAgentProgressPayload, TaskOutcome, ToolEvent};
 use crate::mcp::tool_bridge::{ToolRejection, convert_tool_result, map_task_result_to_outcome};
-use llm::{ToolCallError, ToolCallRequest, ToolCallResult};
+use llm::{ToolCallError, ToolCallRequest};
 use mcp_utils::client::{CancellationToken, ToolCallEvent};
 use rmcp::model::ProgressNotificationParam;
 use std::collections::HashMap;
@@ -15,8 +15,7 @@ pub(super) struct ToolExecutions {
 
 pub(super) enum ToolExecutionUpdate {
     Event(ToolEvent),
-    TaskCreated { result: ToolCallResult, event: ToolEvent },
-    Completed { result: Result<ToolCallResult, ToolCallError>, event: ToolEvent },
+    Completed(ToolEvent),
     TaskFinished(TaskOutcome),
     Retired,
     Ignored,
@@ -88,11 +87,11 @@ impl ToolExecutions {
                 }
                 let task_id = task.task.task_id.clone();
                 execution.phase = ToolExecutionPhase::Background { task_id: task_id.clone(), cancelling: false };
-                let request = execution.request.clone();
-                ToolExecutionUpdate::TaskCreated {
-                    result: task_created_result(&request, &task_id),
-                    event: ToolEvent::TaskCreated { request, task_id, status_message: task.task.status_message },
-                }
+                ToolExecutionUpdate::Event(ToolEvent::TaskCreated {
+                    request: execution.request.clone(),
+                    task_id,
+                    status_message: task.task.status_message,
+                })
             }
             ToolCallEvent::TaskStatus(task) => {
                 let Some(execution) = self.executions.get(tool_id) else {
@@ -115,14 +114,10 @@ impl ToolExecutions {
                 match phase {
                     ToolExecutionPhase::Retiring => ToolExecutionUpdate::Retired,
                     ToolExecutionPhase::Foreground => match convert_tool_result(&request, result, &self.spill_dir) {
-                        Ok((result, result_meta)) => ToolExecutionUpdate::Completed {
-                            result: Ok(result.clone()),
-                            event: ToolEvent::Result { result, result_meta },
-                        },
-                        Err(error) => ToolExecutionUpdate::Completed {
-                            result: Err(error.clone()),
-                            event: ToolEvent::Error { error },
-                        },
+                        Ok((result, result_meta)) => {
+                            ToolExecutionUpdate::Completed(ToolEvent::Result { result, result_meta })
+                        }
+                        Err(error) => ToolExecutionUpdate::Completed(ToolEvent::Error { error }),
                     },
                     ToolExecutionPhase::Background { task_id, .. } => {
                         let outcome = map_task_result_to_outcome(request, task_id, result, &self.spill_dir);
@@ -139,7 +134,7 @@ impl ToolExecutions {
             return ToolExecutionUpdate::Ignored;
         };
         let error = ToolCallError::from_request(&execution.request, rejection.to_string());
-        ToolExecutionUpdate::Completed { result: Err(error.clone()), event: ToolEvent::Error { error } }
+        ToolExecutionUpdate::Completed(ToolEvent::Error { error })
     }
 
     pub(super) fn retire_foreground(&mut self) {
