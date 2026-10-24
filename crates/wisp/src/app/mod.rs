@@ -22,7 +22,7 @@ use crate::theme::Theme;
 use crate::view::generation::Generation;
 use acp_utils::client::AcpEvent;
 use acp_utils::conversation::{Conversation, ConversationId, ConversationItem};
-use acp_utils::notifications::AetherCapabilities;
+use acp_utils::notifications::{AetherCapabilities, AetherMeta};
 use agent_client_protocol::schema::v2::PlanEntry;
 use agent_client_protocol::schema::v2::{self as acp};
 use std::collections::VecDeque;

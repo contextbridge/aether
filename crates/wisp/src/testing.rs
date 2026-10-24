@@ -28,7 +28,8 @@ use crate::view::syntax::SyntaxHighlighter;
 use acp_utils::client::AcpEvent;
 use acp_utils::content::display_content_blocks;
 use acp_utils::notifications::{
-    AetherCapabilities, ContextClearedParams, SubAgentEvent, SubAgentProgressParams, WorkspaceStatusResponse,
+    AetherCapabilities, AetherMeta, ContextClearedParams, SubAgentEvent, SubAgentProgressParams,
+    WorkspaceStatusResponse,
 };
 use acp_utils::testing::{idle_notification, running_notification};
 use agent_client_protocol::schema::MaybeUndefined;
@@ -1274,7 +1275,7 @@ impl TestUiBuilder {
         let session_capabilities = self
             .session_capabilities
             .clone()
-            .unwrap_or_else(|| acp::SessionCapabilities::new().meta(Some(self.capabilities.clone().to_meta())));
+            .unwrap_or_else(|| acp::SessionCapabilities::new().meta(Some(self.capabilities.to_meta())));
         AppConfig {
             initialize_response: acp::InitializeResponse::new(
                 agent_client_protocol::schema::ProtocolVersion::V2,

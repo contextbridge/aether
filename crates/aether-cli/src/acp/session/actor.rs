@@ -556,9 +556,7 @@ impl SessionActor {
     async fn finish_turn(&mut self, reason: acp::StopReason) {
         info!("Turn completed, stop reason: {reason:?}");
         self.prompts.turn_ended();
-        self.io.send_update(acp::SessionUpdate::StateUpdate(acp::StateUpdate::Idle(
-            acp::IdleStateUpdate::new().stop_reason(reason),
-        )));
+        self.io.send_update(SessionUpdate::StateUpdate(StateUpdate::Idle(IdleStateUpdate::new().stop_reason(reason))));
         self.settle().await;
     }
 

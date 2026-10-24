@@ -1,7 +1,7 @@
 use super::agent::acp_agent_builder;
 use super::protocol::notify;
 use acp_utils::notifications::{
-    AetherCapabilities, AuthMethodsUpdatedParams, GitDiffClosePayload, GitDiffCommandPayload, McpRequest,
+    AetherCapabilities, AetherMeta, AuthMethodsUpdatedParams, GitDiffClosePayload, GitDiffCommandPayload, McpRequest,
     PromptSearchParams, PromptSearchResponse, RemoteServerInfo, SessionDisplayMeta, SessionPreviewParams,
     SessionPreviewResponse, WorkspaceListParams, WorkspaceListResponse, WorkspaceMoveParams, WorkspaceMoveResponse,
     WorkspaceStatusPayload, WorkspaceStatusResponse,

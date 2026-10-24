@@ -5,13 +5,13 @@ pub use fake_agent::{FakeAgent, FakeAgentRequests};
 
 use crate::notifications::{AuthMethodsUpdatedParams, GitDiffEventPayload, McpNotification};
 pub use agent_client_protocol::Channel;
-use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v2::{
     CompleteElicitationNotification, CreateElicitationRequest, CreateElicitationResponse, ElicitationFormMode,
     ElicitationSchema, ElicitationSessionScope, IdleStateUpdate, Implementation, InitializeRequest, InitializeResponse,
     PlanEntry, PlanId, PlanUpdate, PlanUpdateContent, RunningStateUpdate, SessionId, SessionUpdate, StateUpdate,
     StopReason, UpdateSessionNotification,
 };
+use agent_client_protocol::schema::{IntoOption, ProtocolVersion};
 use agent_client_protocol::{
     self as acp, Agent, Client, ConnectionTo, HandleConnectionClose, HandleDispatchFrom, NullRun, Responder,
     RunWithConnectionTo, V2Builder,
@@ -224,12 +224,17 @@ pub fn initialize_response() -> InitializeResponse {
     InitializeResponse::new(ProtocolVersion::V2, Implementation::new("test-agent", "0.0.0"))
 }
 
+pub fn running_state() -> StateUpdate {
+    StateUpdate::Running(RunningStateUpdate::new())
+}
+
+pub fn idle_state(stop_reason: impl IntoOption<StopReason>) -> StateUpdate {
+    StateUpdate::Idle(IdleStateUpdate::new().stop_reason(stop_reason))
+}
+
 /// A live foreground turn has started.
 pub fn running_notification(session_id: impl Into<SessionId>) -> UpdateSessionNotification {
-    UpdateSessionNotification::new(
-        session_id,
-        SessionUpdate::StateUpdate(StateUpdate::Running(RunningStateUpdate::new())),
-    )
+    UpdateSessionNotification::new(session_id, SessionUpdate::StateUpdate(running_state()))
 }
 
 /// Foreground work is idle, optionally with a reported stop reason.
@@ -237,10 +242,7 @@ pub fn idle_notification(
     session_id: impl Into<SessionId>,
     stop_reason: Option<StopReason>,
 ) -> UpdateSessionNotification {
-    UpdateSessionNotification::new(
-        session_id,
-        SessionUpdate::StateUpdate(StateUpdate::Idle(IdleStateUpdate::new().stop_reason(stop_reason))),
-    )
+    UpdateSessionNotification::new(session_id, SessionUpdate::StateUpdate(idle_state(stop_reason)))
 }
 
 /// Replace the entries of an agent-owned plan.

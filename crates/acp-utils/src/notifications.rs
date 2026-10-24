@@ -7,6 +7,7 @@ use agent_client_protocol::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse
 use clankerdiff_protocol::client::ClientCommand;
 use clankerdiff_protocol::shared::{DocumentUpdate, Event};
 use schemars::JsonSchema;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 pub use utils::display_meta::{ToolDisplayMeta, ToolResultMeta};
 pub use utils::mcp_status::{McpServerAuthCapability, McpServerStatus, McpServerStatusEntry};
@@ -14,6 +15,18 @@ pub use utils::mcp_status::{McpServerAuthCapability, McpServerStatus, McpServerS
 use utils::meta::{from_meta, to_meta};
 
 pub const AETHER_META_NAMESPACE: &str = "contextbridge/aether";
+
+pub trait AetherMeta: Serialize + DeserializeOwned + Default {
+    #[must_use]
+    fn to_meta(&self) -> Meta {
+        to_meta(self, Some(AETHER_META_NAMESPACE)).unwrap_or_default()
+    }
+
+    #[must_use]
+    fn from_meta(meta: Option<&Meta>) -> Self {
+        from_meta(meta, Some(AETHER_META_NAMESPACE))
+    }
+}
 
 /// Remote host discovery, advertised on the initialize response only.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
@@ -188,17 +201,9 @@ impl SessionDisplayMeta {
     pub fn new(model: impl Into<String>, selected_mode: Option<String>) -> Self {
         Self { model: Some(model.into()), selected_mode }
     }
-
-    #[must_use]
-    pub fn to_meta(&self) -> Meta {
-        to_meta(self, Some(AETHER_META_NAMESPACE)).unwrap_or_default()
-    }
-
-    #[must_use]
-    pub fn from_meta(meta: Option<&Meta>) -> Self {
-        from_meta(meta, Some(AETHER_META_NAMESPACE))
-    }
 }
+
+impl AetherMeta for SessionDisplayMeta {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
@@ -211,17 +216,7 @@ pub struct AetherCapabilities {
     pub workspace_move: bool,
 }
 
-impl AetherCapabilities {
-    #[must_use]
-    pub fn to_meta(self) -> Meta {
-        to_meta(&self, Some(AETHER_META_NAMESPACE)).unwrap_or_default()
-    }
-
-    #[must_use]
-    pub fn from_meta(meta: Option<&Meta>) -> Self {
-        from_meta(meta, Some(AETHER_META_NAMESPACE))
-    }
-}
+impl AetherMeta for AetherCapabilities {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonRpcNotification)]
 #[notification(method = "_aether/git_diff")]
