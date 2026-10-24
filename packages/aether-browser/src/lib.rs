@@ -29,7 +29,7 @@ import type {
   PromptResponse,
   ResumeSessionRequest,
   ResumeSessionResponse,
-} from "@agentclientprotocol/sdk/experimental/v2";
+} from "@agentclientprotocol/sdk/experimental/v2/unstable";
 import type {
   AetherClientErrorDetails,
   AetherClientEvent,

@@ -87,8 +87,9 @@ impl Connection {
                 let session_id = request.session_id.clone();
                 self.open(session_id.clone());
                 Some(pending(handle.request(request), move |connection, response| {
-                    if response.is_err() {
-                        connection.end(&session_id);
+                    match &response {
+                        Ok(_) => connection.resumed(&session_id),
+                        Err(_) => connection.end(&session_id),
                     }
                     reply.respond(response);
                 }))
@@ -142,7 +143,7 @@ impl Connection {
     }
 
     fn current_session(&self) -> Result<SessionId, ClientError> {
-        self.current.as_ref().map(|tracked| tracked.session_id.clone()).ok_or(ClientError::NoSession)
+        self.current.as_ref().map(|tracked| tracked.session_id().clone()).ok_or(ClientError::NoSession)
     }
 
     fn open(&mut self, session_id: SessionId) {
@@ -151,15 +152,20 @@ impl Connection {
     }
 
     fn end(&mut self, session_id: &SessionId) {
-        if self.current.take_if(|tracked| tracked.session_id == *session_id).is_some() {
+        if self.current.take_if(|tracked| tracked.session_id() == session_id).is_some() {
             self.emit(to_js(&AetherClientEvent::ConversationChanged { conversation: None }));
         }
     }
 
+    fn resumed(&mut self, session_id: &SessionId) {
+        if let Some(tracked) = self.current.as_mut().filter(|tracked| tracked.session_id() == session_id) {
+            tracked.conversation.unconfirm_sub_agents();
+            self.flush();
+        }
+    }
+
     fn reduce(&mut self, event: &AcpEvent) {
-        if let Some(tracked) = self.current.as_mut()
-            && event.session_id().is_none_or(|session_id| *session_id == tracked.session_id)
-        {
+        if let Some(tracked) = self.current.as_mut() {
             tracked.conversation.apply_event(event);
         }
     }
@@ -174,7 +180,6 @@ impl Connection {
                 to_js(&AetherClientEvent::ElicitationRequest { elicitation: elicitation.into() })
             }
             AcpEvent::ContextCleared(params) => to_js(&AetherClientEvent::ContextCleared { params: &params }),
-            AcpEvent::SubAgentProgress(params) => to_js(&AetherClientEvent::SubAgentProgress { params: &params }),
             AcpEvent::AuthMethodsUpdated(params) => to_js(&AetherClientEvent::AuthMethodsUpdated { params: &params }),
             AcpEvent::McpNotification(params) => to_js(&AetherClientEvent::McpNotification { params: &params }),
             AcpEvent::GitDiffEvent(params) => to_js(&AetherClientEvent::GitDiffEvent { params: &params }),

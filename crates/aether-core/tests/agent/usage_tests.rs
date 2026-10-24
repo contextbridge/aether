@@ -171,7 +171,7 @@ async fn sub_agent_usage_is_folded_into_the_parent_totals_before_the_tool_result
     let mut child_usage = session_usage_event(9, TokenUsage::new(8, 4));
     child_usage.source = UsageSource::new("explorer");
     let payload = SubAgentProgressPayload {
-        task_id: "task_0".to_string(),
+        session_id: "child".to_string(),
         agent_name: "explorer".to_string(),
         event: AgentEvent::SessionUsage(child_usage.clone()),
     };
@@ -199,7 +199,7 @@ async fn sub_agent_usage_is_folded_into_the_parent_totals_before_the_tool_result
     assert_eq!(folded.source.agent_id, child_usage.source.agent_id);
     assert_eq!(folded.source.agent_name, "explorer");
     assert_eq!(folded.source.parent_agent_id.as_deref(), Some(own.source.agent_id.as_str()));
-    assert_eq!(folded.source.task_id.as_deref(), Some("task_0"));
+    assert_eq!(folded.source.sub_agent_session_id.as_deref(), Some("child"));
     assert_eq!(folded.tokens, child_usage.tokens);
     assert_eq!(folded.totals.tokens, child_usage.tokens);
     assert_eq!(own.sequence, 2);
@@ -208,15 +208,15 @@ async fn sub_agent_usage_is_folded_into_the_parent_totals_before_the_tool_result
     assert_eq!(own.totals.unpriced_calls, 2);
 
     let folded_index = position(&events, |event| matches!(event, AgentEvent::SessionUsage(_)));
-    let typed_progress_index = position(
-        &events,
-        |event| matches!(event, AgentEvent::Tool(ToolEvent::SubAgentProgress { request, payload: seen }) if request.id == "spawn-call" && **seen == payload),
-    );
     let result_index = position(
         &events,
         |event| matches!(event, AgentEvent::Tool(ToolEvent::Result { result, .. }) if result.id == "spawn-call"),
     );
-    assert!(folded_index < typed_progress_index && typed_progress_index < result_index);
+    assert!(folded_index < result_index);
+    assert!(
+        !events.iter().any(|event| matches!(event, AgentEvent::Tool(ToolEvent::SubAgentProgress { .. }))),
+        "the folded sample replaces the child's own"
+    );
     assert!(
         !events.iter().any(
             |event| matches!(event, AgentEvent::Tool(ToolEvent::Progress { request, .. }) if request.id == "spawn-call")

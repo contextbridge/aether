@@ -147,7 +147,7 @@ mod tests {
             AgentEvent::Tool(ToolEvent::SubAgentProgress {
                 request: llm::ToolCallRequest { id: "call".into(), name: "spawn".into(), arguments: "{}".into() },
                 payload: Box::new(crate::events::SubAgentProgressPayload {
-                    task_id: "task_0".into(),
+                    session_id: "session_0".into(),
                     agent_name: "explorer".into(),
                     event: AgentEvent::turn_ended(TurnOutcome::Completed),
                 }),

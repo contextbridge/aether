@@ -1,7 +1,7 @@
 use super::agent::acp_agent_builder;
 use super::protocol::notify;
 use acp_utils::notifications::{
-    AetherCapabilities, AuthMethodsUpdatedParams, GitDiffClosePayload, GitDiffCommandPayload, McpRequest,
+    AetherCapabilities, AetherMeta, AuthMethodsUpdatedParams, GitDiffClosePayload, GitDiffCommandPayload, McpRequest,
     PromptSearchParams, PromptSearchResponse, RemoteServerInfo, SessionDisplayMeta, SessionPreviewParams,
     SessionPreviewResponse, WorkspaceListParams, WorkspaceListResponse, WorkspaceMoveParams, WorkspaceMoveResponse,
     WorkspaceStatusPayload, WorkspaceStatusResponse,
@@ -124,6 +124,11 @@ impl AcpState {
     #[cfg(any(test, feature = "testing"))]
     pub(crate) fn client_slot(&self) -> &ClientSlot {
         &self.client_slot
+    }
+
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) fn sub_agents(&self) -> &aether_core::core::SubAgentSessions {
+        self.factory.sub_agents()
     }
 
     pub(crate) async fn serve(
@@ -462,6 +467,9 @@ impl AcpState {
     pub(crate) async fn cancel(&self, args: CancelSessionNotification) -> Result<(), Error> {
         info!("Received cancel for session: {:?}", args.session_id);
         let session_id = args.session_id.0.to_string();
+        if self.factory.sub_agents().cancel(&session_id) {
+            return Ok(());
+        }
         self.send_command(&session_id, SessionCommand::Cancel).await
     }
 

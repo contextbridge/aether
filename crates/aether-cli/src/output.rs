@@ -100,12 +100,8 @@ fn format_text(message: &AgentEvent) -> Option<String> {
         AgentEvent::Tool(ToolEvent::DisplayUpdate { request, meta }) => {
             Some(format!("Tool progress [{}]: {} - {}", request.name, meta.display.title, meta.display.value))
         }
-        AgentEvent::Tool(ToolEvent::SubAgentProgress { payload, .. }) => match &payload.event {
-            AgentEvent::SessionUsage(_) => None,
-            event => {
-                format_text(event).map(|text| format!("Sub-agent {} [{}]: {text}", payload.agent_name, payload.task_id))
-            }
-        },
+        AgentEvent::Tool(ToolEvent::SubAgentProgress { payload, .. }) => format_text(&payload.event)
+            .map(|text| format!("Sub-agent {} [{}]: {text}", payload.agent_name, payload.session_id)),
         AgentEvent::Context(ContextEvent::CompactionStarted { message_count, .. }) => {
             Some(format!("Context compaction started ({message_count} messages)"))
         }

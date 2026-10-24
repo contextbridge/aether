@@ -6,7 +6,7 @@ await generateTypes({
   cargo: ["-p", "aether-browser", "--example", "typescript_schema"],
   output: resolve(import.meta.dirname, "../pkg/types.d.ts"),
   external: {
-    from: "@agentclientprotocol/sdk/experimental/v2",
+    from: "@agentclientprotocol/sdk/experimental/v2/unstable",
     schema: createRequire(import.meta.url).resolve(
       "@agentclientprotocol/sdk/schema/v2/schema.unstable.json",
     ),

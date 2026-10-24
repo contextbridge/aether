@@ -2,7 +2,7 @@ use super::AgentEvent;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// A sub-agent's event, tagged with the task and agent it came from.
+/// A sub-agent's event, tagged with the session and agent it came from.
 ///
 /// `mcp-subagents` serializes this into MCP progress notification messages.
 /// The parent agent parses it once at the tool-execution boundary into
@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 /// event instead of JSON in a string.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct SubAgentProgressPayload {
-    pub task_id: String,
+    pub session_id: String,
     pub agent_name: String,
     pub event: AgentEvent,
 }
@@ -23,7 +23,7 @@ mod tests {
     #[test]
     fn test_sub_agent_progress_payload_roundtrip() {
         let payload = SubAgentProgressPayload {
-            task_id: "task_123".to_string(),
+            session_id: "session_123".to_string(),
             agent_name: "explorer".to_string(),
             event: AgentEvent::turn_ended(TurnOutcome::Completed),
         };

@@ -1,7 +1,7 @@
 alter table events add column usage_sequence integer;
 alter table events add column agent_id text;
 alter table events add column parent_agent_id text;
-alter table events add column task_id text;
+alter table events add column sub_agent_session_id text;
 alter table events add column agent_name text;
 alter table events add column call_purpose text;
 alter table events add column provider text;

@@ -6,14 +6,13 @@ import init, {
   type ConversationItem,
   type Elicitation,
   type RemoteServerInfo,
-  type SubAgentEvent,
+  type SubAgent,
 } from "@aether-agent/browser";
-import type {
-  CreateElicitationRequest,
-  PromptResponse,
+import {
   SessionUpdate,
-  ToolCallUpdate,
-} from "@agentclientprotocol/sdk/experimental/v2";
+  type CreateElicitationRequest,
+  type PromptResponse,
+} from "@agentclientprotocol/sdk/experimental/v2/unstable";
 
 export async function usage(url: string): Promise<string> {
   await init();
@@ -51,25 +50,14 @@ export function closeCode(error: AetherClientError): number | undefined {
   return error.close?.code;
 }
 
-export function subAgentToolCallId(event: SubAgentEvent): string | undefined {
-  switch (event.type) {
-    case "started":
-    case "done":
-      return undefined;
-    case "tool_call_update": {
-      const update: ToolCallUpdate = event;
-      return update.toolCallId;
-    }
-  }
+export function announcedSubAgent(update: SessionUpdate): string | undefined {
+  return SessionUpdate.isSubagentUpdate(update) ? update.sessionId : undefined;
 }
 
 function onEvent(event: AetherClientEvent): void {
   switch (event.type) {
     case "session_update":
       render(event.notification.update);
-      break;
-    case "sub_agent_progress":
-      console.log(event.params.parentToolId, event.params.event.type);
       break;
     case "mcp_notification":
       console.log(event.params.servers.map((server) => server.status.type));
@@ -112,11 +100,18 @@ function describe(item: ConversationItem): string {
         .join("");
     case "tool": {
       const { status, subAgents, toolCall } = item.content;
-      return `${toolCall.title ?? "tool"}: ${status} (${subAgents.length} sub-agents)`;
+      return `${toolCall.title ?? "tool"}: ${status} (${subAgents.map(describeSubAgent).join(", ")})`;
     }
     case "notice":
       return item.content;
   }
+}
+
+function describeSubAgent(agent: SubAgent): string {
+  const toolCalls = agent.items.filter((item) => item.kind === "tool");
+  const { sessionId, title, description, capabilities } = agent.subagent;
+  const cancel = capabilities?.cancel ? ", cancellable" : "";
+  return `${title ?? "sub-agent"} (${description ?? "no description"}${cancel}) [${sessionId}]: ${agent.status ?? "unconfirmed"} after ${toolCalls.length} tool calls`;
 }
 
 function render(update: SessionUpdate): void {

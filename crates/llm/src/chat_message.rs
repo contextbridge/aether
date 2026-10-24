@@ -116,6 +116,16 @@ impl ChatMessage {
         Self::User { message_id, content, timestamp: IsoString::now() }
     }
 
+    pub fn assistant_reply(
+        message_id: MessageId,
+        model: Option<LlmModel>,
+        mut content: AssistantReply,
+        results: &[Result<ToolCallResult, ToolCallError>],
+    ) -> Self {
+        content.pair_tool_calls(results);
+        Self::Assistant { message_id, model, content, timestamp: IsoString::now() }
+    }
+
     /// Identity of every message that can be addressed by clients; system prompts have none.
     pub fn message_id(&self) -> Option<MessageId> {
         match self {
@@ -184,6 +194,35 @@ impl ChatMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn assistant_reply_pairs_every_tool_call_with_a_result() {
+        let model: LlmModel = "anthropic:claude-opus-4-6".parse().unwrap();
+        let content = crate::testing::assistant_message()
+            .tool_call("call_1", "read", "{}")
+            .tool_call("call_cancelled", "read", "{}")
+            .build_reply();
+        let result = ToolCallResult {
+            id: "call_1".to_string(),
+            name: "read".to_string(),
+            arguments: "{}".to_string(),
+            result: "ok".to_string(),
+        };
+        let error = ToolCallError {
+            id: "call_retried".to_string(),
+            name: "bash".to_string(),
+            arguments: None,
+            error: "failed".to_string(),
+        };
+
+        let reply =
+            ChatMessage::assistant_reply(MessageId::new(), Some(model.clone()), content, &[Ok(result), Err(error)]);
+
+        let ChatMessage::Assistant { model: author, content, .. } = reply else { panic!("expected assistant message") };
+        let ids: Vec<_> = content.tool_calls().map(|call| call.id.as_str()).collect();
+        assert_eq!(ids, ["call_1", "call_retried"]);
+        assert_eq!(author, Some(model));
+    }
 
     #[test]
     fn first_text_returns_first_non_empty_text_block() {
