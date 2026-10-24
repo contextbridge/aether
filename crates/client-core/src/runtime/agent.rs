@@ -18,7 +18,7 @@ pub(super) fn execute<T: Send + 'static>(
 ) -> Option<CommandResult<T>> {
     match command {
         AgentCommand::Prompt { request_id, session_id, text, content } => {
-            let mut prompt = vec![ContentBlock::from(text)];
+            let mut prompt: Vec<_> = (!text.trim().is_empty()).then(|| ContentBlock::from(text)).into_iter().collect();
             prompt.extend(content.into_iter().flatten());
             let response = handle.request(PromptRequest::new(session_id, prompt));
             tasks.submit_network(async move {
