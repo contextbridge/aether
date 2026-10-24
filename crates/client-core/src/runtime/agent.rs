@@ -91,11 +91,11 @@ fn prompt_rejection(error: AcpClientError) -> PromptRejection {
     }
 }
 
-fn submit_request<T: Send + 'static, R: JsonRpcRequest + Send + 'static>(
+fn submit_request<T: Send + 'static, U: JsonRpcRequest + Send + 'static>(
     handle: &AcpClientHandle,
     tasks: &mut TaskSupervisor<T>,
-    request: R,
-    complete: impl FnOnce(Result<R::Response, String>) -> CommandResult<T> + Send + 'static,
+    request: U,
+    complete: impl FnOnce(Result<U::Response, String>) -> CommandResult<T> + Send + 'static,
 ) {
     let response = handle.request(request);
     tasks.submit_network(async move { complete(response.await.map_err(|error| error.to_string())) });

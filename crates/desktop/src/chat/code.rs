@@ -17,7 +17,7 @@ impl SharedHighlighter {
     }
 
     /// Lends the highlighter to `highlight`. Rendering never re-enters it, so it is never lent twice.
-    pub(crate) fn with<R>(&self, highlight: impl FnOnce(&mut SyntaxHighlighter) -> R) -> R {
+    pub(crate) fn with<T>(&self, highlight: impl FnOnce(&mut SyntaxHighlighter) -> T) -> T {
         highlight(&mut self.0.lock().unwrap_or_else(PoisonError::into_inner))
     }
 }

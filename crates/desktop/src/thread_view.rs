@@ -32,16 +32,6 @@ pub(crate) struct ThreadView {
     _subscriptions: Vec<Subscription>,
 }
 
-/// What the header shows of the thread.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Header {
-    title: String,
-    changes_label: String,
-    /// Whether the agent waits on an artifact review, which the Review tab shows.
-    reviewing: bool,
-    sidebar_collapsed: bool,
-}
-
 /// What a thread's main area shows. The Review tab exists only while the agent waits on a review.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ThreadTab {
@@ -225,6 +215,16 @@ impl Render for ThreadView {
         };
         div().size_full().flex().flex_col().child(header).child(body)
     }
+}
+
+/// What the header shows of the thread.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Header {
+    title: String,
+    changes_label: String,
+    /// Whether the agent waits on an artifact review, which the Review tab shows.
+    reviewing: bool,
+    sidebar_collapsed: bool,
 }
 
 impl Header {
