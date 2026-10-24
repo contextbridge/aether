@@ -31,7 +31,6 @@ let context = Context::new(
 # Managing messages
 
 - [`add_message`](Context::add_message) -- Append a single message.
-- [`push_assistant_turn`](Context::push_assistant_turn) -- Append an assistant reply, the model that wrote it, and its tool call results in one step.
 - [`clear_conversation`](Context::clear_conversation) -- Remove all non-system messages.
 
 # Conversation compaction
