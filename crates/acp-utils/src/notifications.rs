@@ -2,7 +2,7 @@
 //! notifications.
 use std::path::PathBuf;
 
-use agent_client_protocol::schema::v2::{AuthMethod, Meta, SessionId, ToolCallUpdate};
+use agent_client_protocol::schema::v2::{AuthMethod, Meta, SessionId, ToolCallId};
 use agent_client_protocol::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 use clankerdiff_protocol::client::ClientCommand;
 use clankerdiff_protocol::shared::{DocumentUpdate, Event};
@@ -274,27 +274,21 @@ pub enum McpRequest {
     Authenticate { session_id: String, server_name: String },
 }
 
-/// Parameters for `_aether/sub_agent_progress` notifications.
-///
-/// This is the wire format sent from the ACP server (`aether-cli`) to clients like `wisp`.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, JsonRpcNotification)]
-#[notification(method = "_aether/sub_agent_progress")]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct SubAgentProgressParams {
-    pub session_id: SessionId,
-    pub parent_tool_id: String,
-    pub task_id: String,
-    pub agent_name: String,
-    pub event: SubAgentEvent,
+pub struct SubAgentMeta {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<ToolCallId>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum SubAgentEvent {
-    Started,
-    ToolCallUpdate(Box<ToolCallUpdate>),
-    Done,
+impl SubAgentMeta {
+    #[must_use]
+    pub fn new(tool_call_id: impl Into<ToolCallId>) -> Self {
+        Self { tool_call_id: Some(tool_call_id.into()) }
+    }
 }
+
+impl AetherMeta for SubAgentMeta {}
 
 #[derive(Default, Serialize, Deserialize)]
 struct RemoteInitializationMeta {

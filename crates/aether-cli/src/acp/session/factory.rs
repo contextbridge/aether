@@ -1,6 +1,6 @@
 use aether_auth::OAuthCredentialStorage;
 use aether_core::agent_spec::AgentSpec;
-use aether_core::core::AgentDeps;
+use aether_core::core::{AgentDeps, SubAgentSessions};
 use aether_core::events::DynObserverFactory;
 use aether_project::AgentCatalog;
 use aether_sessions::model::{SessionEvent, SessionMeta, last_agent_from_events};
@@ -70,6 +70,10 @@ impl SessionFactory {
 
     pub(crate) async fn available_models(&self) -> Arc<[LlmModel]> {
         Arc::clone(self.available.get_or_init(async || get_local_models().await.into()).await)
+    }
+
+    pub(crate) fn sub_agents(&self) -> &SubAgentSessions {
+        &self.agent_deps.sub_agents
     }
 
     pub(crate) async fn forget_cached_credentials(&self) {

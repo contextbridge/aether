@@ -27,11 +27,9 @@ use crate::view::generation::Generation;
 use crate::view::syntax::SyntaxHighlighter;
 use acp_utils::client::AcpEvent;
 use acp_utils::content::display_content_blocks;
-use acp_utils::notifications::{
-    AetherCapabilities, AetherMeta, ContextClearedParams, SubAgentEvent, SubAgentProgressParams,
-    WorkspaceStatusResponse,
-};
-use acp_utils::testing::{idle_notification, running_notification};
+use acp_utils::notifications::{AetherCapabilities, AetherMeta, ContextClearedParams, WorkspaceStatusResponse};
+pub use acp_utils::testing::sub_agent_tool_update;
+use acp_utils::testing::{announced, idle_notification, idle_state, running_notification, running_state};
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::schema::v2::{self as acp, SessionId, SessionUpdate, ToolCallUpdate};
 use clankerdiff_core::git_patch_from_texts;
@@ -984,24 +982,21 @@ where
         self.acp_event(seed_spawn_tool(&parent));
         self.acp_event(tool_completed(&parent));
         for agent in ["explorer", "fixer"] {
-            let task = format!("{parent}-{agent}");
-            let grep = format!("{task}-grep");
+            let session = format!("{parent}-{agent}");
+            let grep = format!("{session}-grep");
+            self.acp_event(sub_agent_started(&parent, &session, agent));
             self.acp_event(sub_agent_tool_update(
-                &parent,
-                &task,
-                agent,
+                session.as_str(),
                 ToolCallUpdate::new(grep.clone())
                     .title("Grep")
                     .name("coding__grep")
                     .raw_input(json!({ "pattern": "torn update" })),
             ));
             self.acp_event(sub_agent_tool_update(
-                &parent,
-                &task,
-                agent,
+                session.as_str(),
                 ToolCallUpdate::new(grep).status(acp::ToolCallStatus::Completed),
             ));
-            self.acp_event(sub_agent_progress(&parent, &task, agent, SubAgentEvent::Done));
+            self.acp_event(sub_agent_finished(&parent, &session, agent, acp::StopReason::EndTurn));
         }
     }
 
@@ -1427,18 +1422,13 @@ pub fn text_diff(path: &str, old: &str, new: &str) -> acp::Diff {
         .with_patch(diff_text.map(acp::DiffPatch::new))
 }
 
-pub fn sub_agent_progress(parent: &str, task: &str, agent: &str, event: SubAgentEvent) -> AcpEvent {
-    AcpEvent::SubAgentProgress(SubAgentProgressParams {
-        session_id: SessionId::new("test-session"),
-        parent_tool_id: parent.to_string(),
-        task_id: task.to_string(),
-        agent_name: agent.to_string(),
-        event,
-    })
+pub fn sub_agent_started(parent: &str, session: &str, agent: &str) -> AcpEvent {
+    announced("test-session", parent, acp::SubagentUpdate::new(session).title(agent).state(running_state())).into()
 }
 
-pub fn sub_agent_tool_update(parent: &str, task: &str, agent: &str, update: ToolCallUpdate) -> AcpEvent {
-    sub_agent_progress(parent, task, agent, SubAgentEvent::ToolCallUpdate(Box::new(update)))
+pub fn sub_agent_finished(parent: &str, session: &str, agent: &str, stop_reason: acp::StopReason) -> AcpEvent {
+    announced("test-session", parent, acp::SubagentUpdate::new(session).title(agent).state(idle_state(stop_reason)))
+        .into()
 }
 
 pub fn tool_completed(id: &str) -> AcpEvent {

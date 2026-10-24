@@ -18,9 +18,10 @@ use acp_utils::notifications::McpNotification;
 use acp_utils::testing::{TestPeer, initialize_request};
 use aether_auth::OAuthCredentialStorage;
 use aether_core::agent_spec::{AgentSpec, AgentSpecExposure};
-use aether_core::core::{AgentBuilder, AgentDeps, Prompt};
+use aether_core::core::{AgentBuilder, AgentDeps, Prompt, SubAgentSession};
 use aether_core::events::{
-    AgentEvent, AgentObserver, Command, ContextEvent, MessageEvent, StreamState, TurnOutcome, UserCommand,
+    AgentEvent, AgentObserver, Command, ContextEvent, MessageEvent, StreamState, SubAgentProgressPayload, TurnOutcome,
+    UserCommand,
 };
 use aether_core::mcp::{McpBuilder, McpCatalog, mcp};
 use aether_core::testing::ready_catalog;
@@ -113,6 +114,10 @@ pub struct FakeBackgroundTask {
     server: FakeMcpServer,
 }
 
+pub struct FakeSubAgents {
+    server: FakeMcpServer,
+}
+
 /// Builds a session served by one fake agent; see [`AcpTestHarness::session`].
 pub struct TestSessionBuilder<'a> {
     harness: &'a AcpTestHarness,
@@ -142,6 +147,11 @@ impl TestSessionBuilder<'_> {
         self.servers.push(ServerSpec::in_process("tasks", task.server.clone()));
         self.servers.push(ServerSpec::in_process("prompts", prompts));
         self.max_auto_continues = Some(0);
+        self
+    }
+
+    pub fn sub_agents(mut self, sub_agents: &FakeSubAgents) -> Self {
+        self.servers.push(ServerSpec::in_process("subagents", sub_agents.server.clone()));
         self
     }
 
@@ -217,6 +227,10 @@ impl AcpTestHarness {
         let (sender, receiver) = mpsc::unbounded_channel();
         self.runtime_control.lock().unwrap().elicitation_results = Some(sender);
         receiver
+    }
+
+    pub fn start_sub_agent(&self) -> SubAgentSession {
+        self.state.sub_agents().open()
     }
 
     pub fn live_runtime_count(&self) -> usize {
@@ -712,6 +726,21 @@ impl FakeBackgroundTask {
 impl Default for FakeBackgroundTask {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl FakeSubAgents {
+    pub const TOOL: &str = "subagents__spawn_subagent";
+
+    pub fn new(progress: impl IntoIterator<Item = SubAgentProgressPayload>) -> Self {
+        let response = progress.into_iter().zip(0..).fold(
+            FakeToolResponse::text("sub-agents finished"),
+            |response, (payload, step)| {
+                response
+                    .progress_message(f64::from(step), serde_json::to_string(&payload).expect("progress serializes"))
+            },
+        );
+        Self { server: FakeMcpServer::new().with_tool(FakeTool::new("spawn_subagent").responds(response)) }
     }
 }
 

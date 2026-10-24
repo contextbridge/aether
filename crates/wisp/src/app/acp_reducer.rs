@@ -15,8 +15,7 @@ impl App {
     #[allow(clippy::too_many_lines)]
     pub fn on_acp_event(&mut self, event: AcpEvent) {
         let current = self.is_current(&event);
-        if current
-            && let Some(TurnFinished { stop_reason }) = self.conversation.apply_event(&event)
+        if let Some(TurnFinished { stop_reason }) = self.conversation.apply_event(&event)
             && stop_reason != Some(acp::StopReason::Cancelled)
             && self.queued_prompts.is_empty()
         {
@@ -63,7 +62,7 @@ impl App {
                 }
             }
             AcpEvent::ConnectionClosed => self.on_connection_closed(),
-            AcpEvent::SessionUpdate(_) | AcpEvent::ContextCleared(_) | AcpEvent::SubAgentProgress(_) => {}
+            AcpEvent::SessionUpdate(_) | AcpEvent::ContextCleared(_) => {}
         }
     }
 
@@ -98,6 +97,7 @@ impl App {
             _ => return,
         }
         self.session.update_config_options(response.config_options);
+        self.conversation.unconfirm_sub_agents();
         if matches!(self.foreground, ForegroundOperation::LoadingWorkspaceSession { .. }) {
             self.notify(&format!("Moved to {}", self.session.working_dir().display()));
         }
@@ -117,6 +117,7 @@ impl App {
         };
         self.close_elicitation_owner();
         self.return_to_conversation();
+        self.conversation.reset(session_id.clone());
         self.session.set_session(session_id, config_options);
         self.restore_config_selections(&previous_selections);
     }

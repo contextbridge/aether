@@ -1,16 +1,14 @@
-use crate::notifications::{SubAgentEvent, SubAgentProgressParams};
+use super::{Conversation, ConversationContent, ConversationItem};
+use crate::client::AcpEvent;
 use agent_client_protocol::schema::{MaybeUndefined, v2 as acp};
-use schemars::JsonSchema;
-use serde::Serialize;
+use schemars::{JsonSchema, Schema, SchemaGenerator};
+use serde::{Serialize, Serializer};
+use std::borrow::Cow;
 
-/// Per-sub-agent state: tracks its tool calls in arrival order.
-#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct SubAgentState {
-    pub task_id: String,
-    pub agent_name: String,
-    pub done: bool,
-    pub tool_calls: Vec<ToolCall>,
+#[derive(Debug, Clone, PartialEq)]
+pub struct SubAgent {
+    announcement: acp::SubagentUpdate,
+    conversation: Conversation,
 }
 
 /// A tool call as the merge of every update the agent sent for it.
@@ -18,7 +16,7 @@ pub struct SubAgentState {
 #[serde(rename_all = "camelCase")]
 pub struct ToolCall {
     pub status: ToolStatus,
-    pub sub_agents: Vec<SubAgentState>,
+    pub sub_agents: Vec<SubAgent>,
     #[serde(rename = "toolCall")]
     protocol: Box<acp::ToolCallUpdate>,
 }
@@ -73,9 +71,11 @@ impl ToolCall {
         tool
     }
 
-    pub(super) fn apply_update(&mut self, update: &acp::ToolCallUpdate) {
+    pub(super) fn apply_update(&mut self, update: &acp::ToolCallUpdate) -> bool {
+        let (protocol, status) = (self.protocol.clone(), self.status);
         self.protocol.apply_update(update.clone());
         self.refresh_status();
+        self.protocol != protocol || self.status != status
     }
 
     pub(super) fn append_content(&mut self, content: acp::ToolCallContent) {
@@ -85,8 +85,28 @@ impl ToolCall {
         }
     }
 
-    pub(super) fn apply_sub_agent_progress(&mut self, notification: &SubAgentProgressParams) {
-        apply_sub_agent_progress(&mut self.sub_agents, notification);
+    pub(super) fn announce_sub_agent(&mut self, update: &acp::SubagentUpdate) -> bool {
+        if let Some(agent) = self.sub_agents.iter_mut().find(|agent| *agent.session_id() == update.session_id) {
+            return agent.announce(update);
+        }
+        self.sub_agents.push(SubAgent::new(update));
+        true
+    }
+
+    pub(super) fn tracks(&self, session_id: &acp::SessionId) -> bool {
+        self.sub_agents.iter().any(|agent| agent.tracks(session_id))
+    }
+
+    pub(super) fn apply_sub_agent_event(&mut self, session_id: &acp::SessionId, event: &AcpEvent) -> bool {
+        self.sub_agents.iter_mut().find(|agent| agent.tracks(session_id)).is_some_and(|agent| agent.apply_event(event))
+    }
+
+    pub(super) fn unconfirm_sub_agents(&mut self) -> bool {
+        let mut changed = false;
+        for agent in &mut self.sub_agents {
+            changed |= agent.unconfirm();
+        }
+        changed
     }
 
     pub(super) fn finalize(&mut self, status: ToolStatus) {
@@ -94,20 +114,24 @@ impl ToolCall {
             self.status = status;
         }
         for agent in &mut self.sub_agents {
-            agent.done = true;
-            for call in &mut agent.tool_calls {
-                call.finalize(status);
-            }
+            agent.finalize(status);
         }
     }
 
     pub(super) fn is_running(&self) -> bool {
-        self.status == ToolStatus::Running
-            || self.sub_agents.iter().any(|agent| !agent.done || agent.tool_calls.iter().any(ToolCall::is_running))
+        self.status == ToolStatus::Running || self.sub_agents.iter().any(SubAgent::is_running)
+    }
+
+    pub(super) fn is_settled(&self) -> bool {
+        self.status != ToolStatus::Running && self.sub_agents.iter().all(SubAgent::is_settled)
+    }
+
+    pub(super) fn runs_in_background(&self) -> bool {
+        self.status != ToolStatus::Running && !self.is_settled()
     }
 
     pub(super) fn rendering_final(&self) -> bool {
-        !self.is_running() && (self.kind() != ToolKind::SpawnSubagent || !self.sub_agents.is_empty())
+        self.is_settled() && (self.kind() != ToolKind::SpawnSubagent || !self.sub_agents.is_empty())
     }
 
     fn kind(&self) -> ToolKind {
@@ -128,27 +152,125 @@ impl ToolCall {
     }
 }
 
-fn apply_sub_agent_progress(states: &mut Vec<SubAgentState>, notification: &SubAgentProgressParams) {
-    let index = states.iter().position(|agent| agent.task_id == notification.task_id).unwrap_or_else(|| {
-        states.push(SubAgentState {
-            task_id: notification.task_id.clone(),
-            agent_name: notification.agent_name.clone(),
-            done: false,
-            tool_calls: Vec::new(),
-        });
-        states.len() - 1
-    });
-    let agent = &mut states[index];
+impl SubAgent {
+    pub fn session_id(&self) -> &acp::SessionId {
+        &self.announcement.session_id
+    }
 
-    match &notification.event {
-        SubAgentEvent::Started => {}
-        SubAgentEvent::ToolCallUpdate(update) => {
-            match agent.tool_calls.iter_mut().find(|call| call.protocol.tool_call_id == update.tool_call_id) {
-                Some(call) => call.apply_update(update),
-                None => agent.tool_calls.push(ToolCall::from_update(update)),
+    pub fn title(&self) -> Option<&str> {
+        self.announcement.title.value().map(String::as_str)
+    }
+
+    pub fn status(&self) -> Option<ToolStatus> {
+        self.conversation.work.status()
+    }
+
+    pub fn items(&self) -> &[ConversationItem] {
+        self.conversation.items()
+    }
+
+    pub fn tool_calls(&self) -> impl Iterator<Item = &ToolCall> {
+        self.items().iter().filter_map(|item| match item.content() {
+            ConversationContent::Tool(tool_call) => Some(tool_call),
+            _ => None,
+        })
+    }
+
+    fn new(update: &acp::SubagentUpdate) -> Self {
+        let mut agent = Self {
+            announcement: acp::SubagentUpdate::new(update.session_id.clone()),
+            conversation: Conversation::new(update.session_id.clone()),
+        };
+        agent.announce(update);
+        agent
+    }
+
+    fn announce(&mut self, update: &acp::SubagentUpdate) -> bool {
+        let previous = self.announcement.clone();
+        patch(&mut self.announcement.title, &update.title);
+        patch(&mut self.announcement.description, &update.description);
+        patch(&mut self.announcement.capabilities, &update.capabilities);
+        acp::apply_meta_update(&mut self.announcement.meta, update.meta.clone());
+        let reported = self.revises(|conversation| match &update.state {
+            MaybeUndefined::Value(state) => {
+                conversation.apply_update(&acp::SessionUpdate::StateUpdate(state.clone()));
             }
+            MaybeUndefined::Null => conversation.forget_work(),
+            MaybeUndefined::Undefined => {}
+        });
+        self.announcement != previous || reported
+    }
+
+    fn tracks(&self, session_id: &acp::SessionId) -> bool {
+        self.conversation.tracks(session_id)
+    }
+
+    fn apply_event(&mut self, event: &AcpEvent) -> bool {
+        self.revises(|conversation| {
+            conversation.apply_event(event);
+        })
+    }
+
+    fn unconfirm(&mut self) -> bool {
+        self.revises(Conversation::unconfirm)
+    }
+
+    fn finalize(&mut self, status: ToolStatus) {
+        self.conversation.seal(status);
+    }
+
+    fn is_running(&self) -> bool {
+        self.status() == Some(ToolStatus::Running) || self.conversation.any_running()
+    }
+
+    fn is_settled(&self) -> bool {
+        self.conversation.is_settled()
+    }
+
+    fn revises(&mut self, apply: impl FnOnce(&mut Conversation)) -> bool {
+        let revision = self.conversation.revision();
+        apply(&mut self.conversation);
+        self.conversation.revision() != revision
+    }
+}
+
+impl Serialize for SubAgent {
+    fn serialize<T: Serializer>(&self, serializer: T) -> Result<T::Ok, T::Error> {
+        SubAgentJson { subagent: &self.announcement, status: self.status(), items: self.items() }.serialize(serializer)
+    }
+}
+
+impl JsonSchema for SubAgent {
+    fn schema_name() -> Cow<'static, str> {
+        "SubAgent".into()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        SubAgentJson::json_schema(generator)
+    }
+}
+
+impl From<Option<&acp::StopReason>> for ToolStatus {
+    fn from(stop_reason: Option<&acp::StopReason>) -> Self {
+        match stop_reason {
+            Some(acp::StopReason::Cancelled) => Self::Cancelled,
+            Some(acp::StopReason::Error(_) | acp::StopReason::Refusal) => Self::Failed,
+            _ => Self::Success,
         }
-        SubAgentEvent::Done => agent.done = true,
+    }
+}
+
+#[derive(Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct SubAgentJson<'a> {
+    subagent: &'a acp::SubagentUpdate,
+    status: Option<ToolStatus>,
+    items: &'a [ConversationItem],
+}
+
+fn patch<T: Clone>(stored: &mut MaybeUndefined<T>, update: &MaybeUndefined<T>) {
+    if !update.is_undefined() {
+        stored.clone_from(update);
     }
 }
 

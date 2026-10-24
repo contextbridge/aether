@@ -172,6 +172,10 @@ impl SessionIo {
         &self.session_id
     }
 
+    pub(crate) fn for_session(&self, session_id: SessionId) -> Self {
+        Self { connection: self.connection.clone(), session_id }
+    }
+
     pub(crate) fn send_update(&self, update: acp::SessionUpdate) {
         self.send(acp::UpdateSessionNotification::new(self.session_id.clone(), update));
     }
