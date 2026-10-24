@@ -61,55 +61,7 @@ impl SessionEvent {
     pub fn is_persisted(&self) -> bool {
         match self {
             Self::User(_) | Self::Control(_) => true,
-            Self::Agent(event) => match event {
-                AgentEvent::Message(
-                    MessageEvent::Text { is_complete, .. } | MessageEvent::Thought { is_complete, .. },
-                ) => *is_complete,
-                AgentEvent::Tool(
-                    ToolEvent::Call { .. }
-                    | ToolEvent::Result { .. }
-                    | ToolEvent::Error { .. }
-                    | ToolEvent::TaskCreated { .. }
-                    | ToolEvent::TaskCompleted { .. }
-                    | ToolEvent::TaskFailed { .. }
-                    | ToolEvent::TaskCancelled { .. },
-                )
-                | AgentEvent::Turn(
-                    TurnEvent::RetryScheduled { .. }
-                    | TurnEvent::AutoContinue { .. }
-                    | TurnEvent::Ended { .. }
-                    | TurnEvent::LlmCallEnded { outcome: LlmCallOutcome::Failed { .. }, .. },
-                )
-                | AgentEvent::Context(
-                    ContextEvent::CompactionStarted { .. }
-                    | ContextEvent::CompactionEnded { .. }
-                    | ContextEvent::CompactionResult { .. }
-                    | ContextEvent::UsageUpdated { .. }
-                    | ContextEvent::Cleared
-                    | ContextEvent::ReplyRecorded { .. },
-                )
-                | AgentEvent::Model(ModelEvent::Switched { .. })
-                | AgentEvent::SessionUsage(_) => true,
-                AgentEvent::Tool(
-                    ToolEvent::InputStarted { .. }
-                    | ToolEvent::InputDelta { .. }
-                    | ToolEvent::Progress { .. }
-                    | ToolEvent::DisplayUpdate { .. }
-                    | ToolEvent::SubAgentProgress { .. }
-                    | ToolEvent::TaskStatus { .. }
-                    | ToolEvent::DefinitionsUpdated { .. },
-                )
-                | AgentEvent::Turn(
-                    TurnEvent::Started { .. }
-                    | TurnEvent::UserMessageInserted { .. }
-                    | TurnEvent::UserMessageDiscarded { .. }
-                    | TurnEvent::LlmCallStarted { .. }
-                    | TurnEvent::LlmCallEnded {
-                        outcome: LlmCallOutcome::Completed { .. } | LlmCallOutcome::Cancelled,
-                        ..
-                    },
-                ) => false,
-            },
+            Self::Agent(event) => is_persisted(event),
         }
     }
 }
@@ -131,4 +83,56 @@ pub fn last_agent_from_events(initial: Option<String>, events: &[SessionEvent]) 
             _ => None,
         })
         .unwrap_or(initial)
+}
+
+fn is_persisted(event: &AgentEvent) -> bool {
+    match event {
+        AgentEvent::Message(MessageEvent::Text { is_complete, .. } | MessageEvent::Thought { is_complete, .. }) => {
+            *is_complete
+        }
+        AgentEvent::Tool(ToolEvent::SubAgentProgress { payload, .. }) => match &payload.event {
+            AgentEvent::Turn(TurnEvent::Started { .. }) => true,
+            event => is_persisted(event),
+        },
+        AgentEvent::Tool(
+            ToolEvent::Call { .. }
+            | ToolEvent::Result { .. }
+            | ToolEvent::Error { .. }
+            | ToolEvent::TaskCreated { .. }
+            | ToolEvent::TaskCompleted { .. }
+            | ToolEvent::TaskFailed { .. }
+            | ToolEvent::TaskCancelled { .. },
+        )
+        | AgentEvent::Turn(
+            TurnEvent::RetryScheduled { .. }
+            | TurnEvent::AutoContinue { .. }
+            | TurnEvent::Ended { .. }
+            | TurnEvent::LlmCallEnded { outcome: LlmCallOutcome::Failed { .. }, .. },
+        )
+        | AgentEvent::Context(
+            ContextEvent::CompactionStarted { .. }
+            | ContextEvent::CompactionEnded { .. }
+            | ContextEvent::CompactionResult { .. }
+            | ContextEvent::UsageUpdated { .. }
+            | ContextEvent::Cleared
+            | ContextEvent::ReplyRecorded { .. },
+        )
+        | AgentEvent::Model(ModelEvent::Switched { .. })
+        | AgentEvent::SessionUsage(_) => true,
+        AgentEvent::Tool(
+            ToolEvent::InputStarted { .. }
+            | ToolEvent::InputDelta { .. }
+            | ToolEvent::Progress { .. }
+            | ToolEvent::DisplayUpdate { .. }
+            | ToolEvent::TaskStatus { .. }
+            | ToolEvent::DefinitionsUpdated { .. },
+        )
+        | AgentEvent::Turn(
+            TurnEvent::Started { .. }
+            | TurnEvent::UserMessageInserted { .. }
+            | TurnEvent::UserMessageDiscarded { .. }
+            | TurnEvent::LlmCallStarted { .. }
+            | TurnEvent::LlmCallEnded { outcome: LlmCallOutcome::Completed { .. } | LlmCallOutcome::Cancelled, .. },
+        ) => false,
+    }
 }

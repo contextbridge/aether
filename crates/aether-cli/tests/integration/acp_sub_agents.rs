@@ -1,6 +1,7 @@
 use acp_utils::testing::{announced, idle_notification, idle_state, running_notification, running_state};
 use aether_cli::acp::testing::{AcpTestHarness, FakeSubAgents};
 use aether_core::events::{AgentEvent, StreamState, SubAgentProgressPayload, ToolEvent, TurnEvent, TurnOutcome};
+use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::schema::v2::{
     self as acp, CancelSessionNotification, SessionId, SessionUpdate, StateUpdate, UpdateSessionNotification,
 };
@@ -77,6 +78,36 @@ async fn nested_sub_agents_are_announced_on_the_sub_agent_that_spawned_them() {
     let notifications = spawn_sub_agents([sub_agent(nested)]).await;
 
     assert_eq!(notifications, spawned("child", "child-spawn", "grandchild", "Dig deeper"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn replaying_a_session_restores_its_sub_agents_from_the_log() {
+    let sub_agents = FakeSubAgents::new([
+        sub_agent(started("Find the bug")),
+        sub_agent(AgentEvent::text("reply", "Fou", StreamState::Partial)),
+        sub_agent(AgentEvent::text("reply", "Found it", StreamState::Complete)),
+        sub_agent(AgentEvent::turn_ended(TurnOutcome::Completed)),
+    ]);
+
+    let (live, replayed) = AcpTestHarness::run(|mut harness| async move {
+        let parent = delegate(&mut harness, &sub_agents).await;
+        let live = sub_agent_notifications(&mut harness, &parent).await;
+        harness.resume_with_replay(&parent).await;
+        (live, sub_agent_notifications(&mut harness, &parent).await)
+    })
+    .await;
+
+    let not_cancellable = |mut notification: UpdateSessionNotification| {
+        if let SessionUpdate::SubagentUpdate(update) = &mut notification.update {
+            update.capabilities = MaybeUndefined::Undefined;
+        }
+        notification
+    };
+    let streamed =
+        |notification: &UpdateSessionNotification| matches!(notification.update, SessionUpdate::AgentMessageChunk(_));
+    let expected: Vec<_> =
+        live.into_iter().filter(|notification| !streamed(notification)).map(not_cancellable).collect();
+    assert_eq!(replayed, expected, "a replayed sub-agent is no longer live, so it cannot be cancelled");
 }
 
 #[tokio::test(flavor = "current_thread")]

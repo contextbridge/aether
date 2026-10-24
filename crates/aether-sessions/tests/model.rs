@@ -47,7 +47,7 @@ fn persisted_event_policy_covers_representative_variants() {
         payload: Box::new(SubAgentProgressPayload {
             session_id: "child".into(),
             agent_name: "explorer".into(),
-            event: AgentEvent::SessionUsage(session_usage(2, 6)),
+            event: AgentEvent::text("message", "partial", StreamState::Partial),
         }),
     }));
 
@@ -57,6 +57,27 @@ fn persisted_event_policy_covers_representative_variants() {
     assert!(usage.is_persisted());
     assert!(!partial.is_persisted());
     assert!(!sub_agent_progress.is_persisted());
+}
+
+#[test]
+fn a_sub_agent_transcript_is_persisted_like_its_parents() {
+    let sub_agent = |event| {
+        SessionEvent::Agent(AgentEvent::Tool(ToolEvent::SubAgentProgress {
+            request: llm::ToolCallRequest { id: "call".into(), name: "spawn".into(), arguments: "{}".into() },
+            payload: Box::new(SubAgentProgressPayload {
+                session_id: "child".into(),
+                agent_name: "explorer".into(),
+                event,
+            }),
+        }))
+    };
+
+    let task = AgentEvent::Turn(TurnEvent::Started { content: vec![llm::ContentBlock::text("Find the bug")] });
+    assert!(sub_agent(task).is_persisted(), "a sub-agent's task arrives with its turn");
+    assert!(sub_agent(AgentEvent::text("reply", "Found it", StreamState::Complete)).is_persisted());
+    assert!(sub_agent(AgentEvent::tool_call("grep", "coding__grep", "{}")).is_persisted());
+    assert!(sub_agent(AgentEvent::turn_ended(TurnOutcome::Completed)).is_persisted());
+    assert!(!sub_agent(AgentEvent::text("reply", "Fou", StreamState::Partial)).is_persisted());
 }
 
 #[test]
