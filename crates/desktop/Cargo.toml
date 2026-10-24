@@ -73,6 +73,7 @@ tracing-subscriber = { workspace = true }
 utils = { package = "aether-utils", path = "../utils", version = "0.3.0" }
 
 [dev-dependencies]
+base64 = { workspace = true }
 clankerdiff-server = { workspace = true }
 client_core = { package = "aether-client-core", path = "../client-core", features = ["testing"], version = "0.1.0" }
 tempfile = { workspace = true }

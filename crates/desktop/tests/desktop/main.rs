@@ -1,4 +1,5 @@
 mod agents;
+mod attachments;
 mod attention;
 mod changes;
 mod chat;

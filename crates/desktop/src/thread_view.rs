@@ -8,7 +8,7 @@ use crate::theme::DesktopTheme;
 use crate::threads::{Thread, ThreadEvent};
 use crate::ui::tokens::{BAR_HEIGHT, rem};
 use crate::ui::{Button, ButtonVariant, IconName, Typography, TypographyExt};
-use gpui::{App, AppContext, Context, Entity, StyleRefinement, Subscription, Window, div, prelude::*};
+use gpui::{App, AppContext, Context, Entity, ExternalPaths, StyleRefinement, Subscription, Window, div, prelude::*};
 
 /// One thread's main area: a header naming the thread and its project, above either its chat
 /// (with any question its agent waits on), the changes it made to the working tree, or the
@@ -202,6 +202,13 @@ impl Render for ThreadView {
                 .min_h_0()
                 .flex()
                 .flex_col()
+                .drag_over::<ExternalPaths>(move |style, _, _, _| style.bg(theme.colors.accent.opacity(DROP_TINT)))
+                .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                    this.composer.update(cx, |composer, cx| {
+                        composer.attach(paths.paths(), window, cx);
+                        composer.focus(window, cx);
+                    });
+                }))
                 .child(self.transcript.clone().cached(StyleRefinement::default().flex_1().min_h_0().w_full()))
                 .child(self.plan.clone())
                 .child(self.elicitation.clone())
@@ -216,6 +223,8 @@ impl Render for ThreadView {
         div().size_full().flex().flex_col().child(header).child(body)
     }
 }
+
+const DROP_TINT: f32 = 0.08;
 
 /// What the header shows of the thread.
 #[derive(Debug, Clone, PartialEq, Eq)]

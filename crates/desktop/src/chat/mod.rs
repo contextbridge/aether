@@ -1,6 +1,7 @@
 //! A thread's chat: its transcript, the agent's plan, and the composer that sends the next
 //! prompt.
 
+mod attachments;
 mod code;
 mod completion;
 mod composer;

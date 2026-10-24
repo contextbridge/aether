@@ -1,3 +1,4 @@
+use super::attachments::{PastedImages, attachment_chip};
 use super::completion::{ActiveToken, CompletionItem, CompletionMenu, Trigger};
 use super::footer::{config_selector, context_meter, queued_prompts};
 use super::prompt_search::{PromptSearch, PromptSearchOutcome};
@@ -6,18 +7,20 @@ use crate::theme::DesktopTheme;
 use crate::threads::{Thread, ThreadStatus};
 use crate::ui::tokens::{CONTENT_MAX_WIDTH, GROUP_HEIGHT, rem};
 use crate::ui::{IconButton, IconName, PickerItem, SearchPicker, SearchPickerEvent, SurfaceExt};
-use client_core::composer::attachment::PromptAttachment;
+use client_core::composer::attachment::{AttachmentKind, PromptAttachment, classify_attachment};
 use client_core::composer::prompt_history::PromptHistory;
 use client_core::composer::submission::Submission;
 use client_core::session_core::SessionCore;
+use client_core::workspace_status::WorkspaceAccess;
 use gpui::{
-    App, ClickEvent, Context, Div, Entity, Focusable, MouseButton, SharedString, Stateful, Subscription, Window,
-    actions, div, prelude::*,
+    App, ClickEvent, ClipboardEntry, ClipboardItem, Context, Div, Entity, Focusable, MouseButton, PathPromptOptions,
+    SharedString, Stateful, Subscription, Window, actions, div, prelude::*,
 };
 use gpui_base::input::{
-    Enter, Escape, IndentInline, InlineToken, InputContent, InputEvent, MoveDown, MoveUp, Textarea, TextareaState,
+    Backspace, Enter, Escape, IndentInline, InlineToken, InputContent, InputEvent, MoveDown, MoveUp, Paste, Textarea,
+    TextareaState,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 actions!(desktop, [SearchPrompts]);
 
@@ -40,6 +43,8 @@ pub(crate) struct Composer {
     dismissed: Option<usize>,
     search: Option<(Entity<PromptSearch>, Subscription)>,
     config_picker: Option<OpenPicker>,
+    media: Vec<PromptAttachment>,
+    pasted: PastedImages,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -89,6 +94,8 @@ impl Composer {
             dismissed: None,
             search: None,
             config_picker: None,
+            media: Vec::new(),
+            pasted: PastedImages::default(),
             _subscriptions: subscriptions,
         }
     }
@@ -99,6 +106,35 @@ impl Composer {
 
     pub(crate) fn focus(&self, window: &mut Window, cx: &mut App) {
         self.input.update(cx, |input, cx| input.focus(window, cx));
+    }
+
+    pub(crate) fn attach(&mut self, paths: &[PathBuf], window: &mut Window, cx: &mut Context<Self>) {
+        let remote = self
+            .thread
+            .read(cx)
+            .core()
+            .is_some_and(|core| core.session().workspace_access() == WorkspaceAccess::Remote);
+        let root = self.root(cx);
+        let mut refused = Vec::new();
+        for path in paths {
+            let attachment = PromptAttachment { path: path.clone(), display_name: display_name(path, &root) };
+            match path.is_file().then(|| classify_attachment(path)) {
+                Some(AttachmentKind::Image | AttachmentKind::Audio) => self.add_media(attachment),
+                Some(AttachmentKind::Text) => self.input.update(cx, |input, cx| {
+                    let mention = InlineToken::new(path.to_string_lossy().into_owned(), mention_text(&attachment));
+                    if input.replace_with_token(mention, window, cx).is_ok() {
+                        input.insert(" ", window, cx);
+                    }
+                }),
+                _ if remote => refused.push(attachment.display_name),
+                _ => self.input.update(cx, |input, cx| input.insert(format!("{} ", path.display()), window, cx)),
+            }
+        }
+        if !refused.is_empty() {
+            let message = format!("Can't attach folders or binary files to a remote agent: {}", refused.join(", "));
+            self.thread.update(cx, |thread, cx| thread.notice(&message, cx));
+        }
+        cx.notify();
     }
 
     /// Completes the token being typed with the menu's entry at `position`: a file becomes a
@@ -137,16 +173,59 @@ impl Composer {
     fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let content = self.input.read(cx).content();
         let text = content.text().to_string();
-        if text.trim().is_empty() {
+        if text.trim().is_empty() && self.media.is_empty() {
             return;
         }
-        let submission = Submission { text, mentions: mentions(&content), media: Vec::new() };
+        let submission = Submission { text, mentions: mentions(&content), media: std::mem::take(&mut self.media) };
         self.history.push(&submission.text);
         self.history.reset();
         self.recalling = false;
         self.completion = None;
         self.input.update(cx, |input, cx| input.clean(window, cx));
         self.thread.update(cx, |thread, cx| thread.send(submission, cx));
+    }
+
+    fn add_media(&mut self, attachment: PromptAttachment) {
+        if self.media.iter().all(|media| media.path != attachment.path) {
+            self.media.push(attachment);
+        }
+    }
+
+    fn attach_clipboard(&mut self, clipboard: &ClipboardItem, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let mut attached = false;
+        for entry in &clipboard.entries {
+            match entry {
+                ClipboardEntry::ExternalPaths(paths) => self.attach(paths.paths(), window, cx),
+                ClipboardEntry::Image(image) => match self.pasted.save(image) {
+                    Ok(attachment) => self.add_media(attachment),
+                    Err(message) => self.thread.update(cx, |thread, cx| thread.notice(&message, cx)),
+                },
+                ClipboardEntry::String(_) => continue,
+            }
+            attached = true;
+        }
+        cx.notify();
+        attached
+    }
+
+    fn pick_files(window: &mut Window, cx: &mut Context<Self>) {
+        let picked = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("Attach".into()),
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let Some(paths) = picked.await.ok().and_then(Result::ok).flatten() else {
+                return;
+            };
+            this.update_in(cx, |this, window, cx| {
+                this.attach(&paths, window, cx);
+                this.focus(window, cx);
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Opens or closes the completion menu for the token the cursor ends.
@@ -318,6 +397,9 @@ impl Composer {
         let draft = self.input.read(cx).content();
         let content = submissions.iter().fold(draft, |draft, submission| restored_content(&draft, submission));
         self.input.update(cx, |input, cx| input.set_value(content, window, cx));
+        for attachment in submissions.into_iter().flat_map(|submission| submission.media) {
+            self.add_media(attachment);
+        }
     }
 
     fn render_input(&self, cx: &mut Context<Self>) -> Stateful<Div> {
@@ -357,6 +439,19 @@ impl Composer {
             .capture_action(cx.listener(|this, _: &IndentInline, window, cx| {
                 if let Some(menu) = &this.completion {
                     this.accept_completion(menu.highlighted(), window, cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .capture_action(cx.listener(|this, _: &Paste, window, cx| {
+                if let Some(clipboard) = cx.read_from_clipboard()
+                    && this.attach_clipboard(&clipboard, window, cx)
+                {
+                    cx.stop_propagation();
+                }
+            }))
+            .capture_action(cx.listener(|this, _: &Backspace, _, cx| {
+                if this.text(cx).is_empty() && this.media.pop().is_some() {
+                    cx.notify();
                     cx.stop_propagation();
                 }
             }))
@@ -426,7 +521,9 @@ impl Composer {
                 .child(div().flex_1())
                 .children(meter)
         });
-        let action = if self.running(cx) && self.text(cx).trim().is_empty() {
+        let attach = IconButton::new("attach-files", IconName::Paperclip, "Attach files", theme)
+            .on_click(cx.listener(|_, _: &ClickEvent, window, cx| Self::pick_files(window, cx)));
+        let action = if self.running(cx) && self.text(cx).trim().is_empty() && self.media.is_empty() {
             IconButton::new("stop", IconName::Square, "Stop (Esc)", theme)
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.thread.update(cx, Thread::cancel)))
         } else {
@@ -442,6 +539,7 @@ impl Composer {
             .gap_2()
             .children(footer)
             .when(self.thread.read(cx).core().is_none(), |toolbar| toolbar.child(div().flex_1()))
+            .child(attach)
             .child(action)
     }
 }
@@ -459,6 +557,22 @@ impl Render for Composer {
             .map(|prompts| queued_prompts(prompts, &theme));
         let completion = self.completion.as_ref().map(|menu| menu.render(&theme, cx));
         let search = self.search.as_ref().map(|(search, _)| search.clone());
+        let chips: Vec<_> = self
+            .media
+            .iter()
+            .enumerate()
+            .map(|(index, attachment)| {
+                let remove = cx.listener(move |this, _: &ClickEvent, window, cx| {
+                    if index < this.media.len() {
+                        this.media.remove(index);
+                        this.focus(window, cx);
+                        cx.notify();
+                    }
+                });
+                attachment_chip(index, attachment, &theme, remove)
+            })
+            .collect();
+        let attachments = (!chips.is_empty()).then(|| div().px_3().pt_2().flex().flex_wrap().gap_1().children(chips));
         let editor = div()
             .w_full()
             .flex()
@@ -466,6 +580,7 @@ impl Render for Composer {
             .gap_1()
             .surface(theme)
             .when(focused, |editor| editor.border_color(theme.colors.accent))
+            .children(attachments)
             .child(self.render_input(cx))
             .child(self.render_toolbar(cx));
         div().debug_selector(|| "composer".to_owned()).flex_none().w_full().px_4().pt_2().pb_4().child(
@@ -516,8 +631,16 @@ fn mentions(content: &InputContent) -> Vec<PromptAttachment> {
     mentions
 }
 
+fn display_name(path: &Path, root: &Path) -> String {
+    let name = path.strip_prefix(root).ok().or_else(|| path.file_name().map(Path::new)).unwrap_or(path);
+    name.to_string_lossy().replace('\\', "/")
+}
+
 /// `draft` with `submission` below it, its mentions shown as mentions again.
 fn restored_content(draft: &InputContent, submission: &Submission) -> InputContent {
+    if submission.text.is_empty() {
+        return draft.clone();
+    }
     let offset = if draft.text().is_empty() { 0 } else { draft.text().len() + 1 };
     let text = if draft.text().is_empty() {
         submission.text.clone()

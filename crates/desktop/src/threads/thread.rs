@@ -193,6 +193,13 @@ impl Thread {
         self.apply(cx);
     }
 
+    pub fn notice(&mut self, message: &str, cx: &mut Context<Self>) {
+        if let Some(core) = self.core.as_mut() {
+            core.notify(message);
+            cx.notify();
+        }
+    }
+
     /// Selects `value` for the session option `config_id`, such as its model. The choice shows at
     /// once, and the agent confirms or corrects it.
     pub fn set_config_option(&mut self, config_id: &str, value: &str, cx: &mut Context<Self>) {
