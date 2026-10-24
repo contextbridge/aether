@@ -27,7 +27,7 @@ describe("cumulative session usage", () => {
       source: {
         agent_id: "child",
         parent_agent_id: "root",
-        task_id: null,
+        sub_agent_session_id: null,
         agent_name: "Explore",
       },
       purpose: "chat",

@@ -31,12 +31,12 @@ impl SessionUsageTracker {
 
     /// Fold a sub-agent's sample into these totals. The child's model and cost
     /// stand; its lineage is filled in when the child did not know it.
-    pub fn record_child(&mut self, task_id: &str, child: SessionUsageEvent) -> SessionUsageEvent {
-        let UsageSource { agent_id, parent_agent_id, task_id: child_task_id, agent_name } = child.source;
+    pub fn record_child(&mut self, session_id: &str, child: SessionUsageEvent) -> SessionUsageEvent {
+        let UsageSource { agent_id, parent_agent_id, sub_agent_session_id, agent_name } = child.source;
         let source = UsageSource {
             agent_id,
             parent_agent_id: parent_agent_id.or_else(|| Some(self.source.agent_id.clone())),
-            task_id: child_task_id.or_else(|| Some(task_id.to_string())),
+            sub_agent_session_id: sub_agent_session_id.or_else(|| Some(session_id.to_string())),
             agent_name,
         };
         self.push(source, child.purpose, child.model, child.tokens, child.estimated_cost)
@@ -113,14 +113,14 @@ mod tests {
         let mut child = session_usage_event(9, TokenUsage::new(8, 4));
         child.source = UsageSource::new("explorer");
 
-        let folded = tracker.record_child("task_0", child.clone());
+        let folded = tracker.record_child("child", child.clone());
         let own = tracker.record(LlmCallPurpose::Chat, ModelIdentity::default(), TokenUsage::new(1, 1));
 
         assert_eq!(folded.sequence, 1);
         assert_eq!(folded.source.agent_id, child.source.agent_id);
         assert_eq!(folded.source.agent_name, "explorer");
         assert_eq!(folded.source.parent_agent_id.as_deref(), Some(tracker.source().agent_id.as_str()));
-        assert_eq!(folded.source.task_id.as_deref(), Some("task_0"));
+        assert_eq!(folded.source.sub_agent_session_id.as_deref(), Some("child"));
         assert_eq!(folded.tokens, child.tokens);
         assert_eq!(own.sequence, 2);
         assert_eq!(own.totals.tokens.input_tokens.get(), 9);
@@ -184,10 +184,10 @@ mod tests {
         let mut tracker = SessionUsageTracker::new("root");
         let mut grandchild = session_usage_event(1, TokenUsage::new(1, 1));
         grandchild.source.parent_agent_id = Some("middle".to_string());
-        grandchild.source.task_id = Some("task_7".to_string());
+        grandchild.source.sub_agent_session_id = Some("grandchild".to_string());
 
-        let folded = tracker.record_child("task_0", grandchild);
+        let folded = tracker.record_child("child", grandchild);
         assert_eq!(folded.source.parent_agent_id.as_deref(), Some("middle"));
-        assert_eq!(folded.source.task_id.as_deref(), Some("task_7"));
+        assert_eq!(folded.source.sub_agent_session_id.as_deref(), Some("grandchild"));
     }
 }

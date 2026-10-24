@@ -7,7 +7,7 @@ export const sessionUsageFactory = Factory.define<SessionUsageEvent>(() => ({
   source: {
     agent_id: "agent-child",
     parent_agent_id: "agent-root",
-    task_id: "task-2",
+    sub_agent_session_id: "session-2",
     agent_name: "Explore",
   },
   purpose: "chat",

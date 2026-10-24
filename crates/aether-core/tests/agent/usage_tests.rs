@@ -199,7 +199,7 @@ async fn sub_agent_usage_is_folded_into_the_parent_totals_before_the_tool_result
     assert_eq!(folded.source.agent_id, child_usage.source.agent_id);
     assert_eq!(folded.source.agent_name, "explorer");
     assert_eq!(folded.source.parent_agent_id.as_deref(), Some(own.source.agent_id.as_str()));
-    assert_eq!(folded.source.task_id.as_deref(), Some("child"));
+    assert_eq!(folded.source.sub_agent_session_id.as_deref(), Some("child"));
     assert_eq!(folded.tokens, child_usage.tokens);
     assert_eq!(folded.totals.tokens, child_usage.tokens);
     assert_eq!(own.sequence, 2);

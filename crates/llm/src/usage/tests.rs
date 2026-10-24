@@ -118,7 +118,7 @@ fn new_sources_have_fresh_ids_and_no_lineage() {
     let second = UsageSource::new("root");
     assert_ne!(first.agent_id, second.agent_id);
     assert_eq!(first.parent_agent_id, None);
-    assert_eq!(first.task_id, None);
+    assert_eq!(first.sub_agent_session_id, None);
     assert_eq!(first.agent_name, "root");
 }
 
