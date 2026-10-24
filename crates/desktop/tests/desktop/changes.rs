@@ -13,6 +13,14 @@ fn the_changes_tab_counts_the_files_the_agent_reports(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn the_chat_and_changes_tabs_lead_with_icons(cx: &mut TestAppContext) {
+    let (harness, _) = alpha(cx, repository(&["src/main.rs"]), 1);
+
+    assert!(harness.bounds(cx, "tab-chat-icon").is_some());
+    assert!(harness.bounds(cx, "tab-changes-icon").is_some());
+}
+
+#[gpui::test]
 fn the_changes_tab_shows_the_diff_in_place_of_the_chat(cx: &mut TestAppContext) {
     let (harness, _) = alpha(cx, repository(&["src/main.rs"]), 1);
 

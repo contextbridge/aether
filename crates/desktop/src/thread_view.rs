@@ -7,7 +7,7 @@ use crate::sidebar;
 use crate::theme::DesktopTheme;
 use crate::threads::{Thread, ThreadEvent};
 use crate::ui::tokens::{BAR_HEIGHT, rem};
-use crate::ui::{Button, ButtonVariant, Typography, TypographyExt};
+use crate::ui::{Button, ButtonVariant, IconName, Typography, TypographyExt};
 use gpui::{App, AppContext, Context, Entity, StyleRefinement, Subscription, Window, div, prelude::*};
 
 /// One thread's main area: a header naming the thread and its project, above either its chat
@@ -143,19 +143,21 @@ impl ThreadView {
 
     fn render_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = DesktopTheme::global(cx).ui();
-        let tab = |id: &'static str, label: String, value: ThreadTab, cx: &mut Context<Self>| {
+        let tab = |id: &'static str, icon: IconName, label: String, value: ThreadTab, cx: &mut Context<Self>| {
             Button::new(id, label, theme)
+                .icon(icon)
                 .variant(ButtonVariant::Ghost)
                 .selected(self.tab == value)
                 .on_click(cx.listener(move |this, _, window, cx| this.show(value, window, cx)))
         };
-        let review = self.header.reviewing.then(|| tab("tab-review", "Review".to_owned(), ThreadTab::Review, cx));
+        let review =
+            self.header.reviewing.then(|| tab("tab-review", IconName::Eye, "Review".to_owned(), ThreadTab::Review, cx));
         div()
             .flex_none()
             .flex()
             .gap_1()
-            .child(tab("tab-chat", "Chat".to_owned(), ThreadTab::Chat, cx))
-            .child(tab("tab-changes", self.header.changes_label.clone(), ThreadTab::Changes, cx))
+            .child(tab("tab-chat", IconName::MessageSquareText, "Chat".to_owned(), ThreadTab::Chat, cx))
+            .child(tab("tab-changes", IconName::GitCompare, self.header.changes_label.clone(), ThreadTab::Changes, cx))
             .children(review)
     }
 }
