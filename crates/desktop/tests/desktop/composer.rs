@@ -121,6 +121,42 @@ fn choosing_a_model_asks_the_agent_to_switch(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn each_picker_leads_with_the_icon_of_its_category(cx: &mut TestAppContext) {
+    let option = |id: &str, category: Option<acp::SessionConfigOptionCategory>| {
+        let option = acp::SessionConfigOption::select(
+            id.to_owned(),
+            id.to_owned(),
+            "one".to_owned(),
+            vec![acp::SessionConfigSelectOption::new("one", "One")],
+        );
+        match category {
+            Some(category) => option.category(category),
+            None => option,
+        }
+    };
+    let options = vec![
+        option("mode", Some(acp::SessionConfigOptionCategory::Mode)),
+        option("model", Some(acp::SessionConfigOptionCategory::Model)),
+        option("reasoning_effort", Some(acp::SessionConfigOptionCategory::ThoughtLevel)),
+        option("verbosity", None),
+    ];
+    let agent = FakeAgent::default()
+        .new_session_response(acp::NewSessionResponse::new("alpha-session").config_options(options));
+    let (harness, _) = harness_with(cx, agent);
+
+    assert!(harness.bounds(cx, "config-mode-icon-bot").is_some());
+    assert!(harness.bounds(cx, "config-model-icon-cpu").is_some());
+    assert!(harness.bounds(cx, "config-reasoning_effort-icon-brain").is_some());
+    assert!(harness.bounds(cx, "config-verbosity").is_some());
+    assert!(
+        ["config-verbosity-icon-bot", "config-verbosity-icon-cpu", "config-verbosity-icon-brain"]
+            .iter()
+            .all(|icon| harness.bounds(cx, icon).is_none()),
+        "an option of no known category has no icon"
+    );
+}
+
+#[gpui::test]
 fn typing_in_the_model_picker_filters_the_models_and_enter_chooses_one(cx: &mut TestAppContext) {
     let (agent, mut requests) =
         agent_with_models(&["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta", "iota"]);

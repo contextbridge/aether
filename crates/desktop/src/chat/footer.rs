@@ -41,6 +41,13 @@ pub(crate) fn config_selector(
         .text_color(theme.colors.text_secondary)
         .cursor_pointer()
         .hover(|trigger| trigger.bg(theme.colors.surface_hover))
+        .children(category_icon(option).map(|icon| {
+            let selector = format!("{selector}-icon-{icon:?}").to_lowercase();
+            div()
+                .flex()
+                .debug_selector(move || selector)
+                .child(Icon::new(icon, theme.colors.text_muted).size(ICON_SIZE_SMALL))
+        }))
         .child(label)
         .child(Icon::new(IconName::ChevronDown, theme.colors.text_muted).size(ICON_SIZE_SMALL));
     let theme = *theme;
@@ -148,6 +155,15 @@ fn context_ring(fraction: f32, color: Hsla, track: Hsla) -> Div {
         )
         .size_full(),
     )
+}
+
+fn category_icon(option: &LocalConfigOption) -> Option<IconName> {
+    match option.category()? {
+        acp::SessionConfigOptionCategory::Mode => Some(IconName::Bot),
+        acp::SessionConfigOptionCategory::Model => Some(IconName::Cpu),
+        acp::SessionConfigOptionCategory::ThoughtLevel => Some(IconName::Brain),
+        _ => None,
+    }
 }
 
 /// A token count as people read it: `850`, `12k`, `1.2M`.

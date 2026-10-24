@@ -86,6 +86,10 @@ impl LocalConfigOption {
         }
     }
 
+    pub fn category(&self) -> Option<&SessionConfigOptionCategory> {
+        self.category.as_ref()
+    }
+
     /// The selected value of a select option, `None` for other kinds.
     pub fn current_value(&self) -> Option<&str> {
         match &self.kind {
