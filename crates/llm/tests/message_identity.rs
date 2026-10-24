@@ -5,7 +5,7 @@ fn context_serialization_and_projections_preserve_identity() {
     let mut context = Context::new(vec![ChatMessage::system("system"), ChatMessage::user("user")], vec![]);
     let assistant_id = MessageId::new();
     let reply = AssistantReply::from(vec![AssistantContent::text("answer")]);
-    context.push_assistant_turn(assistant_id.clone(), None, reply, vec![]);
+    context.add_message(ChatMessage::assistant_reply(assistant_id.clone(), None, reply, &[]));
     let ids = |context: &Context| context.messages().iter().map(ChatMessage::message_id).collect::<Vec<_>>();
     let expected = ids(&context);
     assert_eq!(expected[0], None, "system prompts carry no identity");

@@ -3,9 +3,9 @@ use crate::setup::agent_mcp;
 use crate::subagents::SubAgentProgressSink;
 use aether_core::{
     agent_spec::AgentSpec,
-    core::{AgentBuilder, AgentDeps, AgentError, AgentHandle, AgentRegistryError, recv_agent_event},
+    core::{AgentBuilder, AgentDeps, AgentError, AgentHandle, AgentRegistryError, SubAgentSession, recv_agent_event},
     events::{AgentEvent, Command, MessageEvent, SubAgentProgressPayload, TurnEvent, TurnOutcome, UserCommand},
-    mcp::{McpCatalog, McpSpawnError},
+    mcp::McpSpawnError,
 };
 use futures::FutureExt;
 use llm::{ContentBlock, MessageId};
@@ -55,8 +55,8 @@ pub enum SubAgentStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SubAgentResult {
-    /// Unique identifier for this task
-    pub task_id: String,
+    /// Session the sub-agent ran in
+    pub session_id: String,
     /// Name of the agent that executed
     pub agent_name: String,
     /// Status of execution
@@ -68,12 +68,12 @@ pub struct SubAgentResult {
 }
 
 impl SubAgentResult {
-    fn new(task_id: String, agent_name: String, result: Result<String, String>) -> Self {
+    fn new(session_id: String, agent_name: String, result: Result<String, String>) -> Self {
         let (status, output, error) = match result {
             Ok(output) => (SubAgentStatus::Success, Some(output), None),
             Err(error) => (SubAgentStatus::Error, None, Some(error)),
         };
-        Self { task_id, agent_name, status, output, error }
+        Self { session_id, agent_name, status, output, error }
     }
 }
 
@@ -126,18 +126,7 @@ impl AgentExecutor {
         let mut children = JoinSet::new();
         for (index, task) in tasks.into_iter().enumerate() {
             let executor = self.clone();
-            let task_id = format!("task_{index}");
-            let agent_name = task.agent_name.clone();
-            children.spawn(async move {
-                let result = AssertUnwindSafe(executor.execute_single(task_id.clone(), task))
-                    .catch_unwind()
-                    .await
-                    .unwrap_or_else(|panic| {
-                        let error = format!("Sub-agent task panicked: {}", panic_message(&*panic));
-                        SubAgentResult::new(task_id, agent_name, Err(error))
-                    });
-                (index, result)
-            });
+            children.spawn(async move { (index, executor.execute_single(task).await) });
         }
 
         let mut indexed_results = Vec::with_capacity(task_count);
@@ -155,63 +144,78 @@ impl AgentExecutor {
     }
 
     /// Execute a single sub-agent and return its result
-    async fn execute_single(&self, task_id: String, task: SubAgentTask) -> SubAgentResult {
+    async fn execute_single(&self, task: SubAgentTask) -> SubAgentResult {
         let agent_name = task.agent_name.clone();
+        let session = self.deps.sub_agents.open();
+        let started = AgentEvent::Turn(TurnEvent::Started { content: vec![ContentBlock::text(&task.prompt)] });
+        self.report(&session, &agent_name, &started).await;
 
-        let result: Result<String, SubAgentError> = async {
-            let spec = self.deps.agent_registry.resolve_agent_invocable(&task.agent_name)?;
+        let result = AssertUnwindSafe(self.run(&session, &task))
+            .catch_unwind()
+            .await
+            .unwrap_or_else(|panic| Err(SubAgentError::Panicked(panic_message(&*panic).to_string())));
+        let outcome = result.as_ref().map_or_else(SubAgentError::outcome, |_| TurnOutcome::Completed);
+        self.report(&session, &agent_name, &AgentEvent::turn_ended(outcome)).await;
 
-            let mcp = self.spawn_mcp(&spec)?;
-            if timeout(MCP_READY_TIMEOUT, mcp.ready()).await.is_err() {
-                tracing::warn!(agent = %agent_name, "Starting sub-agent before every MCP server connected");
-            }
-
-            let (user_tx, mut agent_rx, _agent) = self.spawn_agent(&spec, mcp).await?;
-
-            let prompt_with_instructions = format!("{}\n\n{}", task.prompt, STRUCTURED_OUTPUT_INSTRUCTIONS);
-            user_tx
-                .send(Command::UserCommand(UserCommand::Text {
-                    message_id: MessageId::new(),
-                    content: vec![ContentBlock::text(&prompt_with_instructions)],
-                }))
-                .await
-                .map_err(|_| SubAgentError::Stopped)?;
-
-            self.report(&task_id, &agent_name, &AgentEvent::Turn(TurnEvent::Started { content: vec![] })).await;
-
-            let mut final_output = String::new();
-
-            loop {
-                let message = recv_agent_event(&mut agent_rx).await;
-                self.report(&task_id, &agent_name, &message).await;
-
-                match &message {
-                    AgentEvent::Message(MessageEvent::Text { chunk, is_complete, .. }) if *is_complete => {
-                        final_output.clone_from(chunk);
-                    }
-
-                    AgentEvent::Turn(TurnEvent::Ended { outcome }) => match outcome {
-                        TurnOutcome::Completed => return Ok(final_output),
-                        TurnOutcome::Failed { error, .. } => return Err(SubAgentError::Failed(error.clone())),
-                        TurnOutcome::Cancelled => return Err(SubAgentError::Cancelled),
-                    },
-
-                    _ => {}
-                }
-            }
-        }
-        .await;
-
-        SubAgentResult::new(task_id, agent_name, result.map_err(|error| error.to_string()))
+        SubAgentResult::new(session.id().to_string(), agent_name, result.map_err(|error| error.to_string()))
     }
 
-    async fn report(&self, task_id: &str, agent_name: &str, event: &AgentEvent) {
+    async fn run(&self, session: &SubAgentSession, task: &SubAgentTask) -> Result<String, SubAgentError> {
+        let spec = self.deps.agent_registry.resolve_agent_invocable(&task.agent_name)?;
+        let (user_tx, mut agent_rx, _agent) = tokio::select! {
+            started = self.start(&spec) => started?,
+            () = session.cancelled() => return Err(SubAgentError::Cancelled),
+        };
+
+        let prompt_with_instructions = format!("{}\n\n{}", task.prompt, STRUCTURED_OUTPUT_INSTRUCTIONS);
+        user_tx
+            .send(Command::UserCommand(UserCommand::Text {
+                message_id: MessageId::new(),
+                content: vec![ContentBlock::text(&prompt_with_instructions)],
+            }))
+            .await
+            .map_err(|_| SubAgentError::Stopped)?;
+
+        let mut final_output = String::new();
+        let mut cancelling = false;
+
+        loop {
+            let message = tokio::select! {
+                message = recv_agent_event(&mut agent_rx) => message,
+                () = session.cancelled(), if !cancelling => {
+                    cancelling = true;
+                    user_tx.send(Command::cancel()).await.map_err(|_| SubAgentError::Stopped)?;
+                    continue;
+                }
+            };
+
+            match &message {
+                AgentEvent::Message(MessageEvent::Text { chunk, is_complete, .. }) if *is_complete => {
+                    final_output.clone_from(chunk);
+                }
+
+                AgentEvent::Turn(TurnEvent::Started { .. }) => continue,
+                AgentEvent::Turn(TurnEvent::Ended { outcome }) => match outcome {
+                    TurnOutcome::Completed => return Ok(final_output),
+                    TurnOutcome::Failed { message_id, error } => {
+                        return Err(SubAgentError::Failed { message_id: message_id.clone(), error: error.clone() });
+                    }
+                    TurnOutcome::Cancelled => return Err(SubAgentError::Cancelled),
+                },
+
+                _ => {}
+            }
+            self.report(session, &task.agent_name, &message).await;
+        }
+    }
+
+    async fn report(&self, session: &SubAgentSession, agent_name: &str, event: &AgentEvent) {
         if event.is_stream_delta() {
             return;
         }
         if let Some(sink) = &self.progress {
             let payload = SubAgentProgressPayload {
-                task_id: task_id.to_string(),
+                session_id: session.id().to_string(),
                 agent_name: agent_name.to_string(),
                 event: event.clone(),
             };
@@ -219,17 +223,16 @@ impl AgentExecutor {
         }
     }
 
-    fn spawn_mcp(&self, spec: &AgentSpec) -> Result<McpCatalog, SubAgentError> {
-        let builder =
-            agent_mcp(&self.project_root, self.deps.clone(), spec.tools.clone()).with_config(spec.mcp.clone());
-        Ok(builder.spawn()?)
-    }
-
-    async fn spawn_agent(
+    async fn start(
         &self,
         spec: &AgentSpec,
-        mcp: McpCatalog,
     ) -> Result<(mpsc::Sender<Command>, mpsc::Receiver<AgentEvent>, AgentHandle), SubAgentError> {
+        let mcp = agent_mcp(&self.project_root, self.deps.clone(), spec.tools.clone())
+            .with_config(spec.mcp.clone())
+            .spawn()?;
+        if timeout(MCP_READY_TIMEOUT, mcp.ready()).await.is_err() {
+            tracing::warn!(agent = %spec.name, "Starting sub-agent before every MCP server connected");
+        }
         let builder = AgentBuilder::from_spec(spec, &self.deps).await.map_err(SubAgentError::Build)?;
         builder.mcp(mcp).spawn().await.map_err(SubAgentError::Spawn)
     }
@@ -247,10 +250,24 @@ enum SubAgentError {
     Spawn(#[source] AgentError),
     #[error("Agent stopped before it received its task")]
     Stopped,
-    #[error("Agent error: {0}")]
-    Failed(String),
+    #[error("Agent error: {error}")]
+    Failed { message_id: MessageId, error: String },
     #[error("Agent cancelled")]
     Cancelled,
+    #[error("Sub-agent task panicked: {0}")]
+    Panicked(String),
+}
+
+impl SubAgentError {
+    fn outcome(&self) -> TurnOutcome {
+        match self {
+            Self::Cancelled => TurnOutcome::Cancelled,
+            Self::Failed { message_id, error } => {
+                TurnOutcome::Failed { message_id: message_id.clone(), error: error.clone() }
+            }
+            error => TurnOutcome::failed(error.to_string()),
+        }
+    }
 }
 
 const MCP_READY_TIMEOUT: Duration = Duration::from_secs(30);

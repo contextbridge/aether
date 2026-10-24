@@ -6,7 +6,7 @@ import { cwd as processCwd } from "node:process";
 import { Readable, Writable } from "node:stream";
 import { setTimeout as sleep } from "node:timers/promises";
 
-import * as acp from "@agentclientprotocol/sdk/experimental/v2";
+import * as acp from "@agentclientprotocol/sdk/experimental/v2/unstable";
 import type { AsyncQueue } from "./asyncQueue.js";
 import { assertOptionInvariants, compactCliOptions } from "./cliOptions.js";
 import { AetherSdkError } from "./errors.js";

@@ -2,12 +2,16 @@ use crate::common::{
     TestResult, await_terminal_task, call_task, cancels_prompts, connect, taskless, test_error, tool_request,
 };
 use aether_auth::MemoryCredentialStore;
-use aether_core::core::AgentDeps;
-use aether_core::events::{AgentEvent, AgentObserver, McpRequestInstrumentation, ObserverFactory, TraceContext};
+use aether_core::core::{AgentDeps, AgentRegistry};
+use aether_core::events::{
+    AgentEvent, AgentObserver, McpRequestInstrumentation, ObserverFactory, SubAgentProgressPayload, TraceContext,
+    TurnEvent, TurnOutcome,
+};
 use aether_core::mcp::{McpBuilder, McpConfig, ToolFilter};
 use aether_core::testing::ready_catalog;
 use aether_project::{AetherSettings, AetherSettingsSource, AgentCatalog, SettingsFileSource};
 use futures::StreamExt;
+use llm::ContentBlock;
 use mcp_servers::agent_mcp;
 use mcp_servers::subagents::SubAgentsMcp;
 use mcp_servers::subagents::tools::{SpawnSubAgentsInput, SubAgentTask};
@@ -15,8 +19,11 @@ use mcp_servers::testing::TestWorkspace;
 use mcp_utils::client::{ClientOptions, McpClient, ToolCallEvent, ToolCallOptions};
 use mcp_utils::testing::args;
 use rmcp::model::{CallToolResponse, CallToolResult, CancelTaskParams, GetTaskParams, TaskPayload};
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use tokio::net::TcpListener;
+use tokio::sync::mpsc;
 
 fn spawn_input(tasks: &[(&str, &str)]) -> SpawnSubAgentsInput {
     SpawnSubAgentsInput {
@@ -40,36 +47,75 @@ const RUNTIME_PROVIDER_URL: &str = "http://127.0.0.1:1";
 #[tokio::test]
 async fn spawn_uses_runtime_registry_and_provider_overrides() -> TestResult {
     let workspace = create_project_with_invocable_agent();
-    let settings = AetherSettings::load(
-        workspace.root(),
-        [AetherSettingsSource::Json(
-            r#"{
-  "agents": [{
-    "name": "runtime-explorer",
-    "description": "Runtime supplied explorer",
-    "model": "anthropic:claude-sonnet-4-5",
-    "agentInvocable": true,
-    "prompts": [{"type":"text","text":"Use runtime settings."}]
-  }]
-}"#
-            .to_string(),
-        )],
-    )?;
-    let mut provider = llm::ProviderConnectionOverride::url(RUNTIME_PROVIDER_URL);
-    provider.merge(llm::ProviderConnectionOverride::auth(llm::ProviderAuthMode::None));
-    let overrides =
-        llm::ProviderConnectionOverrides::new(std::collections::BTreeMap::from([("anthropic".to_string(), provider)]));
-    let catalog = AgentCatalog::from_settings(workspace.root(), settings)?.with_provider_connections(overrides);
-    let deps = AgentDeps::default().with_agent_registry(catalog.registry().clone());
-    let result = call_subagent_through_manager(
+    let deps = AgentDeps::default().with_agent_registry(runtime_registry(workspace.root(), RUNTIME_PROVIDER_URL)?);
+    let (result, _) = spawn_through_manager(
         workspace.root(),
         deps,
         spawn_input(&[("runtime-explorer", "Do something"), ("coder", "Do something")]),
+        |_| {},
     )
     .await?;
 
     assert!(result.contains(RUNTIME_PROVIDER_URL), "provider override missing from result: {result}");
     assert!(result.contains("Agent 'coder' not found"), "workspace-only agent should be rejected: {result}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_sub_agent_that_cannot_start_is_announced_with_its_task_then_fails() -> TestResult {
+    let workspace = create_project_with_invocable_agent();
+    let deps = AgentDeps::default().with_agent_registry(test_registry(workspace.root()));
+
+    let (result, progress) =
+        spawn_through_manager(workspace.root(), deps, spawn_input(&[("missing-agent", "Find the bug")]), |_| {})
+            .await?;
+
+    let [started, ended] = progress.as_slice() else {
+        return Err(test_error(format!("expected a start and an end: {progress:?}")).into());
+    };
+    assert_eq!(started.session_id, ended.session_id);
+    let result: serde_json::Value = serde_json::from_str(&result)?;
+    assert_eq!(result["results"][0]["sessionId"], started.session_id, "the model sees the session it reported on");
+    assert_eq!(
+        started.event,
+        AgentEvent::Turn(TurnEvent::Started { content: vec![ContentBlock::text("Find the bug")] })
+    );
+    assert!(
+        matches!(&ended.event, AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Failed { error, .. } }) if error.contains("not found")),
+        "{ended:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn cancelling_a_starting_sub_agent_ends_it_as_cancelled() -> TestResult {
+    let (workspace, mcp_server) = create_project_with_blocked_agent().await?;
+    let deps = AgentDeps::default().with_agent_registry(test_registry(workspace.root()));
+
+    let (result, progress) =
+        cancel_once_connected(&mcp_server, workspace.root(), deps, spawn_input(&[("blocked", "Wait for MCP startup")]))
+            .await?;
+
+    assert_ended_as_cancelled(&result, &progress);
+    Ok(())
+}
+
+#[tokio::test]
+async fn cancelling_a_running_sub_agent_ends_it_as_cancelled() -> TestResult {
+    let llm_server = TcpListener::bind("127.0.0.1:0").await?;
+    let workspace = TestWorkspace::new();
+    let registry = runtime_registry(workspace.root(), &format!("http://{}", llm_server.local_addr()?))?;
+    let deps = AgentDeps::default().with_agent_registry(registry);
+
+    let (result, progress) = cancel_once_connected(
+        &llm_server,
+        workspace.root(),
+        deps,
+        spawn_input(&[("runtime-explorer", "Wait for the model")]),
+    )
+    .await?;
+
+    assert_ended_as_cancelled(&result, &progress);
     Ok(())
 }
 
@@ -205,7 +251,7 @@ async fn spawn_subagent_defaults_to_foreground_without_tasks_capability() -> Tes
 }
 
 #[tokio::test]
-async fn spawn_subagent_preserves_child_result_order_and_ids() -> TestResult {
+async fn spawn_subagent_preserves_child_result_order() -> TestResult {
     let workspace = create_project_with_invocable_agent();
     let mcp = task_client(workspace.root()).await;
 
@@ -216,8 +262,9 @@ async fn spawn_subagent_preserves_child_result_order_and_ids() -> TestResult {
     let results = parsed["results"].as_array().expect("Expected results array");
     assert_eq!(results.len(), 2);
 
-    assert_eq!(results[0]["taskId"], "task_0");
-    assert_eq!(results[1]["taskId"], "task_1");
+    assert_eq!(results[0]["agentName"], "missing-agent-a");
+    assert_eq!(results[1]["agentName"], "missing-agent-b");
+    assert_ne!(results[0]["sessionId"], results[1]["sessionId"]);
     Ok(())
 }
 
@@ -236,7 +283,7 @@ async fn spawn_subagent_background_returns_mcp_task() -> TestResult {
 
 #[tokio::test]
 async fn cancelling_background_subagents_cancels_the_batch_without_publishing_a_result() -> TestResult {
-    let workspace = create_project_with_blocked_agent();
+    let (workspace, _mcp_server) = create_project_with_blocked_agent().await?;
     let mcp = task_client(workspace.root()).await;
     let response = mcp
         .peer()
@@ -261,7 +308,7 @@ async fn cancelling_background_subagents_cancels_the_batch_without_publishing_a_
 
 #[tokio::test]
 async fn background_instrumentation_finishes_when_the_batch_settles() -> TestResult {
-    let workspace = create_project_with_blocked_agent();
+    let (workspace, _mcp_server) = create_project_with_blocked_agent().await?;
     let project_root = workspace.root().to_path_buf();
     let finishes = Arc::new(Mutex::new(Vec::new()));
     let recorded = Arc::clone(&finishes);
@@ -312,27 +359,71 @@ async fn call_complete(client: &McpClient, input: SpawnSubAgentsInput) -> TestRe
     result.structured_content.ok_or_else(|| test_error("completed response had no structured content").into())
 }
 
-async fn call_subagent_through_manager(
+async fn spawn_through_manager(
     project_root: &Path,
     deps: AgentDeps,
     input: SpawnSubAgentsInput,
-) -> TestResult<String> {
+    mut on_progress: impl FnMut(&SubAgentProgressPayload),
+) -> TestResult<(String, Vec<SubAgentProgressPayload>)> {
     let mcp = ready_catalog(subagents_catalog(project_root, deps)).await;
     let arguments = args(serde_json::to_value(&input)?);
     let mut events = mcp
         .call_tool("subagents__spawn_subagent", arguments, ToolCallOptions::default())
         .expect("the subagents server offers spawn_subagent");
 
+    let mut progress = Vec::new();
     while let Some(event) = events.next().await {
         match event {
             ToolCallEvent::TaskCreated(_) => {
                 return Err(test_error("foreground subagent call unexpectedly returned an MCP Task").into());
             }
-            ToolCallEvent::Done(result) => return Ok(result_text(&result?)),
-            ToolCallEvent::Progress(_) | ToolCallEvent::TaskStatus(_) => {}
+            ToolCallEvent::Done(result) => return Ok((result_text(&result?), progress)),
+            ToolCallEvent::Progress(notification) => {
+                let payload: SubAgentProgressPayload = serde_json::from_str(&notification.message.unwrap_or_default())?;
+                on_progress(&payload);
+                progress.push(payload);
+            }
+            ToolCallEvent::TaskStatus(_) => {}
         }
     }
     Err(test_error("MCP manager stopped before returning the tool result").into())
+}
+
+async fn cancel_once_connected(
+    gate: &TcpListener,
+    project_root: &Path,
+    deps: AgentDeps,
+    input: SpawnSubAgentsInput,
+) -> TestResult<(String, Vec<SubAgentProgressPayload>)> {
+    let sub_agents = deps.sub_agents.clone();
+    let (session_ids, mut started) = mpsc::unbounded_channel();
+    let spawned = spawn_through_manager(project_root, deps, input, |payload| {
+        let _ = session_ids.send(payload.session_id.clone());
+    });
+    tokio::pin!(spawned);
+    let connect_then_cancel = async {
+        let (connection, _) = gate.accept().await?;
+        let session_id = started.recv().await.ok_or_else(|| test_error("sub-agent reported no session"))?;
+        sub_agents.cancel(&session_id);
+        TestResult::Ok(connection)
+    };
+
+    let _connection = tokio::select! {
+        connection = connect_then_cancel => connection?,
+        finished = &mut spawned => return finished,
+    };
+    spawned.await
+}
+
+fn assert_ended_as_cancelled(result: &str, progress: &[SubAgentProgressPayload]) {
+    assert!(result.contains("Agent cancelled"), "{result}");
+    assert!(
+        matches!(
+            progress.last().map(|payload| &payload.event),
+            Some(AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Cancelled }))
+        ),
+        "{progress:?}"
+    );
 }
 
 fn subagents_catalog(project_root: &Path, deps: AgentDeps) -> McpBuilder {
@@ -367,20 +458,23 @@ fn create_project_with_invocable_agent() -> TestWorkspace {
     ])
 }
 
-fn create_project_with_blocked_agent() -> TestWorkspace {
-    TestWorkspace::new().files([(
-        ".aether/settings.json",
-        r#"{
-  "agents": [{
-    "name": "blocked",
-    "description": "An agent whose MCP runtime never becomes ready",
-    "model": "anthropic:claude-sonnet-4-5",
-    "agentInvocable": true,
-    "prompts": [{"type":"text","text":"Wait."}],
-    "mcps": [{"type":"inline","servers":{"blocked":{"type":"stdio","command":"sleep","args":["60"]}}}]
-  }]
-}"#,
-    )])
+async fn create_project_with_blocked_agent() -> TestResult<(TestWorkspace, TcpListener)> {
+    let mcp_server = TcpListener::bind("127.0.0.1:0").await?;
+    let settings = serde_json::json!({
+        "agents": [{
+            "name": "blocked",
+            "description": "An agent whose MCP runtime never becomes ready",
+            "model": "anthropic:claude-sonnet-4-5",
+            "agentInvocable": true,
+            "prompts": [{"type": "text", "text": "Wait."}],
+            "mcps": [{
+                "type": "inline",
+                "servers": {"blocked": {"type": "http", "url": format!("http://{}", mcp_server.local_addr()?)}}
+            }]
+        }]
+    });
+    let workspace = TestWorkspace::new().file(".aether/settings.json", settings.to_string());
+    Ok((workspace, mcp_server))
 }
 
 fn create_project_with_codex_agent() -> TestWorkspace {
@@ -408,8 +502,30 @@ async fn subagent_instructions(project_root: &Path, catalog: AgentCatalog) -> St
     mcp.instructions().servers.get("subagents").expect("Missing subagents instructions").clone()
 }
 
+fn runtime_registry(project_root: &Path, provider_url: &str) -> TestResult<AgentRegistry> {
+    let settings = AetherSettings::load(
+        project_root,
+        [AetherSettingsSource::Json(
+            r#"{
+  "agents": [{
+    "name": "runtime-explorer",
+    "description": "Runtime supplied explorer",
+    "model": "anthropic:claude-sonnet-4-5",
+    "agentInvocable": true,
+    "prompts": [{"type":"text","text":"Use runtime settings."}]
+  }]
+}"#
+            .to_string(),
+        )],
+    )?;
+    let mut provider = llm::ProviderConnectionOverride::url(provider_url);
+    provider.merge(llm::ProviderConnectionOverride::auth(llm::ProviderAuthMode::None));
+    let overrides = llm::ProviderConnectionOverrides::new(BTreeMap::from([("anthropic".to_string(), provider)]));
+    Ok(AgentCatalog::from_settings(project_root, settings)?.with_provider_connections(overrides).registry().clone())
+}
+
 /// The catalog a standalone server would discover from `test_dir`.
-fn test_registry(test_dir: &Path) -> aether_core::core::AgentRegistry {
+fn test_registry(test_dir: &Path) -> AgentRegistry {
     let settings = AetherSettings::load(
         test_dir,
         [AetherSettingsSource::OptionalFile(SettingsFileSource::new(".aether/settings.json", test_dir))],

@@ -1,4 +1,4 @@
-use acp_utils::notifications::AetherCapabilities;
+use acp_utils::notifications::{AetherCapabilities, AetherMeta};
 use aether_auth::OAuthCredentialStorage;
 use aether_cli::acp::testing::AcpTestHarness;
 use agent_client_protocol::schema::{ProtocolVersion, v2 as acp};

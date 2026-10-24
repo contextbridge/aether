@@ -1,6 +1,4 @@
-use crate::notifications::{
-    AuthMethodsUpdatedParams, ContextClearedParams, GitDiffEventPayload, McpNotification, SubAgentProgressParams,
-};
+use crate::notifications::{AuthMethodsUpdatedParams, ContextClearedParams, GitDiffEventPayload, McpNotification};
 use agent_client_protocol::Responder;
 use agent_client_protocol::schema::v2::{
     CreateElicitationRequest, CreateElicitationResponse, ElicitationScope, SessionId, UpdateSessionNotification,
@@ -10,7 +8,6 @@ use agent_client_protocol::schema::v2::{
 pub enum AcpEvent {
     SessionUpdate(Box<UpdateSessionNotification>),
     ContextCleared(ContextClearedParams),
-    SubAgentProgress(SubAgentProgressParams),
     AuthMethodsUpdated(AuthMethodsUpdatedParams),
     McpNotification(McpNotification),
     GitDiffEvent(GitDiffEventPayload),
@@ -23,7 +20,6 @@ impl AcpEvent {
         match self {
             Self::SessionUpdate(notification) => Some(&notification.session_id),
             Self::ContextCleared(params) => Some(&params.session_id),
-            Self::SubAgentProgress(params) => Some(&params.session_id),
             Self::GitDiffEvent(params) => Some(&params.session_id),
             Self::ElicitationRequest { params, .. } => match params.scope() {
                 ElicitationScope::Session(scope) => Some(&scope.session_id),

@@ -5,26 +5,27 @@ mod turn;
 
 pub use activity::Activity;
 pub use items::{ConversationContent, ConversationId, ConversationItem, ConversationItemId, ItemState, Revision};
-pub use tool_calls::{SubAgentState, ToolCall, ToolStatus};
+pub use tool_calls::{SubAgent, ToolCall, ToolStatus};
 pub use turn::{TurnFinished, TurnPhase};
 
 use crate::client::AcpEvent;
-use crate::notifications::SubAgentProgressParams;
+use crate::notifications::{AetherMeta, SubAgentMeta};
 use agent_client_protocol::schema::{MaybeUndefined, v2 as acp};
 use items::MessageRole;
 use std::collections::{HashMap, HashSet};
+use turn::WorkState;
 
 /// One session's conversation items and state of the current turn.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Conversation {
+    session_id: acp::SessionId,
     id: ConversationId,
     revision: Revision,
     items: Vec<ConversationItem>,
     tool_index: HashMap<String, usize>,
     message_index: HashMap<acp::MessageId, usize>,
     next_item_id: u64,
-    turn: TurnPhase,
-    turn_ended: bool,
+    work: WorkState,
     activity: Activity,
     compactions: HashSet<acp::CompactionId>,
     context_usage: Option<acp::UsageUpdate>,
@@ -32,16 +33,34 @@ pub struct Conversation {
 }
 
 impl Conversation {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(session_id: impl Into<acp::SessionId>) -> Self {
+        Self {
+            session_id: session_id.into(),
+            id: ConversationId::default(),
+            revision: Revision::default(),
+            items: Vec::new(),
+            tool_index: HashMap::new(),
+            message_index: HashMap::new(),
+            next_item_id: 0,
+            work: WorkState::default(),
+            activity: Activity::default(),
+            compactions: HashSet::new(),
+            context_usage: None,
+            plan: None,
+        }
     }
 
     pub fn apply_event(&mut self, event: &AcpEvent) -> Option<TurnFinished> {
+        if let Some(session_id) = event.session_id()
+            && *session_id != self.session_id
+        {
+            self.apply_sub_agent_event(session_id, event);
+            return None;
+        }
         match event {
             AcpEvent::SessionUpdate(notification) => return self.apply_update(&notification.update),
-            AcpEvent::SubAgentProgress(progress) => self.apply_sub_agent_progress(progress),
             AcpEvent::ContextCleared(_) => self.clear(),
-            AcpEvent::ConnectionClosed => self.connection_closed(),
+            AcpEvent::ConnectionClosed => self.unconfirm(),
             AcpEvent::AuthMethodsUpdated(_)
             | AcpEvent::McpNotification(_)
             | AcpEvent::GitDiffEvent(_)
@@ -51,12 +70,28 @@ impl Conversation {
     }
 
     pub fn clear(&mut self) {
-        *self = Self { revision: self.revision, ..Self::new() };
+        self.reset(self.session_id.clone());
+    }
+
+    pub fn reset(&mut self, session_id: impl Into<acp::SessionId>) {
+        *self = Self { revision: self.revision, ..Self::new(session_id) };
         self.advance();
+    }
+
+    pub fn unconfirm_sub_agents(&mut self) {
+        for index in 0..self.items.len() {
+            if self.items[index].is_open() {
+                self.update_tool(index, ToolCall::unconfirm_sub_agents);
+            }
+        }
     }
 
     pub fn append_notice(&mut self, text: impl Into<String>) -> ConversationItemId {
         self.push(ItemState::Sealed, ConversationContent::Notice(text.into()))
+    }
+
+    pub fn session_id(&self) -> &acp::SessionId {
+        &self.session_id
     }
 
     pub fn id(&self) -> ConversationId {
@@ -71,8 +106,12 @@ impl Conversation {
         &self.items
     }
 
+    pub fn tracks(&self, session_id: &acp::SessionId) -> bool {
+        *session_id == self.session_id || self.sub_agent_tool(session_id).is_some()
+    }
+
     pub fn turn(&self) -> TurnPhase {
-        self.turn
+        self.work.phase()
     }
 
     pub fn activity(&self) -> Activity {
@@ -98,23 +137,45 @@ impl Conversation {
         })
     }
 
+    fn seal(&mut self, status: ToolStatus) {
+        if !self.work.is_idle() {
+            self.work = WorkState::Idle(status);
+        }
+        self.compactions.clear();
+        self.activity = Activity::Idle;
+        let revision = self.advance();
+        for item in self.items.iter_mut().filter(|item| item.is_open()) {
+            if let ConversationContent::Tool(tool_call) = &mut item.content {
+                if status == ToolStatus::Success && tool_call.runs_in_background() {
+                    continue;
+                }
+                tool_call.finalize(status);
+            }
+            item.state = ItemState::Sealed;
+            item.touch(revision, false);
+        }
+    }
+
     fn apply_update(&mut self, update: &acp::SessionUpdate) -> Option<TurnFinished> {
-        if matches!(update, acp::SessionUpdate::StateUpdate(acp::StateUpdate::Running(_))) && self.turn.is_idle() {
+        let running = self.work == WorkState::Running;
+        if matches!(update, acp::SessionUpdate::StateUpdate(acp::StateUpdate::Running(_))) && !running {
             self.begin_turn();
-        } else if !self.turn.is_idle()
-            && let Some(activity) = Activity::after(update)
-        {
+        } else if running && let Some(activity) = Activity::after(update) {
             self.set_activity(activity);
         }
         match update {
             acp::SessionUpdate::CompactionUpdate(update) => {
-                if !self.turn_ended {
+                if !self.work.is_idle() {
                     self.apply_compaction(update);
                 }
             }
-            acp::SessionUpdate::StateUpdate(acp::StateUpdate::Idle(idle)) if !self.turn.is_idle() => {
+            acp::SessionUpdate::StateUpdate(acp::StateUpdate::Idle(idle)) if running => {
                 return Some(self.finish_turn(idle.stop_reason.clone()));
             }
+            acp::SessionUpdate::StateUpdate(acp::StateUpdate::Idle(idle)) => {
+                self.settle(ToolStatus::from(idle.stop_reason.as_ref()));
+            }
+            acp::SessionUpdate::StateUpdate(acp::StateUpdate::Unknown(_)) => self.forget_work(),
             acp::SessionUpdate::UserMessage(message) => {
                 self.upsert_message(MessageRole::User, &message.message_id, &message.content);
             }
@@ -124,16 +185,31 @@ impl Conversation {
             acp::SessionUpdate::AgentThought(message) => {
                 self.upsert_message(MessageRole::Thought, &message.message_id, &message.content);
             }
-            acp::SessionUpdate::UserMessageChunk(chunk) => self.append_message_chunk(MessageRole::User, chunk),
-            acp::SessionUpdate::AgentMessageChunk(chunk) => self.append_message_chunk(MessageRole::Assistant, chunk),
-            acp::SessionUpdate::AgentThoughtChunk(chunk) => self.append_message_chunk(MessageRole::Thought, chunk),
+            acp::SessionUpdate::SessionMessage(message) => {
+                self.upsert_message(MessageRole::User, &message.message_id, &message.content);
+            }
+            acp::SessionUpdate::UserMessageChunk(chunk) => {
+                self.append_message_chunk(MessageRole::User, &chunk.message_id, &chunk.content);
+            }
+            acp::SessionUpdate::AgentMessageChunk(chunk) => {
+                self.append_message_chunk(MessageRole::Assistant, &chunk.message_id, &chunk.content);
+            }
+            acp::SessionUpdate::AgentThoughtChunk(chunk) => {
+                self.append_message_chunk(MessageRole::Thought, &chunk.message_id, &chunk.content);
+            }
+            acp::SessionUpdate::SessionMessageChunk(chunk) => {
+                self.append_message_chunk(MessageRole::User, &chunk.message_id, &chunk.content);
+            }
             acp::SessionUpdate::ToolCallUpdate(update) => {
                 let index = self.tool_slot(&update.tool_call_id);
                 self.update_tool(index, |tool_call| tool_call.apply_update(update));
             }
             acp::SessionUpdate::ToolCallContentChunk(chunk) => {
                 let index = self.tool_slot(&chunk.tool_call_id);
-                self.update_tool(index, |tool_call| tool_call.append_content(chunk.content.clone()));
+                self.update_tool(index, |tool_call| {
+                    tool_call.append_content(chunk.content.clone());
+                    true
+                });
             }
             acp::SessionUpdate::PlanUpdate(update) => {
                 if let acp::PlanUpdateContent::Items(items) = &update.plan
@@ -147,33 +223,64 @@ impl Conversation {
                 self.context_usage = Some(usage.clone());
                 self.advance();
             }
+            acp::SessionUpdate::SubagentUpdate(update) => self.announce_sub_agent(update),
             _ => {}
         }
         None
     }
 
-    fn apply_sub_agent_progress(&mut self, progress: &SubAgentProgressParams) {
-        if self.turn_ended {
-            return;
-        }
-        let Some(&index) = self.tool_index.get(&progress.parent_tool_id) else {
-            return;
+    fn announce_sub_agent(&mut self, update: &acp::SubagentUpdate) {
+        let spawning_tool = || {
+            let tool_call_id = SubAgentMeta::from_meta(update.meta.value()).tool_call_id?;
+            self.tool_index.get(tool_call_id.0.as_ref()).copied()
         };
-        self.update_tool(index, |tool_call| tool_call.apply_sub_agent_progress(progress));
+        if let Some(index) = self.sub_agent_tool(&update.session_id).or_else(spawning_tool)
+            && self.items[index].is_open()
+        {
+            self.update_tool(index, |tool_call| tool_call.announce_sub_agent(update));
+        }
     }
 
-    fn connection_closed(&mut self) {
-        if !self.turn.is_idle() {
-            self.turn = TurnPhase::Idle;
+    fn is_settled(&self) -> bool {
+        self.work.is_idle()
+            && self.items.iter().all(|item| match item.content() {
+                ConversationContent::Tool(tool_call) => tool_call.is_settled(),
+                _ => true,
+            })
+    }
+
+    fn apply_sub_agent_event(&mut self, session_id: &acp::SessionId, event: &AcpEvent) {
+        if let Some(index) = self.sub_agent_tool(session_id)
+            && self.items[index].is_open()
+        {
+            self.update_tool(index, |tool_call| tool_call.apply_sub_agent_event(session_id, event));
+        }
+    }
+
+    fn sub_agent_tool(&self, session_id: &acp::SessionId) -> Option<usize> {
+        self.items.iter().position(|item| match item.content() {
+            ConversationContent::Tool(tool_call) => tool_call.tracks(session_id),
+            _ => false,
+        })
+    }
+
+    fn unconfirm(&mut self) {
+        if self.work == WorkState::Running {
+            self.forget_work();
+        }
+        self.unconfirm_sub_agents();
+    }
+
+    fn forget_work(&mut self) {
+        if self.work != WorkState::Unconfirmed {
+            self.work = WorkState::Unconfirmed;
             self.advance();
         }
-        self.turn_ended = true;
         self.set_activity(Activity::Idle);
     }
 
     fn begin_turn(&mut self) {
-        self.turn = TurnPhase::Running;
-        self.turn_ended = false;
+        self.work = WorkState::Running;
         self.activity = Activity::Thinking;
         self.advance();
     }
@@ -186,23 +293,18 @@ impl Conversation {
     }
 
     fn finish_turn(&mut self, stop_reason: Option<acp::StopReason>) -> TurnFinished {
-        let status = match stop_reason {
-            Some(acp::StopReason::Cancelled) => ToolStatus::Cancelled,
-            _ => ToolStatus::Success,
-        };
-        self.turn = TurnPhase::Idle;
-        self.turn_ended = true;
-        self.compactions.clear();
-        self.activity = Activity::Idle;
-        let revision = self.advance();
-        for item in self.items.iter_mut().filter(|item| item.is_open()) {
-            if let ConversationContent::Tool(tool_call) = &mut item.content {
-                tool_call.finalize(status);
-            }
-            item.state = ItemState::Sealed;
-            item.touch(revision, false);
-        }
+        self.seal(ToolStatus::from(stop_reason.as_ref()));
         TurnFinished { stop_reason }
+    }
+
+    fn settle(&mut self, status: ToolStatus) {
+        if status == ToolStatus::Cancelled && self.any_running() {
+            self.seal(status);
+        }
+        if self.work != WorkState::Idle(status) {
+            self.work = WorkState::Idle(status);
+            self.advance();
+        }
     }
 
     fn apply_compaction(&mut self, update: &acp::CompactionUpdate) {
@@ -238,11 +340,11 @@ impl Conversation {
         }
     }
 
-    fn append_message_chunk(&mut self, role: MessageRole, chunk: &acp::ContentChunk) {
-        let index = self.message_slot(role, chunk.message_id.clone());
+    fn append_message_chunk(&mut self, role: MessageRole, message_id: &acp::MessageId, content: &acp::ContentBlock) {
+        let index = self.message_slot(role, message_id.clone());
         let item = &mut self.items[index];
         let rewrites = !item.is_open() || role == MessageRole::User;
-        if role.blocks_mut(&mut item.content).is_some_and(|blocks| items::append_block(blocks, &chunk.content)) {
+        if role.blocks_mut(&mut item.content).is_some_and(|blocks| items::append_block(blocks, content)) {
             self.touch(index, rewrites);
         }
     }
@@ -279,15 +381,13 @@ impl Conversation {
         id
     }
 
-    fn update_tool(&mut self, index: usize, apply: impl FnOnce(&mut ToolCall)) {
+    fn update_tool(&mut self, index: usize, apply: impl FnOnce(&mut ToolCall) -> bool) {
         let item = &mut self.items[index];
         let rewrites = !item.is_open();
         let ConversationContent::Tool(tool_call) = &mut item.content else {
             return;
         };
-        let previous = tool_call.clone();
-        apply(tool_call);
-        if *tool_call == previous {
+        if !apply(tool_call) {
             return;
         }
         item.state = if tool_call.rendering_final() { ItemState::Sealed } else { ItemState::Open };

@@ -127,7 +127,7 @@ async fn session_usage_columns_are_projected_for_root_and_sub_agent_samples() {
     let root = UsageSource::new("root");
     let mut child = UsageSource::new("explorer");
     child.parent_agent_id = Some(root.agent_id.clone());
-    child.task_id = Some("task_0".to_string());
+    child.sub_agent_session_id = Some("child".to_string());
     let child_usage = SessionUsageEvent {
         source: child,
         purpose: LlmCallPurpose::Compaction,
@@ -150,7 +150,7 @@ async fn session_usage_columns_are_projected_for_root_and_sub_agent_samples() {
 
     let rows = fixture
         .query(
-            "select usage_sequence, agent_name, parent_agent_id, task_id, call_purpose, provider, model_name, input_tokens, cache_read_tokens, total_input_tokens, estimated_cost_usd, total_estimated_cost_usd, unpriced_calls from session_usage order by usage_sequence",
+            "select usage_sequence, agent_name, parent_agent_id, sub_agent_session_id, call_purpose, provider, model_name, input_tokens, cache_read_tokens, total_input_tokens, estimated_cost_usd, total_estimated_cost_usd, unpriced_calls from session_usage order by usage_sequence",
         )
         .await;
     assert_eq!(
@@ -175,7 +175,7 @@ async fn session_usage_columns_are_projected_for_root_and_sub_agent_samples() {
                 json!(2),
                 json!("explorer"),
                 json!(root.agent_id),
-                json!("task_0"),
+                json!("child"),
                 json!("compaction"),
                 serde_json::Value::Null,
                 serde_json::Value::Null,

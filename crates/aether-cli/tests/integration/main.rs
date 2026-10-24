@@ -10,6 +10,7 @@ mod acp_remote;
 mod acp_session_lifecycle;
 mod acp_slash_commands;
 mod acp_stdio;
+mod acp_sub_agents;
 mod acp_workspace_move;
 mod aether_home;
 mod headless;

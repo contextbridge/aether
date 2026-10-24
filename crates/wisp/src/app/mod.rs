@@ -22,7 +22,7 @@ use crate::theme::Theme;
 use crate::view::generation::Generation;
 use acp_utils::client::AcpEvent;
 use acp_utils::conversation::{Conversation, ConversationId, ConversationItem};
-use acp_utils::notifications::AetherCapabilities;
+use acp_utils::notifications::{AetherCapabilities, AetherMeta};
 use agent_client_protocol::schema::v2::PlanEntry;
 use agent_client_protocol::schema::v2::{self as acp};
 use std::collections::VecDeque;
@@ -153,13 +153,15 @@ impl App {
         let initial_commands = builtin_commands(&capabilities);
         let browser_opener = config.browser_opener.clone();
         let clipboard_writer = config.clipboard_writer.clone();
+        let session = SessionModel::from_config(config, capabilities);
+        let conversation = Conversation::new(session.session_id().clone());
         let mut app = Self {
-            session: SessionModel::from_config(config, capabilities),
+            session,
             ui,
             available_commands: initial_commands,
             route: Route::Conversation,
             overlay: None,
-            conversation: Conversation::new(),
+            conversation,
             plan_tracker: PlanTracker::default(),
             progress: ProgressIndicator::default(),
             spinner_tick: 0,
@@ -505,8 +507,8 @@ impl App {
     }
 
     /// Drops all conversation state atomically before starting a new session.
-    fn reset_conversation(&mut self) {
-        self.conversation.clear();
+    fn reset_conversation(&mut self, session_id: acp::SessionId) {
+        self.conversation.reset(session_id);
         self.foreground.drop_prepared_prompt();
     }
 

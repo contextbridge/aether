@@ -1,7 +1,7 @@
 use crate::theme::Theme;
 use crate::view::syntax::SyntaxHighlighter;
 use crate::view::wrap::{as_u16, truncate_to_width, wrap_line};
-use acp_utils::conversation::{SubAgentState, ToolCall, ToolStatus};
+use acp_utils::conversation::{SubAgent, ToolCall, ToolStatus};
 use agent_client_protocol::schema::v2 as acp;
 use clankerdiff_ratatui::diff::{RepoPath, parse_git_diff_with_path_mapper};
 use clankerdiff_ratatui::{DiffPreviewOptions, render_diff_preview};
@@ -81,7 +81,7 @@ fn diff_change_label(change: &acp::DiffChange) -> String {
 
 /// Tree of sub-agents beneath a spawning tool, each with its recent tool calls.
 fn sub_agent_tree_lines(
-    sub_agents: &[SubAgentState],
+    sub_agents: &[SubAgent],
     content_width: u16,
     spinner_tick: usize,
     padding: usize,
@@ -97,22 +97,21 @@ fn sub_agent_tree_lines(
             lines.push(Line::raw(format!("{pad}  ")));
         }
 
-        let done = if agent.done { ToolStatus::Success } else { ToolStatus::Running };
         lines.push(Line::from(vec![
             Span::raw(format!("{pad}  ")),
-            status_glyph(done, spinner_tick, theme),
-            Span::raw(format!(" {}", agent.agent_name)),
+            agent.status().map_or_else(|| Span::styled("?", theme.muted), |status| status_glyph(status, spinner_tick, theme)),
+            Span::raw(format!(" {}", agent.title().unwrap_or("sub-agent"))),
         ]));
 
         // Only the most recent calls are shown; older ones collapse into a count.
-        let hidden = agent.tool_calls.len().saturating_sub(SUB_AGENT_VISIBLE_TOOL_LIMIT);
+        let total = agent.tool_calls().count();
+        let hidden = total.saturating_sub(SUB_AGENT_VISIBLE_TOOL_LIMIT);
         if hidden > 0 {
             lines.push(Line::styled(format!("{pad}  … {hidden} earlier tool calls"), muted));
         }
 
-        let visible: Vec<_> = agent.tool_calls.iter().skip(hidden).collect();
-        for (index, tool) in visible.iter().enumerate() {
-            let branch = if index + 1 == visible.len() { "  └─ " } else { "  ├─ " };
+        for (index, tool) in agent.tool_calls().enumerate().skip(hidden) {
+            let branch = if index + 1 == total { "  └─ " } else { "  ├─ " };
             let prefix = Line::from(vec![
                 Span::raw(format!("{pad}{branch}")),
                 status_glyph(tool.status, spinner_tick, theme),

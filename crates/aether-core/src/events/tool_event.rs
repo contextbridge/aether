@@ -102,11 +102,6 @@ pub enum TaskOutcomeState {
 }
 
 impl TaskOutcome {
-    pub fn context_message(&self) -> ChatMessage {
-        let (status, body) = self.status_body();
-        task_result_message(&self.request, &self.task_id, status, body)
-    }
-
     pub fn content_blocks(&self) -> Vec<ContentBlock> {
         let (status, body) = self.status_body();
         task_result_content(&self.request, &self.task_id, status, body)

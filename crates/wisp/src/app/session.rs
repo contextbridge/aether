@@ -43,7 +43,7 @@ impl App {
                     self.notify("Cannot clear while a prompt or session transition is in progress");
                     return;
                 }
-                self.reset_conversation();
+                self.reset_conversation(self.session.session_id().clone());
                 self.foreground = ForegroundOperation::CreatingSession {
                     previous_selections: self.session.config_options().iter().filter_map(|option| {
                         option.select().map(|select| (option.id.clone(), select.current_value.to_string()))
@@ -182,7 +182,7 @@ impl App {
             self.notify("Cannot resume while a prompt or session transition is in progress");
             return;
         }
-        self.reset_conversation();
+        self.reset_conversation(session_id.clone());
         self.session.set_session(session_id.clone(), Vec::new());
         self.foreground = ForegroundOperation::ResumingSession {
             session_id: session_id.clone(), cwd: cwd.to_path_buf(),
@@ -205,7 +205,7 @@ impl App {
         self.return_to_conversation();
         self.notify(&format!("Moved to {}", new_cwd.display()));
         let session_id = self.session.session_id().clone();
-        self.reset_conversation();
+        self.reset_conversation(session_id.clone());
         self.foreground = ForegroundOperation::LoadingWorkspaceSession {
             session_id: session_id.clone(), cwd: new_cwd.clone(),
         };

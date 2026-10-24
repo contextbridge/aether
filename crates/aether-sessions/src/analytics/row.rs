@@ -62,7 +62,7 @@ pub(crate) struct EventProjection {
     pub usage_sequence: Option<i64>,
     pub agent_id: Option<String>,
     pub parent_agent_id: Option<String>,
-    pub task_id: Option<String>,
+    pub sub_agent_session_id: Option<String>,
     pub agent_name: Option<String>,
     pub call_purpose: Option<String>,
     pub provider: Option<String>,
@@ -77,7 +77,6 @@ impl From<&SessionEvent> for EventProjection {
             SessionEvent::User(UserEvent::Message { message_id, .. }) => {
                 Self { message_id: Some(message_id.to_string()), ..Self::new("user", "user_message") }
             }
-            SessionEvent::User(UserEvent::ClearContext) => Self::new("user", "clear_context"),
             SessionEvent::Control(SessionControlEvent::AgentSwitched { .. }) => Self::new("control", "agent_switched"),
             SessionEvent::Agent(event) => Self::from(event),
         }
@@ -181,7 +180,7 @@ impl EventProjection {
             usage_sequence: Some(clamp_i64(usage.sequence)),
             agent_id: Some(usage.source.agent_id.clone()),
             parent_agent_id: usage.source.parent_agent_id.clone(),
-            task_id: usage.source.task_id.clone(),
+            sub_agent_session_id: usage.source.sub_agent_session_id.clone(),
             agent_name: Some(usage.source.agent_name.clone()),
             call_purpose: Some(usage.purpose.as_str().to_string()),
             provider: usage.model.provider.clone(),

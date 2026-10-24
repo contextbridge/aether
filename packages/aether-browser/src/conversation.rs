@@ -8,7 +8,6 @@ use wasm_bindgen::JsValue;
 
 /// A session's conversation, with the JavaScript objects of its items kept between snapshots.
 pub(crate) struct TrackedConversation {
-    pub(crate) session_id: SessionId,
     pub(crate) conversation: Conversation,
     emitted: Option<Revision>,
     items: Vec<ConvertedItem>,
@@ -16,7 +15,11 @@ pub(crate) struct TrackedConversation {
 
 impl TrackedConversation {
     pub(crate) fn new(session_id: SessionId) -> Self {
-        Self { session_id, conversation: Conversation::new(), emitted: None, items: Vec::new() }
+        Self { conversation: Conversation::new(session_id), emitted: None, items: Vec::new() }
+    }
+
+    pub(crate) fn session_id(&self) -> &SessionId {
+        self.conversation.session_id()
     }
 
     pub(crate) fn changed(&mut self) -> Option<Result<ConversationSnapshot<'_>, ClientError>> {
@@ -47,7 +50,7 @@ impl TrackedConversation {
         let conversation = &self.conversation;
 
         Ok(ConversationSnapshot {
-            session_id: &self.session_id,
+            session_id: conversation.session_id(),
             items: array,
             turn: conversation.turn(),
             activity: conversation.activity(),

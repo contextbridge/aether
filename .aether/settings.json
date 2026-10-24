@@ -8,46 +8,6 @@
       "userInvocable": true,
       "prompts": [".aether/SYSTEM.md", "AGENTS.md"],
       "mcps": ["mcp.json"]
-    },
-    {
-      "name": "Explorer",
-      "description": "Explores codebases to find relevant files, patterns, and integration points",
-      "model": "codex:gpt-5.6-luna",
-      "userInvocable": false,
-      "agentInvocable": true,
-      "prompts": [".aether/agents/codebase-explorer/AGENTS.md"],
-      "mcps": [
-        {
-          "type": "inline",
-          "servers": {
-            "coding": {
-              "type": "in-memory",
-              "args": [
-                "--rules-dir",
-                "${HOME}/.claude/rules",
-                "--rules-dir",
-                "${WORKSPACE}/.claude/rules",
-                "--rules-dir",
-                "${HOME}/.agents/rules",
-                "--rules-dir",
-                "${WORKSPACE}/.agents/rules"
-              ]
-            }
-          }
-        }
-      ],
-      "tools": {
-        "allow": [
-          {
-            "readOnly": true
-          },
-          "plan__*",
-          "skills__*",
-          "tasks__*",
-          "survey__*"
-        ],
-        "deny": ["subagents__*"]
-      }
     }
   ]
 }

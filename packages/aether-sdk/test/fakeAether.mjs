@@ -22,7 +22,7 @@ import {
   agent as createAgent,
   ndJsonStream,
   batchNotification,
-} from "@agentclientprotocol/sdk/experimental/v2";
+} from "@agentclientprotocol/sdk/experimental/v2/unstable";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { appendFileSync } from "node:fs";
@@ -136,7 +136,7 @@ const agent = {
     } else {
       setImmediate(() => void runTurn(params, turn));
     }
-    return {};
+    return { messageId: `user-${turn.messageId}` };
   },
   async cancel() {
     if (activeTurn) {

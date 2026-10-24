@@ -1,4 +1,4 @@
-use crate::core::AgentRegistry;
+use crate::core::{AgentRegistry, SubAgentSessions};
 use crate::events::{AgentObserver, DynObserverFactory, TraceContext};
 use aether_auth::{OAuthCredentialStorage, SigV4Signers};
 use llm::CodexProvider;
@@ -20,6 +20,7 @@ pub struct AgentDeps {
     pub parent_trace_context: Option<TraceContext>,
     pub agent_registry: AgentRegistry,
     pub session_affinity_key: Option<String>,
+    pub sub_agents: SubAgentSessions,
 }
 
 impl AgentDeps {

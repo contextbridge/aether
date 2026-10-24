@@ -1,16 +1,19 @@
 use crate::acp::session::actor::SessionIo;
-use acp_utils::notifications::{ContextClearedParams, SessionUsageParams, SubAgentEvent, SubAgentProgressParams};
+use acp_utils::content::map_user_content_block;
+use acp_utils::notifications::{AetherMeta, ContextClearedParams, SessionUsageParams, SubAgentMeta};
 use aether_core::events::{
-    AgentEvent, CompactionOutcome, ContextEvent, MessageEvent, ModelEvent, ToolEvent, TurnEvent, TurnOutcome,
-    humanize_tool_name,
+    AgentEvent, CompactionOutcome, ContextEvent, MessageEvent, ModelEvent, SubAgentProgressPayload, ToolEvent,
+    TurnEvent, TurnOutcome, humanize_tool_name,
 };
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::schema::v2::{
-    self as acp, ContentBlock, ContentChunk, MessageId, PlanEntry, PlanEntryPriority, PlanEntryStatus, SessionUpdate,
-    ToolCallContent, ToolCallStatus, ToolCallUpdate, UsageUpdate,
+    self as acp, ContentBlock, ContentChunk, IdleStateUpdate, MessageId, PlanEntry, PlanEntryPriority, PlanEntryStatus,
+    RunningStateUpdate, SessionUpdate, StateUpdate, ToolCallContent, ToolCallStatus, ToolCallUpdate, UsageUpdate,
 };
 use llm::{ToolCallError, ToolCallRequest, ToolCallResult};
 use utils::display_meta::{PlanMetaStatus, ToolResultMeta};
+
+const SUB_AGENT_TASK_MESSAGE_ID: &str = "task";
 
 /// Sends updates in delivery order.
 pub(crate) fn project_agent_event(msg: &AgentEvent, mode: NotificationMode, io: &SessionIo) {
@@ -22,26 +25,27 @@ pub(crate) fn project_agent_event(msg: &AgentEvent, mode: NotificationMode, io: 
     {
         io.send_update(update);
     }
-    if matches!(mode, NotificationMode::Replay) {
-        return;
-    }
-    match msg {
-        AgentEvent::Tool(ToolEvent::SubAgentProgress { request, payload }) => {
-            if let Some(event) = to_sub_agent_event(&payload.event) {
-                io.send(SubAgentProgressParams {
-                    session_id: io.session_id().clone(),
-                    parent_tool_id: request.id.clone(),
-                    task_id: payload.task_id.clone(),
-                    agent_name: payload.agent_name.clone(),
-                    event,
-                });
-            }
+    match (msg, mode) {
+        (AgentEvent::Tool(ToolEvent::SubAgentProgress { request, payload }), _) => {
+            project_sub_agent_event(request, payload, mode, io);
         }
-        AgentEvent::Context(ContextEvent::Cleared) => {
+        (AgentEvent::Context(ContextEvent::Cleared), NotificationMode::Live) => {
             io.send(ContextClearedParams { session_id: io.session_id().clone() });
         }
-        AgentEvent::SessionUsage(usage) => io.send(SessionUsageParams { usage: usage.clone() }),
+        (AgentEvent::SessionUsage(usage), NotificationMode::Live) => {
+            io.send(SessionUsageParams { usage: usage.clone() });
+        }
         _ => {}
+    }
+}
+
+pub(crate) fn stop_reason(outcome: &TurnOutcome) -> acp::StopReason {
+    match outcome {
+        TurnOutcome::Completed => acp::StopReason::EndTurn,
+        TurnOutcome::Failed { error, .. } => {
+            acp::ErrorStopReason::new().error(acp::Error::internal_error().data(error.clone())).into()
+        }
+        TurnOutcome::Cancelled => acp::StopReason::Cancelled,
     }
 }
 
@@ -294,29 +298,60 @@ fn map_display_update_to_notification(request: &ToolCallRequest, meta: &ToolResu
 }
 
 fn tool_display_meta(value: &str) -> serde_json::Map<String, serde_json::Value> {
-    let mut meta = serde_json::Map::new();
-    if !value.is_empty() {
-        meta.insert("display_value".into(), value.into());
-    }
-    meta
+    let value = if value.is_empty() { serde_json::Value::Null } else { value.into() };
+    serde_json::Map::from_iter([("display_value".to_string(), value)])
 }
 
-fn to_sub_agent_event(event: &AgentEvent) -> Option<SubAgentEvent> {
-    match event {
-        AgentEvent::Turn(TurnEvent::Started { .. }) => Some(SubAgentEvent::Started),
-        AgentEvent::Turn(TurnEvent::Ended { .. }) => Some(SubAgentEvent::Done),
-        _ => match map_agent_event_to_notification(event, NotificationMode::Live)? {
-            SessionUpdate::ToolCallUpdate(update) => Some(SubAgentEvent::ToolCallUpdate(Box::new(update))),
-            _ => None,
-        },
+fn project_sub_agent_event(
+    request: &ToolCallRequest,
+    payload: &SubAgentProgressPayload,
+    mode: NotificationMode,
+    parent: &SessionIo,
+) {
+    let child = parent.for_session(payload.session_id.as_str().into());
+    match &payload.event {
+        AgentEvent::Turn(TurnEvent::Started { content }) => {
+            let cancellable = acp::SubagentSessionCapabilities::new().cancel(acp::SessionCancelCapabilities::new());
+            let announcement = match mode {
+                NotificationMode::Live => sub_agent_announcement(request, payload).capabilities(cancellable),
+                NotificationMode::Replay => sub_agent_announcement(request, payload),
+            };
+            report_sub_agent_state(announcement, StateUpdate::Running(RunningStateUpdate::new()), parent, &child);
+            child.send_update(SessionUpdate::SessionMessage(
+                acp::SessionMessage::new(SUB_AGENT_TASK_MESSAGE_ID)
+                    .sender_session_id(parent.session_id().clone())
+                    .recipient_session_id(child.session_id().clone())
+                    .content(content.iter().map(map_user_content_block).collect::<Vec<_>>()),
+            ));
+        }
+        AgentEvent::Turn(TurnEvent::Ended { outcome }) => {
+            project_agent_event(&payload.event, mode, &child);
+            let idle = StateUpdate::Idle(IdleStateUpdate::new().stop_reason(stop_reason(outcome)));
+            report_sub_agent_state(sub_agent_announcement(request, payload), idle, parent, &child);
+        }
+        event => project_agent_event(event, mode, &child),
     }
+}
+
+fn sub_agent_announcement(request: &ToolCallRequest, payload: &SubAgentProgressPayload) -> acp::SubagentUpdate {
+    acp::SubagentUpdate::new(payload.session_id.as_str())
+        .title(payload.agent_name.clone())
+        .meta(SubAgentMeta::new(request.id.clone()).to_meta())
+}
+
+fn report_sub_agent_state(
+    announcement: acp::SubagentUpdate,
+    state: StateUpdate,
+    parent: &SessionIo,
+    child: &SessionIo,
+) {
+    parent.send_update(SessionUpdate::SubagentUpdate(announcement.state(state.clone())));
+    child.send_update(SessionUpdate::StateUpdate(state));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acp_utils::notifications::SubAgentEvent;
-    use aether_core::events::{StreamState, SubAgentProgressPayload};
     use agent_client_protocol::schema::v2::TextContent;
     use agent_client_protocol::{Client, JsonRpcNotification};
     use llm::ContextUsage;
@@ -352,19 +387,6 @@ mod tests {
         )
     }
 
-    fn sub_agent_progress(event: AgentEvent) -> AgentEvent {
-        AgentEvent::Tool(ToolEvent::SubAgentProgress {
-            request: ToolCallRequest { id: "parent".into(), name: "spawn".into(), arguments: "{}".into() },
-            payload: Box::new(SubAgentProgressPayload { task_id: "task".into(), agent_name: "worker".into(), event }),
-        })
-    }
-
-    fn sub_agent_notification(event: AgentEvent) -> SubAgentEvent {
-        let params: SubAgentProgressParams = forwarded(&[sub_agent_progress(event)]);
-        assert_eq!(params.session_id.0.as_ref(), "session");
-        params.event
-    }
-
     #[test]
     fn tool_input_start_announces_the_tool_and_deltas_are_not_forwarded() {
         let started = mapped_tool(&AgentEvent::Tool(ToolEvent::InputStarted {
@@ -378,32 +400,6 @@ mod tests {
 
         let delta = AgentEvent::Tool(ToolEvent::InputDelta { id: "call_1".into(), chunk: "{".into() });
         assert!(map_agent_event_to_session_notification(&delta).is_none());
-    }
-
-    #[test]
-    fn sub_agent_tool_calls_forward_the_same_upserts_as_top_level_tools() {
-        let request = request("{\"path\":\"a\"}");
-        let started = AgentEvent::Tool(ToolEvent::InputStarted { id: request.id.clone(), name: request.name.clone() });
-        let display = AgentEvent::Tool(ToolEvent::DisplayUpdate {
-            request: request.clone(),
-            meta: ToolDisplayMeta::new("Read", "a").into(),
-        });
-        let result = result_event(Some(ToolDisplayMeta::new("Read file", "Cargo.toml, 156 lines").into()));
-        for event in [started, AgentEvent::Tool(ToolEvent::Call { request }), display, result] {
-            assert_eq!(
-                sub_agent_notification(event.clone()),
-                SubAgentEvent::ToolCallUpdate(Box::new(mapped_tool(&event)))
-            );
-        }
-    }
-
-    #[test]
-    fn sub_agent_turn_start_and_end_bracket_its_progress() {
-        assert_eq!(
-            sub_agent_notification(AgentEvent::Turn(TurnEvent::Started { content: vec![] })),
-            SubAgentEvent::Started
-        );
-        assert_eq!(sub_agent_notification(AgentEvent::turn_ended(TurnOutcome::Completed)), SubAgentEvent::Done);
     }
 
     #[test]
@@ -444,28 +440,6 @@ mod tests {
             panic!("expected usage update");
         };
         assert_eq!((update.used, update.size), (75_000, 100_000));
-    }
-
-    #[test]
-    fn sub_agent_progress_skips_events_clients_do_not_track() {
-        let untracked = [
-            AgentEvent::text("m", "Hel", StreamState::Partial),
-            AgentEvent::text("m", "Hello", StreamState::Complete),
-            AgentEvent::Tool(ToolEvent::InputDelta { id: "tool".into(), chunk: "{".into() }),
-            AgentEvent::Context(ContextEvent::UsageUpdated { usage: ContextUsage::default() }),
-        ];
-        let events: Vec<_> = untracked
-            .into_iter()
-            .chain([AgentEvent::turn_ended(TurnOutcome::Completed)])
-            .map(sub_agent_progress)
-            .collect();
-        let params: SubAgentProgressParams = forwarded(&events);
-
-        assert_eq!(
-            (params.parent_tool_id.as_str(), params.task_id.as_str(), params.agent_name.as_str()),
-            ("parent", "task", "worker")
-        );
-        assert_eq!(params.event, SubAgentEvent::Done, "untracked events are never sent");
     }
 
     #[test]

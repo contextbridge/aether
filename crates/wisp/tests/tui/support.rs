@@ -4,10 +4,9 @@ pub(crate) use acp_utils::config_option_id::ConfigOptionId;
 pub(crate) use acp_utils::notifications::{
     AuthMethodsUpdatedParams, ContextClearedParams, McpNotification, McpServerAuthCapability, McpServerStatus,
     McpServerStatusEntry, PromptSearchResponse, PromptSearchResult, SessionPreviewResponse, SessionPreviewRole,
-    SessionPreviewTurn, SubAgentEvent, SubAgentProgressParams, WorkspaceEntry, WorkspaceListResponse,
-    WorkspaceMoveResponse, WorkspaceMoveTarget,
+    SessionPreviewTurn, WorkspaceEntry, WorkspaceListResponse, WorkspaceMoveResponse, WorkspaceMoveTarget,
 };
-pub(crate) use acp_utils::testing::test_connection;
+pub(crate) use acp_utils::testing::{announced, idle_notification, running_state, test_connection};
 pub(crate) use agent_client_protocol::schema::v2::{
     self as acp, BooleanPropertySchema, CreateElicitationRequest, CreateElicitationResponse, ElicitationAction,
     ElicitationFormMode, ElicitationSchema, ElicitationSessionScope, ElicitationUrlMode, SessionId,
@@ -35,11 +34,11 @@ pub(crate) use wisp::testing::{
     BackendEvent, FakeFilesystem, FakeGit, InstrumentedBackend, StreamContent, TestUi, TestUiBuilder, assert_buffer_eq,
     buffer_text, chunk_message, compaction_update, context_cleared, git_diff_screen, has_cell, line_text,
     numbered_lines, render_surface, row_cells, row_containing, row_text, rows_with_background, session_update,
-    sub_agent_progress, sub_agent_tool_update, text_chunk, text_chunk_with_id, text_diff, thought_chunk,
-    thought_chunk_with_id, tool_completed, tool_status,
+    sub_agent_finished, sub_agent_started, sub_agent_tool_update, text_chunk, text_chunk_with_id, text_diff,
+    thought_chunk, thought_chunk_with_id, tool_completed, tool_status,
 };
 
-pub(crate) use acp_utils::conversation::{ConversationContent, ConversationItem, ItemState, ToolStatus};
+pub(crate) use acp_utils::conversation::{ConversationContent, ConversationItem, ItemState, ToolCall, ToolStatus};
 pub(crate) use wisp::attachment::{
     AttachmentKind, AttachmentOutcome, PromptAttachment, build_attachments, classify_attachment,
 };

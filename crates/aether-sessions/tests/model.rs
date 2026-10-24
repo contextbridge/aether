@@ -4,7 +4,7 @@ use aether_core::events::{
 };
 use aether_sessions::model::last_session_usage;
 use aether_sessions::testing::{agent_switched, tool_call, turn_ended, user_message};
-use aether_sessions::{SessionEvent, UserEvent, last_agent_from_events};
+use aether_sessions::{SessionEvent, last_agent_from_events};
 use llm::testing::session_usage_event;
 use llm::{LlmCallPurpose, SessionUsageEvent, TokenUsage};
 
@@ -45,9 +45,9 @@ fn persisted_event_policy_covers_representative_variants() {
     let sub_agent_progress = SessionEvent::Agent(AgentEvent::Tool(ToolEvent::SubAgentProgress {
         request: llm::ToolCallRequest { id: "call".into(), name: "spawn".into(), arguments: "{}".into() },
         payload: Box::new(SubAgentProgressPayload {
-            task_id: "task_0".into(),
+            session_id: "child".into(),
             agent_name: "explorer".into(),
-            event: AgentEvent::SessionUsage(session_usage(2, 6)),
+            event: AgentEvent::text("message", "partial", StreamState::Partial),
         }),
     }));
 
@@ -57,6 +57,27 @@ fn persisted_event_policy_covers_representative_variants() {
     assert!(usage.is_persisted());
     assert!(!partial.is_persisted());
     assert!(!sub_agent_progress.is_persisted());
+}
+
+#[test]
+fn a_sub_agent_transcript_is_persisted_like_its_parents() {
+    let sub_agent = |event| {
+        SessionEvent::Agent(AgentEvent::Tool(ToolEvent::SubAgentProgress {
+            request: llm::ToolCallRequest { id: "call".into(), name: "spawn".into(), arguments: "{}".into() },
+            payload: Box::new(SubAgentProgressPayload {
+                session_id: "child".into(),
+                agent_name: "explorer".into(),
+                event,
+            }),
+        }))
+    };
+
+    let task = AgentEvent::Turn(TurnEvent::Started { content: vec![llm::ContentBlock::text("Find the bug")] });
+    assert!(sub_agent(task).is_persisted(), "a sub-agent's task arrives with its turn");
+    assert!(sub_agent(AgentEvent::text("reply", "Found it", StreamState::Complete)).is_persisted());
+    assert!(sub_agent(AgentEvent::tool_call("grep", "coding__grep", "{}")).is_persisted());
+    assert!(sub_agent(AgentEvent::turn_ended(TurnOutcome::Completed)).is_persisted());
+    assert!(!sub_agent(AgentEvent::text("reply", "Fou", StreamState::Partial)).is_persisted());
 }
 
 #[test]
@@ -99,7 +120,7 @@ fn content_helpers_extract_user_text_only() {
 
     assert_eq!(message.user_content().as_deref(), Some("Hello"));
     assert_eq!(message.content().as_deref(), Some("Hello"));
-    assert!(SessionEvent::User(UserEvent::ClearContext).content().is_none());
+    assert!(agent_switched(None, Some("coder")).content().is_none());
 }
 
 #[test]
