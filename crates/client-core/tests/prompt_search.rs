@@ -29,11 +29,40 @@ fn results_for_a_query_set_since_are_stale() {
     state.set_query("fi");
     state.set_query("fix");
 
-    assert_eq!(state.on_results(response("fi", &["fit"])), None);
-    let results = state.on_results(response("fix", &["fix it"])).unwrap();
+    assert!(!state.on_results(response("fi", &["fit"])));
+    assert!(state.on_results(response("fix", &["fix it"])));
 
-    assert_eq!(results.iter().map(|result| result.prompt.as_str()).collect::<Vec<_>>(), ["fix it"]);
+    assert_eq!(prompts(&state), ["fix it"]);
     assert!(!state.is_loading());
+}
+
+#[test]
+fn a_blank_query_has_no_results() {
+    let mut state = PromptSearchState::default();
+    state.set_query("fix");
+    state.on_results(response("fix", &["fix it"]));
+
+    state.set_query("");
+
+    assert_eq!(prompts(&state), Vec::<&str>::new());
+}
+
+#[test]
+fn a_failed_search_for_the_query_drops_the_results_it_replaces() {
+    let mut state = PromptSearchState::default();
+    state.set_query("fix");
+    state.on_results(response("fix", &["fix it"]));
+    state.push_char('e');
+
+    assert!(!state.on_failed("fix", "stale".to_owned()));
+    assert!(state.on_failed("fixe", "agent unavailable".to_owned()));
+
+    assert_eq!(prompts(&state), Vec::<&str>::new());
+    assert_eq!(state.error(), Some("agent unavailable"));
+}
+
+fn prompts(state: &PromptSearchState) -> Vec<&str> {
+    state.results().iter().map(|result| result.prompt.as_str()).collect()
 }
 
 fn response(query: &str, prompts: &[&str]) -> PromptSearchResponse {

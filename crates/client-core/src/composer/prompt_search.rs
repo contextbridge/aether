@@ -12,6 +12,7 @@ pub struct PromptSearchState {
     query: String,
     loading: bool,
     error: Option<String>,
+    results: Vec<PromptSearchResult>,
 }
 
 impl PromptSearchState {
@@ -26,6 +27,10 @@ impl PromptSearchState {
 
     pub fn error(&self) -> Option<&str> {
         self.error.as_deref()
+    }
+
+    pub fn results(&self) -> &[PromptSearchResult] {
+        &self.results
     }
 
     /// Whether the query has nothing to search for, so there are no results.
@@ -62,15 +67,14 @@ impl PromptSearchState {
         self.query.clone()
     }
 
-    /// The response's results when it answers the current query, `None` when
-    /// it is stale.
-    pub fn on_results(&mut self, response: PromptSearchResponse) -> Option<Vec<PromptSearchResult>> {
+    pub fn on_results(&mut self, response: PromptSearchResponse) -> bool {
         if response.query != self.query {
-            return None;
+            return false;
         }
         self.loading = false;
         self.error = None;
-        Some(response.results)
+        self.results = response.results;
+        true
     }
 
     /// Records a failed search, reporting whether it was for the current query.
@@ -80,11 +84,15 @@ impl PromptSearchState {
         }
         self.loading = false;
         self.error = Some(error);
+        self.results.clear();
         true
     }
 
     fn refresh(&mut self) {
         self.error = None;
         self.loading = !self.is_blank();
+        if self.is_blank() {
+            self.results.clear();
+        }
     }
 }

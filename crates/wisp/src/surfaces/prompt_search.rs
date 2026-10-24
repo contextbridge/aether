@@ -46,40 +46,34 @@ impl PromptSearchPicker {
     }
 
     pub fn on_results(&mut self, response: PromptSearchResponse) -> bool {
-        let Some(results) = self.search.on_results(response) else {
-            return false;
-        };
-        self.replace_results(results);
-        true
+        let answered = self.search.on_results(response);
+        if answered {
+            self.show_results();
+        }
+        answered
     }
 
     pub fn on_failed(&mut self, query: &str, error: String) -> bool {
-        if !self.search.on_failed(query, error) {
-            return false;
+        let answered = self.search.on_failed(query, error);
+        if answered {
+            self.show_results();
         }
-        self.replace_results(Vec::new());
-        true
+        answered
     }
 
     /// Appends `c` to the query, returning the query it produced.
     pub fn push_char(&mut self, c: char) -> String {
-        let query = self.search.push_char(c);
-        self.clear_blank_results();
-        query
+        self.edit(|search| search.push_char(c))
     }
 
     /// Appends the printable part of `text` to the query, returning the query it
     /// produced. Pastes that are entirely control characters leave it unchanged.
     pub fn push_str(&mut self, text: &str) -> String {
-        let query = self.search.push_str(text);
-        self.clear_blank_results();
-        query
+        self.edit(|search| search.push_str(text))
     }
 
     pub fn backspace(&mut self) -> String {
-        let query = self.search.backspace();
-        self.clear_blank_results();
-        query
+        self.edit(PromptSearchState::backspace)
     }
 
     pub fn height(&self, max_rows: usize) -> usize {
@@ -130,17 +124,18 @@ impl PromptSearchPicker {
         FilterableList::new(results, |result| result.prompt.clone())
     }
 
-    /// Replacing server-filtered results resets focus to the first result. This
-    /// keeps response replacement and clearing consistent with query changes.
-    fn replace_results(&mut self, results: Vec<PromptSearchResult>) {
-        self.results = Self::result_list(results);
+    fn edit(&mut self, edit: impl FnOnce(&mut PromptSearchState) -> String) -> String {
+        let query = edit(&mut self.search);
+        if self.search.is_blank() {
+            self.show_results();
+        }
+        query
     }
 
-    /// A blank query has nothing to search for, so it shows no results.
-    fn clear_blank_results(&mut self) {
-        if self.search.is_blank() {
-            self.replace_results(Vec::new());
-        }
+    /// Replacing server-filtered results resets focus to the first result. This
+    /// keeps response replacement and clearing consistent with query changes.
+    fn show_results(&mut self) {
+        self.results = Self::result_list(self.search.results().to_vec());
     }
 }
 

@@ -2,7 +2,7 @@ use crate::theme::DesktopTheme;
 use crate::threads::{Thread, ThreadEvent};
 use crate::ui::tokens::rem;
 use crate::ui::{PickerItem, SearchPicker, SearchPickerEvent};
-use acp_utils::notifications::{PromptSearchResponse, PromptSearchResult};
+use acp_utils::notifications::PromptSearchResponse;
 use client_core::composer::prompt_search::PromptSearchState;
 use gpui::{Context, Entity, EventEmitter, Subscription, Window, prelude::*};
 
@@ -14,7 +14,6 @@ pub(crate) struct PromptSearch {
     thread: Entity<Thread>,
     picker: Entity<SearchPicker>,
     state: PromptSearchState,
-    results: Vec<PromptSearchResult>,
     _subscriptions: [Subscription; 2],
 }
 
@@ -38,7 +37,7 @@ impl PromptSearch {
             cx.subscribe(&picker, |this, _, event: &SearchPickerEvent, cx| match event {
                 SearchPickerEvent::Query(query) => this.search(query, cx),
                 SearchPickerEvent::Chose(index) => {
-                    cx.emit(PromptSearchOutcome::Chose(this.results[*index].prompt.clone()));
+                    cx.emit(PromptSearchOutcome::Chose(this.state.results()[*index].prompt.clone()));
                 }
                 SearchPickerEvent::Dismissed => cx.emit(PromptSearchOutcome::Dismissed),
             }),
@@ -48,44 +47,33 @@ impl PromptSearch {
                 }
             }),
         ];
-        let search = Self {
-            thread,
-            picker,
-            state: PromptSearchState::default(),
-            results: Vec::new(),
-            _subscriptions: subscriptions,
-        };
+        let search = Self { thread, picker, state: PromptSearchState::default(), _subscriptions: subscriptions };
         search.show(cx);
         search
     }
 
     fn search(&mut self, query: &str, cx: &mut Context<Self>) {
         let query = self.state.set_query(query);
-        if self.state.is_blank() {
-            self.results.clear();
-        } else {
+        if !self.state.is_blank() {
             self.thread.update(cx, |thread, cx| thread.search_prompts(query, cx));
         }
         self.show(cx);
     }
 
     fn on_answer(&mut self, query: &str, result: &Result<PromptSearchResponse, String>, cx: &mut Context<Self>) {
-        match result {
-            Ok(response) => {
-                if let Some(results) = self.state.on_results(response.clone()) {
-                    self.results = results;
-                }
-            }
-            Err(error) => {
-                self.state.on_failed(query, error.clone());
-            }
+        let answered = match result {
+            Ok(response) => self.state.on_results(response.clone()),
+            Err(error) => self.state.on_failed(query, error.clone()),
+        };
+        if answered {
+            self.show(cx);
         }
-        self.show(cx);
     }
 
     fn show(&self, cx: &mut Context<Self>) {
         let items = self
-            .results
+            .state
+            .results()
             .iter()
             .enumerate()
             .map(|(n, result)| {
