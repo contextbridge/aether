@@ -1,6 +1,6 @@
 use crate::composer::attachment::{AttachmentOutcome, PromptAttachment};
 use crate::request::RequestId;
-use crate::workspace_status::WorkspaceStatus;
+use crate::workspace_status::{WorkspaceAccess, WorkspaceStatus};
 use acp_utils::conversation::ConversationId;
 use acp_utils::notifications::{
     PromptSearchParams, PromptSearchResponse, SessionPreviewResponse, WorkspaceListResponse, WorkspaceMoveResponse,
@@ -110,7 +110,7 @@ pub enum ReviewSource {
 #[derive(Debug, Clone)]
 pub enum FilesystemCommand {
     IndexFiles { request_id: RequestId, root: PathBuf },
-    PrepareSubmission { attachments: Vec<PromptAttachment> },
+    PrepareSubmission { attachments: Vec<PromptAttachment>, access: WorkspaceAccess },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

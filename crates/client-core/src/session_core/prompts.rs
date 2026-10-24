@@ -28,8 +28,11 @@ impl SessionCore {
         if attachments.is_empty() {
             self.finish_submission(AttachmentOutcome { blocks: Vec::new(), warnings: Vec::new() });
         } else {
-            self.effects
-                .push(Effect::Dispatch(Command::Filesystem(FilesystemCommand::PrepareSubmission { attachments })));
+            let access = self.session.workspace_access();
+            self.effects.push(Effect::Dispatch(Command::Filesystem(FilesystemCommand::PrepareSubmission {
+                attachments,
+                access,
+            })));
         }
     }
 

@@ -8,6 +8,7 @@ pub use session_config::SessionCoreConfigBuilder;
 use crate::command::{AgentCommand, Command, CommandResult, FilesystemCommand, GitReviewCommand};
 use crate::composer::attachment::{AttachmentOutcome, PromptAttachment, build_attachments_with};
 use crate::composer::file_index::{MAX_INDEXED_FILES, file_entries};
+use crate::workspace_status::WorkspaceAccess;
 use acp_utils::notifications::WorkspaceStatusResponse;
 use clankerdiff_client::protocol::server::ServerEvent;
 use clankerdiff_client::protocol::shared::LIVE_PROTOCOL_VERSION;
@@ -133,8 +134,8 @@ impl<T> FakeExecutor<T> {
                 self.git_completion = None;
                 None
             }
-            Command::Filesystem(FilesystemCommand::PrepareSubmission { attachments }) => {
-                Some(CommandResult::SubmissionPrepared(self.filesystem.build_attachments(&attachments)))
+            Command::Filesystem(FilesystemCommand::PrepareSubmission { attachments, access }) => {
+                Some(CommandResult::SubmissionPrepared(self.filesystem.build_attachments(&attachments, access)))
             }
             Command::Filesystem(FilesystemCommand::IndexFiles { request_id, root }) => {
                 Some(CommandResult::FilesIndexed { request_id, files: self.filesystem.index_files(&root) })
@@ -269,8 +270,8 @@ impl FakeFilesystem {
 
     /// The runtime's attachment preparation over in-memory contents: the same
     /// pure encoding as the real reader, with reads answered from this tree.
-    pub fn build_attachments(&self, attachments: &[PromptAttachment]) -> AttachmentOutcome {
-        build_attachments_with(attachments, |path, display_name| {
+    pub fn build_attachments(&self, attachments: &[PromptAttachment], access: WorkspaceAccess) -> AttachmentOutcome {
+        build_attachments_with(attachments, access, |path, display_name| {
             if self.directories.contains(path) {
                 return Err(format!("Failed to read {display_name}: is a directory"));
             }

@@ -22,13 +22,14 @@ pub(super) async fn execute<T>(command: FilesystemCommand) -> CommandResult<T> {
             let indexed = |files| CommandResult::FilesIndexed { request_id, files };
             run_blocking("Failed to index files", move || index_files(&root), indexed).await
         }
-        FilesystemCommand::PrepareSubmission { attachments } => {
-            let outcome = spawn_blocking(move || build_attachments(&attachments)).await.unwrap_or_else(|error| {
-                AttachmentOutcome {
-                    blocks: Vec::new(),
-                    warnings: vec![format!("Could not prepare attachments: {error}")],
-                }
-            });
+        FilesystemCommand::PrepareSubmission { attachments, access } => {
+            let outcome =
+                spawn_blocking(move || build_attachments(&attachments, access)).await.unwrap_or_else(|error| {
+                    AttachmentOutcome {
+                        blocks: Vec::new(),
+                        warnings: vec![format!("Could not prepare attachments: {error}")],
+                    }
+                });
             CommandResult::SubmissionPrepared(outcome)
         }
     }

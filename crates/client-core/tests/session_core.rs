@@ -5,7 +5,9 @@ use agent_client_protocol::schema::v2::{
     self as acp, ContentBlock, ImageContent, NewSessionResponse, SessionConfigOption, SessionConfigSelectOption,
     SessionId, StopReason,
 };
-use client_core::command::{AgentCommand, Command, CommandResult, GitReviewCommand, PromptRejection, ReviewSource};
+use client_core::command::{
+    AgentCommand, Command, CommandResult, FilesystemCommand, GitReviewCommand, PromptRejection, ReviewSource,
+};
 use client_core::composer::attachment::{AttachmentOutcome, PromptAttachment};
 use client_core::composer::submission::Submission;
 use client_core::request::RequestId;
@@ -13,6 +15,7 @@ use client_core::runtime::CommandDispatcher;
 use client_core::session::{Connection, Session};
 use client_core::session_core::{Effect, ForegroundOperation, SessionCore};
 use client_core::testing::SessionCoreConfigBuilder;
+use client_core::workspace_status::WorkspaceAccess;
 use std::path::Path;
 use tokio::sync::mpsc;
 use tokio::task::LocalSet;
@@ -30,6 +33,27 @@ fn media_the_agent_cannot_take_gives_the_submission_back() {
     assert_eq!(restored(&mut core), Some(with_photo));
     assert_eq!(core.queued_prompts(), []);
     assert_eq!(notices(&core), ["[test] ACP agent does not support image input."]);
+}
+
+#[test]
+fn attachments_are_prepared_for_where_the_agent_runs() {
+    for (config, expected) in [
+        (SessionCoreConfigBuilder::new(), WorkspaceAccess::Local),
+        (SessionCoreConfigBuilder::new().remote_workspace(), WorkspaceAccess::Remote),
+    ] {
+        let mut core = SessionCore::new(config.build());
+        let notes = PromptAttachment { path: "/workspace/notes.md".into(), display_name: "notes.md".into() };
+
+        core.submit(Submission { mentions: vec![notes.clone()], ..submission("read @notes.md") });
+
+        let prepared = core.take_effects().into_iter().find_map(|effect| match effect {
+            Effect::Dispatch(Command::Filesystem(FilesystemCommand::PrepareSubmission { attachments, access })) => {
+                Some((attachments, access))
+            }
+            _ => None,
+        });
+        assert_eq!(prepared, Some((vec![notes], expected)));
+    }
 }
 
 #[test]

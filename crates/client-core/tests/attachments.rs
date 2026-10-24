@@ -5,6 +5,7 @@ use client_core::composer::attachment::{
     AttachmentKind, AttachmentOutcome, PromptAttachment, build_attachments, classify_attachment,
 };
 use client_core::testing::FakeFilesystem;
+use client_core::workspace_status::WorkspaceAccess;
 use std::path::Path;
 use utils::testing::TestWorkspace;
 
@@ -94,11 +95,34 @@ fn image_and_audio_blocks_carry_base64_of_the_file_bytes() {
     let attachments = [("photo.png", &image_bytes[..]), ("note.wav", &audio_bytes[..])]
         .map(|(name, bytes)| PromptAttachment { path: tmp.write(name, bytes), display_name: name.to_string() });
 
-    let outcome = build_attachments(&attachments);
+    let outcome = build_attachments(&attachments, WorkspaceAccess::Local);
 
     let blocks: Vec<_> = outcome.blocks.iter().map(embedded_bytes).collect();
     assert_eq!(blocks, [("image", "image/png", image_bytes.to_vec()), ("audio", "audio/wav", audio_bytes.to_vec())]);
     assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
+}
+
+#[test]
+fn text_links_to_its_file_only_for_an_agent_that_shares_the_filesystem() {
+    let attachments =
+        [PromptAttachment { path: "/workspace/docs/My Notes.md".into(), display_name: "docs/My Notes.md".into() }];
+    let mut filesystem = FakeFilesystem::new();
+    filesystem.write_file(&attachments[0].path, "# notes");
+
+    let uris = [WorkspaceAccess::Local, WorkspaceAccess::Remote].map(|access| {
+        let outcome = filesystem.build_attachments(&attachments, access);
+        match &outcome.blocks[..] {
+            [
+                acp::ContentBlock::Resource(acp::EmbeddedResource {
+                    resource: acp::EmbeddedResourceResource::TextResourceContents(contents),
+                    ..
+                }),
+            ] => contents.uri.clone(),
+            other => panic!("expected one text resource, got {other:?}"),
+        }
+    });
+
+    assert_eq!(uris, ["file:///workspace/docs/My%20Notes.md", "attachment:///docs/My%20Notes.md"]);
 }
 
 fn encode(files: &[(&str, impl AsRef<[u8]>)]) -> AttachmentOutcome {
@@ -109,7 +133,7 @@ fn encode(files: &[(&str, impl AsRef<[u8]>)]) -> AttachmentOutcome {
         filesystem.write_file(&path, bytes);
         attachments.push(PromptAttachment { path, display_name: (*name).to_string() });
     }
-    filesystem.build_attachments(&attachments)
+    filesystem.build_attachments(&attachments, WorkspaceAccess::Local)
 }
 
 fn embedded_bytes(block: &acp::ContentBlock) -> (&'static str, &str, Vec<u8>) {
