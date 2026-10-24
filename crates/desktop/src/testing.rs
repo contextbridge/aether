@@ -1,7 +1,7 @@
 //! Integration-test support: opens the production [`DesktopApp`] in a gpui test window, with
 //! in-memory agents in place of agent processes.
 
-use crate::agents::{AgentCommand, Agents};
+use crate::agents::{AgentCommand, Agents, Endpoint, EndpointSource};
 use crate::clock::Clock;
 use crate::history::{History, git_root};
 use crate::registry::{Registry, STATE_FILE};
@@ -252,9 +252,15 @@ impl FakeConnector {
         let mut state = self.lock();
         let id = state.next_agent;
         state.next_agent += 1;
-        let git = state.gits.get(cwd).cloned().unwrap_or_else(|| FakeGit::new(cwd));
+        let git = agent
+            .aether_capabilities()
+            .git_diff
+            .then(|| state.gits.get(cwd).cloned().unwrap_or_else(|| FakeGit::new(cwd)));
         let task = tokio::spawn(async move {
-            let _ = agent.agent().with_handler(FakeGitDiffServer::new(git)).connect_to(transport).await;
+            let _ = match git {
+                Some(git) => agent.agent().with_handler(FakeGitDiffServer::new(git)).connect_to(transport).await,
+                None => agent.agent().connect_to(transport).await,
+            };
             served.lock().disconnected(&served_cwd, id);
         });
         state.live.entry(cwd.to_path_buf()).or_default().push(ServedAgent { id, task: task.abort_handle() });
@@ -296,6 +302,16 @@ impl Connector for FakeConnector {
             self.serve(cwd, script, agent_transport);
             let connection = Connection::connect_to(client_info(), client_transport, cwd.clone()).await?;
             Ok(mode.open(connection).await?)
+        })
+    }
+
+    fn diff_endpoint<'a>(&'a self, target: &'a SessionTarget) -> ConnectorFuture<'a, Option<Endpoint>> {
+        Box::pin(async move {
+            match &target.agent.config.diff {
+                None => Ok(None),
+                Some(EndpointSource::Fixed(endpoint)) => Ok(Some(endpoint.expand(&target.vars())?)),
+                Some(EndpointSource::Command(_)) => std::future::pending().await,
+            }
         })
     }
 

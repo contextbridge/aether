@@ -1,6 +1,6 @@
 //! Where a thread's agent runs, and how the app connects to it.
 
-use crate::agents::{AgentCommand, AgentConfig, AgentProfile, Endpoint, EndpointSource};
+use crate::agents::{AgentCommand, AgentProfile, AgentTransport, Endpoint, EndpointSource};
 use acp_utils::websocket::WebSocketTransport;
 use agent_client_protocol::schema::v2::{Implementation, SessionId};
 use agent_client_protocol::{self as acp, Agent, ByteStreams, Client, ConnectTo};
@@ -60,11 +60,13 @@ pub trait Connector: Send + Sync + 'static {
     /// Connects to the target's agent, with its session open.
     fn connect<'a>(&'a self, target: &'a SessionTarget, mode: ConnectMode) -> ConnectorFuture<'a, Session>;
 
+    fn diff_endpoint<'a>(&'a self, target: &'a SessionTarget) -> ConnectorFuture<'a, Option<Endpoint>>;
+
     /// Ends the target's instance, if it has one and its agent has a `terminate` command.
     fn terminate<'a>(&'a self, target: &'a SessionTarget) -> ConnectorFuture<'a, ()>;
 }
 
-/// Reaches each thread's agent as its [`AgentConfig`] says.
+/// Reaches each thread's agent as its [`AgentConfig`](crate::agents::AgentConfig) says.
 ///
 /// A stdio agent runs as a child process of the app in the thread's directory, and is killed
 /// when its connection is dropped. A WebSocket agent is connected to at its endpoint, which for an
@@ -119,7 +121,7 @@ impl SessionTarget {
     }
 
     /// What `${VAR}` references in the agent's configuration expand to besides the environment.
-    fn vars(&self) -> Vars {
+    pub(crate) fn vars(&self) -> Vars {
         let mut vars = Vars::new().with("WORKSPACE", self.agent.workspace.to_string_lossy());
         if let Some(instance) = &self.instance {
             vars.insert("INSTANCE_ID", instance.as_str());
@@ -171,21 +173,27 @@ impl Connector for AgentConnector {
     fn connect<'a>(&'a self, target: &'a SessionTarget, mode: ConnectMode) -> ConnectorFuture<'a, Session> {
         Box::pin(async move {
             let cwd = target.cwd.clone();
-            let connection = match &target.agent.config {
-                AgentConfig::Stdio(command) => {
+            let connection = match &target.agent.config.transport {
+                AgentTransport::Stdio(command) => {
                     let process = AgentProcess::spawn(&command.expand(&target.vars())?, &target.cwd)?;
                     Connection::connect_to(client_info(), process, cwd).await?
                 }
-                AgentConfig::WebSocket(agent) => {
-                    let endpoint = match &agent.endpoint {
-                        EndpointSource::Fixed(endpoint) => endpoint.expand(&target.vars())?,
-                        EndpointSource::Command(command) => run_for_json(command, target).await?,
-                    };
+                AgentTransport::WebSocket(agent) => {
+                    let endpoint = resolve(&agent.endpoint, target).await?;
                     let startup = if agent.launch.is_some() { STARTUP_WINDOW } else { Duration::ZERO };
                     Connection::connect_to(client_info(), open_websocket(&endpoint, startup).await?, cwd).await?
                 }
             };
             Ok(mode.open(connection).await?)
+        })
+    }
+
+    fn diff_endpoint<'a>(&'a self, target: &'a SessionTarget) -> ConnectorFuture<'a, Option<Endpoint>> {
+        Box::pin(async move {
+            match &target.agent.config.diff {
+                Some(source) => Ok(Some(resolve(source, target).await?)),
+                None => Ok(None),
+            }
         })
     }
 
@@ -245,6 +253,13 @@ impl ConnectTo<Client> for AgentProcess {
         // aborted, kills the process.
         let Self { child: _child, stdin, stdout } = self;
         ConnectTo::<Client>::connect_to(ByteStreams::new(stdin.compat_write(), stdout.compat()), client).await
+    }
+}
+
+async fn resolve(source: &EndpointSource, target: &SessionTarget) -> Result<Endpoint, ConnectError> {
+    match source {
+        EndpointSource::Fixed(endpoint) => Ok(endpoint.expand(&target.vars())?),
+        EndpointSource::Command(command) => run_for_json(command, target).await,
     }
 }
 

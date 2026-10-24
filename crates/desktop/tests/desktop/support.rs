@@ -4,12 +4,14 @@ use aether_desktop::agents::{AgentCommand, AgentProfile, Agents, project_agents_
 use aether_desktop::testing::DesktopHarness;
 use aether_desktop::threads::Thread;
 use agent_client_protocol::schema::v2::NewSessionResponse;
+use clankerdiff_server::{DiffServer, ServerListener, ServerOptions};
 use gpui::TestAppContext;
 use serde_json::json;
 use std::borrow::Cow;
 use std::fs;
 use std::path::Path;
 use tokio::net::{TcpListener, TcpStream};
+use tokio::runtime::{Builder, Runtime};
 use tokio::sync::oneshot;
 use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
 use tokio_tungstenite::tungstenite::http::{HeaderMap, StatusCode};
@@ -88,6 +90,28 @@ pub(crate) async fn serve_websocket_once_started(agent: FakeAgent, refusals: usi
         let _ = agent.agent().connect_to(WebSocketTransport::new(socket)).await;
     });
     url
+}
+
+pub(crate) struct ServedDiff {
+    pub(crate) url: String,
+    _listener: ServerListener,
+    _server: DiffServer,
+    _runtime: Runtime,
+}
+
+pub(crate) fn serve_diff(root: &Path) -> ServedDiff {
+    let runtime = Builder::new_multi_thread().worker_threads(1).enable_all().build().unwrap();
+    let (server, listener) = runtime.block_on(async {
+        let server = DiffServer::open(root, ServerOptions::default()).await.unwrap();
+        let listener = server.listen(([127, 0, 0, 1], 0).into()).await.unwrap();
+        (server, listener)
+    });
+    ServedDiff {
+        url: format!("ws://{}/ws", listener.local_addr()),
+        _listener: listener,
+        _server: server,
+        _runtime: runtime,
+    }
 }
 
 /// Writes `config` as the `acp.json` file of the project at `root`.

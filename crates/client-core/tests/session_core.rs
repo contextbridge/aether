@@ -5,7 +5,7 @@ use agent_client_protocol::schema::v2::{
     self as acp, ContentBlock, ImageContent, NewSessionResponse, SessionConfigOption, SessionConfigSelectOption,
     SessionId, StopReason,
 };
-use client_core::command::{AgentCommand, Command, CommandResult, PromptRejection};
+use client_core::command::{AgentCommand, Command, CommandResult, GitReviewCommand, PromptRejection, ReviewSource};
 use client_core::composer::attachment::{AttachmentOutcome, PromptAttachment};
 use client_core::composer::submission::Submission;
 use client_core::request::RequestId;
@@ -207,6 +207,35 @@ impl LiveSession {
 }
 
 /// How the agent answers a prompt whose turn is running.
+#[test]
+fn a_git_review_reads_from_the_agents_diff_server_when_it_serves_one() {
+    let mut core = SessionCore::new(SessionCoreConfigBuilder::new().git_diff().remote_workspace().build());
+
+    core.open_git_review();
+
+    assert!(
+        matches!(review_source(&mut core), Some(ReviewSource::Agent { session_id }) if session_id == "test-session")
+    );
+}
+
+#[test]
+fn a_git_review_of_an_agent_that_serves_no_diff_reads_the_working_tree_it_shares() {
+    let mut core = SessionCore::new(SessionCoreConfigBuilder::new().working_dir("/repo").build());
+
+    core.open_git_review();
+
+    assert!(matches!(review_source(&mut core), Some(ReviewSource::Local(path)) if path == Path::new("/repo")));
+}
+
+#[test]
+fn a_git_review_of_a_remote_agent_that_serves_no_diff_is_unavailable() {
+    let mut core = SessionCore::new(SessionCoreConfigBuilder::new().remote_workspace().build());
+
+    core.open_git_review();
+
+    assert!(matches!(review_source(&mut core), Some(ReviewSource::Unavailable(_))));
+}
+
 #[derive(Debug, Clone)]
 enum Reply {
     Idle(StopReason),
@@ -297,4 +326,11 @@ fn notices(core: &SessionCore) -> Vec<&str> {
 
 fn texts(core: &SessionCore) -> Vec<String> {
     core.conversation().items().iter().filter_map(|item| item.text().map(std::borrow::Cow::into_owned)).collect()
+}
+
+fn review_source(core: &mut SessionCore) -> Option<ReviewSource> {
+    core.take_effects().into_iter().find_map(|effect| match effect {
+        Effect::Dispatch(Command::GitReview(GitReviewCommand::Open(source))) => Some(source),
+        _ => None,
+    })
 }

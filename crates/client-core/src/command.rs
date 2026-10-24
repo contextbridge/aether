@@ -11,7 +11,7 @@ use agent_client_protocol::schema::v2::{
     SessionConfigOptionValue, SessionId, SetSessionConfigOptionResponse,
 };
 use clankerdiff_client::protocol::server::ServerMessage;
-use clankerdiff_client::{ClientState, DiffReviewEvent};
+use clankerdiff_client::{ClientState, ConnectionHeader, DiffReviewEvent};
 use std::convert::Infallible;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -90,13 +90,21 @@ pub enum AgentCommand {
 #[derive(Debug, Clone)]
 pub enum GitReviewCommand {
     /// Starts a review client for the session, opening the agent-side server.
-    Open { session_id: String },
+    Open(ReviewSource),
     /// Applies one user action the review screen captured.
     Event(DiffReviewEvent),
     /// Feeds one agent-side live-protocol message into the review client.
     Forward(ServerMessage),
     /// Stops the review and tears down the agent-side server.
     Close,
+}
+
+#[derive(Debug, Clone)]
+pub enum ReviewSource {
+    Agent { session_id: String },
+    Local(PathBuf),
+    WebSocket { url: String, headers: Vec<ConnectionHeader> },
+    Unavailable(String),
 }
 
 #[derive(Debug, Clone)]

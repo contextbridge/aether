@@ -1,7 +1,7 @@
 use crate::support::{define_agent, refuse_websocket, serve_websocket, serve_websocket_once_started};
 use acp_utils::notifications::RemoteServerInfo;
 use acp_utils::testing::FakeAgent;
-use aether_desktop::agents::AgentProfile;
+use aether_desktop::agents::{AgentProfile, Endpoint};
 use aether_desktop::target::{AgentConnector, ConnectError, ConnectMode, Connector, InstanceId, SessionTarget};
 use aether_desktop::testing::FAKE_AGENT_LOCK_FILE;
 use agent_client_protocol::schema::v2::{NewSessionResponse, SessionId};
@@ -103,6 +103,55 @@ async fn a_launched_agent_is_reached_once_its_server_starts_and_terminated_throu
     assert!(workspace.path().join("terminated-vm-1").exists(), "terminate ran in the workspace, for the instance");
     let plain = define_agent(workspace.path(), "remote", &json!({ "type": "websocket", "url": "ws://127.0.0.1:1" }));
     assert_eq!(AgentConnector.launch(&target(workspace.path(), plain)).await.unwrap(), None, "nothing to launch");
+}
+
+#[tokio::test]
+async fn an_agents_diff_endpoint_is_its_url_with_its_headers_expanded_for_its_instance() {
+    let workspace = tempfile::tempdir().unwrap();
+    let agent = define_agent(
+        workspace.path(),
+        "claude",
+        &json!({
+            "type": "stdio",
+            "command": "claude-code-acp",
+            "diff": { "url": "ws://vm/${INSTANCE_ID}", "headers": { "X-Workspace": "${WORKSPACE}" } },
+        }),
+    );
+    let mut vm = target(workspace.path(), agent);
+    vm.instance = Some(InstanceId::new("vm-1"));
+
+    let endpoint = AgentConnector.diff_endpoint(&vm).await.unwrap();
+
+    let headers = [("X-Workspace".to_owned(), workspace.path().to_string_lossy().into_owned())].into();
+    assert_eq!(endpoint, Some(Endpoint { url: "ws://vm/vm-1".to_owned(), headers }));
+}
+
+#[tokio::test]
+async fn an_agents_diff_endpoint_is_wherever_its_endpoint_command_says() {
+    let workspace = tempfile::tempdir().unwrap();
+    let printed = json!({ "url": "ws://vm:7331/ws", "headers": { "Authorization": "Bearer minted" } }).to_string();
+    let agent = define_agent(
+        workspace.path(),
+        "claude",
+        &json!({
+            "type": "stdio",
+            "command": "claude-code-acp",
+            "diff": { "endpoint": { "command": "printf", "args": ["%s", printed] } },
+        }),
+    );
+
+    let endpoint = AgentConnector.diff_endpoint(&target(workspace.path(), agent)).await.unwrap();
+
+    let headers = [("Authorization".to_owned(), "Bearer minted".to_owned())].into();
+    assert_eq!(endpoint, Some(Endpoint { url: "ws://vm:7331/ws".to_owned(), headers }));
+}
+
+#[tokio::test]
+async fn an_agent_without_a_diff_endpoint_has_none() {
+    let workspace = tempfile::tempdir().unwrap();
+    let agent = define_agent(workspace.path(), "claude", &json!({ "type": "stdio", "command": "claude-code-acp" }));
+
+    assert_eq!(AgentConnector.diff_endpoint(&target(workspace.path(), agent)).await.unwrap(), None);
 }
 
 #[tokio::test]

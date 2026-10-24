@@ -70,10 +70,18 @@ pub struct AgentProfile {
     pub config: AgentConfig,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct AgentConfig {
+    #[serde(flatten)]
+    pub transport: AgentTransport,
+    #[serde(default)]
+    pub diff: Option<EndpointSource>,
+}
+
 /// How to reach an agent, chosen by its `type`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
-pub enum AgentConfig {
+pub enum AgentTransport {
     /// A process started in the thread's directory, speaking ACP over its stdin and stdout.
     Stdio(AgentCommand),
     /// A server speaking ACP over a WebSocket.
@@ -101,7 +109,8 @@ pub struct WebSocketAgent {
 }
 
 /// Where a WebSocket agent is.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "EndpointFields")]
 pub enum EndpointSource {
     /// The agent's own `url` and `headers`.
     Fixed(Endpoint),
@@ -118,10 +127,10 @@ pub struct Endpoint {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum WebSocketAgentError {
-    #[error("a websocket agent needs a `url` or an `endpoint` command")]
+pub enum AgentConfigError {
+    #[error("a websocket agent or `diff` needs a `url` or an `endpoint` command")]
     MissingEndpoint,
-    #[error("a websocket agent takes a `url` or an `endpoint` command, not both")]
+    #[error("a websocket agent or `diff` takes a `url` or an `endpoint` command, not both")]
     ConflictingEndpoints,
     #[error("`headers` go with a `url`, since an `endpoint` command prints its own")]
     HeadersWithoutUrl,
@@ -159,7 +168,8 @@ impl Agents {
     }
 
     fn read(&self, project: &Path) -> AgentCatalog {
-        let mut configs = BTreeMap::from([(DEFAULT_AGENT.to_owned(), AgentConfig::Stdio(self.builtin.clone()))]);
+        let builtin = AgentConfig { transport: AgentTransport::Stdio(self.builtin.clone()), diff: None };
+        let mut configs = BTreeMap::from([(DEFAULT_AGENT.to_owned(), builtin)]);
         let mut problems = Vec::new();
         for file in self.user_file.iter().cloned().chain([project_agents_file(project)]) {
             match read_json::<AcpConfig>(&file) {
@@ -201,17 +211,17 @@ impl AgentCatalog {
 impl AgentConfig {
     /// The command that starts the instance the agent runs on, if it runs on one.
     pub fn launch(&self) -> Option<&AgentCommand> {
-        match self {
-            Self::Stdio(_) => None,
-            Self::WebSocket(agent) => agent.launch.as_ref(),
+        match &self.transport {
+            AgentTransport::Stdio(_) => None,
+            AgentTransport::WebSocket(agent) => agent.launch.as_ref(),
         }
     }
 
     /// The command that ends the instance the agent runs on, if it runs on one.
     pub fn terminate(&self) -> Option<&AgentCommand> {
-        match self {
-            Self::Stdio(_) => None,
-            Self::WebSocket(agent) => agent.terminate.as_ref(),
+        match &self.transport {
+            AgentTransport::Stdio(_) => None,
+            AgentTransport::WebSocket(agent) => agent.terminate.as_ref(),
         }
     }
 }
@@ -254,21 +264,29 @@ impl Endpoint {
 }
 
 impl TryFrom<WebSocketAgentFields> for WebSocketAgent {
-    type Error = WebSocketAgentError;
+    type Error = AgentConfigError;
 
     fn try_from(fields: WebSocketAgentFields) -> Result<Self, Self::Error> {
         let WebSocketAgentFields { url, headers, endpoint, launch, terminate } = fields;
-        let endpoint = match (url, endpoint, headers) {
-            (Some(url), None, headers) => EndpointSource::Fixed(Endpoint { url, headers: headers.unwrap_or_default() }),
-            (None, Some(command), None) => EndpointSource::Command(command),
-            (None, Some(_), Some(_)) => return Err(WebSocketAgentError::HeadersWithoutUrl),
-            (Some(_), Some(_), _) => return Err(WebSocketAgentError::ConflictingEndpoints),
-            (None, None, _) => return Err(WebSocketAgentError::MissingEndpoint),
-        };
+        let endpoint = EndpointSource::try_from(EndpointFields { url, headers, endpoint })?;
         if terminate.is_some() && launch.is_none() {
-            return Err(WebSocketAgentError::TerminateWithoutLaunch);
+            return Err(AgentConfigError::TerminateWithoutLaunch);
         }
         Ok(Self { endpoint, launch, terminate })
+    }
+}
+
+impl TryFrom<EndpointFields> for EndpointSource {
+    type Error = AgentConfigError;
+
+    fn try_from(fields: EndpointFields) -> Result<Self, Self::Error> {
+        match (fields.url, fields.endpoint, fields.headers) {
+            (Some(url), None, headers) => Ok(Self::Fixed(Endpoint { url, headers: headers.unwrap_or_default() })),
+            (None, Some(command), None) => Ok(Self::Command(command)),
+            (None, Some(_), Some(_)) => Err(AgentConfigError::HeadersWithoutUrl),
+            (Some(_), Some(_), _) => Err(AgentConfigError::ConflictingEndpoints),
+            (None, None, _) => Err(AgentConfigError::MissingEndpoint),
+        }
     }
 }
 
@@ -288,6 +306,14 @@ struct WebSocketAgentFields {
     endpoint: Option<AgentCommand>,
     launch: Option<AgentCommand>,
     terminate: Option<AgentCommand>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EndpointFields {
+    url: Option<String>,
+    headers: Option<BTreeMap<String, String>>,
+    endpoint: Option<AgentCommand>,
 }
 
 fn expand_values(values: &BTreeMap<String, String>, vars: &Vars) -> Result<BTreeMap<String, String>, VarError> {

@@ -1,4 +1,6 @@
 use std::future::Future;
+use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use acp_utils::client::AcpClientHandle;
@@ -6,29 +8,41 @@ use acp_utils::notifications::{GitDiffClosePayload, GitDiffCommandPayload};
 use clankerdiff_client::protocol::client::ClientCommand;
 use clankerdiff_client::protocol::server::ServerMessage;
 use clankerdiff_client::{
-    ClientError, ClientMessageTransport, ClientOptions, ClientState, ClientSubscription, DiffClient, DiffReviewEvent,
-    MaybeSend,
+    ClientError, ClientMessageTransport, ClientOptions, ClientState, ClientSubscription, ConnectionHeader,
+    ConnectionState, DiffClient, DiffReviewEvent, MaybeSend, RemoteError, RemoteErrorCode,
 };
+use clankerdiff_server::{DiffServer, ServerError, ServerOptions};
 use tokio::sync::mpsc;
 
 use super::tasks::TaskSupervisor;
-use crate::command::{CommandResult, GitReviewCommand};
+use crate::command::{CommandResult, GitReviewCommand, ReviewSource};
 
 pub(super) struct GitReviewRuntime {
     handle: AcpClientHandle,
-    connection: Option<ReviewConnection>,
+    review: Review,
+}
+
+enum Review {
+    Closed,
+    Opening(Pin<Box<dyn Future<Output = Result<ReviewConnection, ClientError>> + Send>>),
+    Open(ReviewConnection),
 }
 
 struct ReviewConnection {
-    session_id: String,
     client: DiffClient,
     subscription: ClientSubscription,
-    messages: mpsc::UnboundedSender<ServerMessage>,
+    server: ReviewServer,
+}
+
+enum ReviewServer {
+    Agent { session_id: String, messages: mpsc::UnboundedSender<ServerMessage> },
+    Local { _server: DiffServer },
+    Remote,
 }
 
 impl GitReviewRuntime {
     pub(super) fn new(handle: AcpClientHandle) -> Self {
-        Self { handle, connection: None }
+        Self { handle, review: Review::Closed }
     }
 
     pub(super) fn dispatch<T: Send + 'static>(
@@ -37,10 +51,7 @@ impl GitReviewRuntime {
         tasks: &mut TaskSupervisor<T>,
     ) -> Option<CommandResult<T>> {
         match command {
-            GitReviewCommand::Open { session_id } => {
-                self.open(&session_id);
-                None
-            }
+            GitReviewCommand::Open(source) => self.open(source),
             GitReviewCommand::Event(event) => self.on_event(event, tasks),
             GitReviewCommand::Forward(message) => {
                 self.forward(message);
@@ -54,30 +65,53 @@ impl GitReviewRuntime {
     }
 
     pub(super) fn is_active(&self) -> bool {
-        self.connection.is_some()
+        !matches!(self.review, Review::Closed)
     }
 
     pub(super) async fn changed(&mut self) -> Option<Arc<ClientState>> {
-        match &mut self.connection {
-            Some(connection) => connection.subscription.changed().await.ok(),
-            None => std::future::pending().await,
+        loop {
+            match &mut self.review {
+                Review::Closed => return std::future::pending().await,
+                Review::Opening(opening) => match opening.as_mut().await {
+                    Ok(connection) => self.review = Review::Open(connection),
+                    Err(error) => {
+                        self.review = Review::Closed;
+                        return Some(failed(error));
+                    }
+                },
+                Review::Open(connection) => return connection.subscription.changed().await.ok(),
+            }
         }
     }
 
     pub(super) fn close(&mut self) {
-        if let Some(connection) = self.connection.take() {
-            let _ = self.handle.notify(GitDiffClosePayload { session_id: connection.session_id });
+        if let Review::Open(ReviewConnection { server: ReviewServer::Agent { session_id, .. }, .. }) =
+            std::mem::replace(&mut self.review, Review::Closed)
+        {
+            let _ = self.handle.notify(GitDiffClosePayload { session_id });
         }
     }
 
-    fn open(&mut self, session_id: &str) {
+    fn open<T>(&mut self, source: ReviewSource) -> Option<CommandResult<T>> {
         self.close();
-        let (messages, receiver) = mpsc::unbounded_channel();
-        let transport =
-            AcpClientTransport { handle: self.handle.clone(), session_id: session_id.to_string(), messages: receiver };
-        let client = DiffClient::spawn(transport, ClientOptions::default());
-        let subscription = client.subscribe();
-        self.connection = Some(ReviewConnection { session_id: session_id.to_string(), client, subscription, messages });
+        self.review = match source {
+            ReviewSource::Agent { session_id } => {
+                let (messages, receiver) = mpsc::unbounded_channel();
+                let transport = AcpClientTransport {
+                    handle: self.handle.clone(),
+                    session_id: session_id.clone(),
+                    messages: receiver,
+                };
+                let client = DiffClient::spawn(transport, ClientOptions::default());
+                Review::Open(ReviewConnection::new(client, ReviewServer::Agent { session_id, messages }))
+            }
+            ReviewSource::Local(path) => Review::Opening(Box::pin(open_local(path))),
+            ReviewSource::WebSocket { url, headers } => Review::Opening(Box::pin(connect(url, headers))),
+            ReviewSource::Unavailable(reason) => {
+                return Some(CommandResult::GitReview(failed(ClientError::Transport(reason))));
+            }
+        };
+        None
     }
 
     fn on_event<T: Send + 'static>(
@@ -85,7 +119,7 @@ impl GitReviewRuntime {
         event: DiffReviewEvent,
         tasks: &mut TaskSupervisor<T>,
     ) -> Option<CommandResult<T>> {
-        let Some(connection) = &self.connection else {
+        let Review::Open(connection) = &self.review else {
             return Some(CommandResult::GitReviewAction(Err("git review is not connected".to_string())));
         };
         match connection.client.dispatch(event) {
@@ -105,9 +139,15 @@ impl GitReviewRuntime {
     }
 
     fn forward(&mut self, message: ServerMessage) {
-        if let Some(connection) = &self.connection {
-            let _ = connection.messages.send(message);
+        if let Review::Open(ReviewConnection { server: ReviewServer::Agent { messages, .. }, .. }) = &self.review {
+            let _ = messages.send(message);
         }
+    }
+}
+
+impl ReviewConnection {
+    fn new(client: DiffClient, server: ReviewServer) -> Self {
+        Self { subscription: client.subscribe(), client, server }
     }
 }
 
@@ -131,4 +171,21 @@ impl ClientMessageTransport for AcpClientTransport {
     }
 
     async fn close(&mut self) {}
+}
+
+async fn open_local(path: PathBuf) -> Result<ReviewConnection, ClientError> {
+    let unreadable =
+        |error: ServerError| ClientError::Remote(RemoteError::new(RemoteErrorCode::Git, error.to_string()));
+    let server = DiffServer::open(path, ServerOptions::default()).await.map_err(unreadable)?;
+    let client = DiffClient::from_transport(server.connect().map_err(unreadable)?, ClientOptions::default()).await?;
+    Ok(ReviewConnection::new(client, ReviewServer::Local { _server: server }))
+}
+
+async fn connect(url: String, headers: Vec<ConnectionHeader>) -> Result<ReviewConnection, ClientError> {
+    let client = DiffClient::connect_with_headers(&url, ClientOptions::default(), headers).await?;
+    Ok(ReviewConnection::new(client, ReviewServer::Remote))
+}
+
+fn failed(error: ClientError) -> Arc<ClientState> {
+    Arc::new(ClientState { connection: ConnectionState::Failed(error), ..ClientState::default() })
 }

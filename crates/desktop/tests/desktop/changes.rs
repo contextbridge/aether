@@ -1,9 +1,11 @@
-use crate::support::{choose, replying, texts};
+use crate::support::{choose, replying, serve_diff, texts, write_agents_file};
 use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder};
 use aether_desktop::threads::Thread;
 use clankerdiff_core::{DiffScope, FileStatus, StageState};
 use client_core::testing::FakeGit;
 use gpui::{Entity, TestAppContext};
+use serde_json::json;
+use utils::testing::TestWorkspace;
 
 #[gpui::test]
 fn the_changes_tab_counts_the_files_the_agent_reports(cx: &mut TestAppContext) {
@@ -129,6 +131,76 @@ fn staging_everything_from_the_file_list_stages_the_repository(cx: &mut TestAppC
 }
 
 #[gpui::test]
+fn the_changes_of_an_agent_that_serves_no_diff_are_read_from_its_working_tree(cx: &mut TestAppContext) {
+    let repository = TestWorkspace::new().git_init().file("src/main.rs", "fn main() {}\n");
+    let harness =
+        DesktopHarnessBuilder::default().agent(repository.root(), replying("claude-session", "reply")).build(cx);
+
+    let thread = harness.start_thread(cx, repository.root());
+
+    wait_for_changes(&harness, cx, &thread, 1);
+}
+
+#[gpui::test]
+fn the_changes_at_an_agents_diff_endpoint_are_shown_in_place_of_those_it_serves(cx: &mut TestAppContext) {
+    let served = TestWorkspace::new().git_init().file("a.rs", "fn a() {}\n").file("b.rs", "fn b() {}\n");
+    let diff = serve_diff(served.root());
+    let project = tempfile::tempdir().unwrap();
+    write_agents_file(
+        project.path(),
+        &json!({ "agents": { "aether": { "type": "stdio", "command": "aether", "diff": { "url": diff.url } } } }),
+    );
+    let harness = DesktopHarnessBuilder::default()
+        .agent(project.path(), replying("aether-session", "reply").git_diff())
+        .git(project.path(), repository(&["src/main.rs"]))
+        .build(cx);
+
+    let thread = harness.start_thread(cx, project.path());
+
+    wait_for_changes(&harness, cx, &thread, 2);
+}
+
+#[gpui::test]
+fn a_diff_endpoint_that_cannot_be_resolved_shows_why_in_place_of_the_changes(cx: &mut TestAppContext) {
+    let project = tempfile::tempdir().unwrap();
+    let diff = json!({ "url": "ws://${AETHER_DESKTOP_TEST_UNSET_HOST}/ws" });
+    write_agents_file(
+        project.path(),
+        &json!({ "agents": { "aether": { "type": "stdio", "command": "aether", "diff": diff } } }),
+    );
+    let harness = DesktopHarnessBuilder::default()
+        .agent(project.path(), replying("aether-session", "reply").git_diff())
+        .build(cx);
+    let thread = harness.start_thread(cx, project.path());
+    harness.run_until(cx, |cx| thread.read(cx).review().is_some());
+
+    harness.click(cx, "tab-changes").unwrap();
+
+    let status = thread.read_with(cx, |thread, _| thread.review().and_then(|review| review.status()));
+    assert!(status.is_some_and(|status| status.contains("AETHER_DESKTOP_TEST_UNSET_HOST")));
+    assert!(harness.bounds(cx, "changes-status").is_some());
+}
+
+#[gpui::test]
+fn a_diff_endpoint_still_resolving_holds_up_the_changes_but_not_the_chat(cx: &mut TestAppContext) {
+    let project = tempfile::tempdir().unwrap();
+    let diff = json!({ "endpoint": { "command": "./diff-endpoint.sh" } });
+    write_agents_file(
+        project.path(),
+        &json!({ "agents": { "aether": { "type": "stdio", "command": "aether", "diff": diff } } }),
+    );
+    let harness = DesktopHarnessBuilder::default()
+        .agent(project.path(), replying("aether-session", "hello").git_diff())
+        .build(cx);
+
+    let thread = harness.start_thread(cx, project.path());
+    harness.send(cx, &thread, "hi");
+
+    assert_eq!(thread.read_with(cx, |thread, _| texts(thread)), ["hi", "hello"]);
+    assert!(thread.read_with(cx, |thread, _| thread.review().is_none()), "the changes are still loading");
+}
+
+#[gpui::test]
 fn a_stopped_thread_has_no_changes_to_show(cx: &mut TestAppContext) {
     let (harness, thread) = alpha(cx, repository(&["src/main.rs"]), 1);
 
@@ -140,7 +212,7 @@ fn a_stopped_thread_has_no_changes_to_show(cx: &mut TestAppContext) {
 /// A thread in `/alpha` whose agent serves `git`, once it reports `files` changed files.
 fn alpha(cx: &mut TestAppContext, git: FakeGit, files: usize) -> (DesktopHarness, Entity<Thread>) {
     let harness = DesktopHarnessBuilder::default()
-        .agent("/alpha", replying("alpha-session", "reply"))
+        .agent("/alpha", replying("alpha-session", "reply").git_diff())
         .git("/alpha", git)
         .build(cx);
     let thread = harness.start_thread(cx, "/alpha");

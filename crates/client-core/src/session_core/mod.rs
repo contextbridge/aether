@@ -16,7 +16,7 @@ pub use effect::{Effect, Elicitation};
 pub use foreground::ForegroundOperation;
 pub use prompts::QueuedPrompt;
 
-use crate::command::{AgentCommand, Command, CommandResult, GitReviewCommand};
+use crate::command::{AgentCommand, Command, CommandResult, GitReviewCommand, ReviewSource};
 use crate::command_entry::CommandEntry;
 use crate::session_model::SessionModel;
 use crate::workspace_status::{WorkspaceAccess, WorkspaceStatus};
@@ -201,8 +201,18 @@ impl SessionCore {
     /// Starts a git review of the session's working tree. Its state arrives as
     /// [`CommandResult::GitReview`] until it is closed.
     pub fn open_git_review(&mut self) {
-        let session_id = self.session.session_id().0.to_string();
-        self.effects.push(Effect::Dispatch(Command::GitReview(GitReviewCommand::Open { session_id })));
+        let source = if self.session.capabilities().git_diff {
+            ReviewSource::Agent { session_id: self.session.session_id().0.to_string() }
+        } else if self.session.workspace_access() == WorkspaceAccess::Local {
+            ReviewSource::Local(self.session.working_dir().to_path_buf())
+        } else {
+            ReviewSource::Unavailable("the agent serves no diff of its remote workspace".to_owned())
+        };
+        self.open_git_review_from(source);
+    }
+
+    pub fn open_git_review_from(&mut self, source: ReviewSource) {
+        self.effects.push(Effect::Dispatch(Command::GitReview(GitReviewCommand::Open(source))));
     }
 
     pub fn close_git_review(&mut self) {

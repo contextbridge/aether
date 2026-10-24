@@ -4,13 +4,14 @@ use agent_client_protocol::schema::v2::SessionId;
 use clankerdiff_client::protocol::server::ServerMessage;
 use clankerdiff_client::protocol::shared::{DocumentUpdate, Event, FileEntry, LIVE_PROTOCOL_VERSION};
 use clankerdiff_core::{DiffScope, FileDiff};
-use client_core::command::{AgentCommand, Command, CommandResult, GitReviewCommand};
+use client_core::command::{AgentCommand, Command, CommandResult, GitReviewCommand, ReviewSource};
 use client_core::composer::file_index::index_files_with_limit;
 use client_core::runtime::CommandDispatcher;
 use client_core::workspace_status::initial_workspace_status;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::task::LocalSet;
+use utils::testing::TestWorkspace;
 
 #[test]
 fn file_index_limit_counts_only_indexed_files() {
@@ -69,7 +70,9 @@ async fn git_review_publishes_the_agents_document() -> Result<(), TestError> {
             let client = FakeAgent::default().build().await?;
             let mut dispatcher = CommandDispatcher::new(client.handle.clone());
 
-            dispatcher.dispatch(Command::GitReview(GitReviewCommand::Open { session_id: "s1".to_string() }));
+            dispatcher.dispatch(Command::GitReview(GitReviewCommand::Open(ReviewSource::Agent {
+                session_id: "s1".to_string(),
+            })));
             for message in git_diff_messages() {
                 dispatcher.dispatch(Command::GitReview(GitReviewCommand::Forward(message)));
             }
@@ -90,6 +93,56 @@ async fn git_review_publishes_the_agents_document() -> Result<(), TestError> {
             Ok::<(), TestError>(())
         })
         .await
+}
+
+#[tokio::test]
+async fn a_git_review_of_a_local_working_tree_reads_it_through_a_diff_server_of_its_own() -> Result<(), TestError> {
+    let repository = TestWorkspace::new().git_init().file("changed.txt", "edited\n");
+    let mut dispatcher = CommandDispatcher::new(disconnected_client().await?);
+
+    dispatcher.dispatch(Command::GitReview(GitReviewCommand::Open(ReviewSource::Local(repository.root().into()))));
+
+    let snapshot = loop {
+        if let Some(CommandResult::GitReview(state)) = dispatcher.next_result().await
+            && let Some(snapshot) = state.snapshot.clone()
+        {
+            break snapshot;
+        }
+    };
+    assert_eq!(snapshot.document.files.iter().map(|file| file.path.as_str()).collect::<Vec<_>>(), ["changed.txt"]);
+    dispatcher.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_git_review_outside_a_repository_fails_with_the_reason() -> Result<(), TestError> {
+    let outside = TempDir::new()?;
+    let mut dispatcher = CommandDispatcher::new(disconnected_client().await?);
+
+    dispatcher.dispatch(Command::GitReview(GitReviewCommand::Open(ReviewSource::Local(outside.path().into()))));
+
+    let Some(CommandResult::GitReview(state)) = dispatcher.next_result().await else {
+        panic!("expected the review's state");
+    };
+    assert_eq!(state.label(), "failed");
+    assert!(!dispatcher.has_pending_tasks(), "a failed review is closed");
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_unavailable_git_review_fails_with_the_reason() -> Result<(), TestError> {
+    let mut dispatcher = CommandDispatcher::new(disconnected_client().await?);
+
+    let result = dispatcher
+        .dispatch(Command::GitReview(GitReviewCommand::Open(ReviewSource::Unavailable("no diff here".to_owned()))));
+
+    let Some(CommandResult::GitReview(state)) = result else {
+        panic!("expected the review's state");
+    };
+    assert_eq!(state.label(), "failed");
+    assert!(state.status().is_some_and(|status| status.contains("no diff here")));
+    assert!(!dispatcher.has_pending_tasks());
+    Ok(())
 }
 
 /// The live-protocol messages a server sends for an initialization and its first

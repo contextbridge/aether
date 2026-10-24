@@ -28,7 +28,8 @@ workspace = true
 [dependencies]
 acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client"], version = "0.5.18" }
 agent-client-protocol = { workspace = true, features = ["process"] }
-clankerdiff-client = { workspace = true }
+clankerdiff-client = { workspace = true, features = ["websocket"] }
+clankerdiff-server = { workspace = true }
 clankerdiff-core = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["rt", "macros", "sync"] }
 tracing = { workspace = true }

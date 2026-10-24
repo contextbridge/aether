@@ -96,6 +96,11 @@ impl SessionCoreConfigBuilder {
         self
     }
 
+    pub fn git_diff(mut self) -> Self {
+        self.capabilities.git_diff = true;
+        self
+    }
+
     pub fn client_name(mut self, client_name: impl Into<String>) -> Self {
         self.client_name = client_name.into();
         self

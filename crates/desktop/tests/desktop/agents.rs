@@ -1,5 +1,7 @@
 use crate::support::{replying, write_agents_file};
-use aether_desktop::agents::{AgentCatalog, AgentCommand, AgentConfig, Agents, project_agents_file};
+use aether_desktop::agents::{
+    AgentCatalog, AgentCommand, AgentTransport, Agents, Endpoint, EndpointSource, project_agents_file,
+};
 use aether_desktop::target::InstanceId;
 use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder, FakeConnector};
 use aether_desktop::threads::{Thread, ThreadStatus};
@@ -24,7 +26,10 @@ fn a_project_offers_the_builtin_agent_beside_those_its_file_defines() {
     let catalog = agents(None).catalog(project.path());
 
     assert_eq!(names(&catalog), ["aether", "claude", "zed"]);
-    assert_eq!(catalog.default_agent().config, AgentConfig::Stdio(AgentCommand::new("aether").args(["acp"])));
+    assert_eq!(
+        catalog.default_agent().config.transport,
+        AgentTransport::Stdio(AgentCommand::new("aether").args(["acp"]))
+    );
     assert_eq!(catalog.get("claude").unwrap().workspace, project.path());
 }
 
@@ -49,8 +54,51 @@ fn a_project_agent_replaces_the_users_of_the_same_name_which_replaces_the_builti
     let catalog = agents(Some(user_file)).catalog(project.path());
 
     assert_eq!(names(&catalog), ["aether", "claude"]);
-    assert_eq!(catalog.default_agent().config, AgentConfig::Stdio(AgentCommand::new("aether-dev").args(["acp"])));
-    assert_eq!(catalog.get("claude").unwrap().config, AgentConfig::Stdio(AgentCommand::new("project-claude")));
+    assert_eq!(
+        catalog.default_agent().config.transport,
+        AgentTransport::Stdio(AgentCommand::new("aether-dev").args(["acp"]))
+    );
+    assert_eq!(
+        catalog.get("claude").unwrap().config.transport,
+        AgentTransport::Stdio(AgentCommand::new("project-claude"))
+    );
+}
+
+#[test]
+fn an_agent_of_either_type_may_say_where_its_working_tree_is_diffed() {
+    let project = tempfile::tempdir().unwrap();
+    write_agents_file(
+        project.path(),
+        &json!({ "agents": {
+            "claude": { "type": "stdio", "command": "claude-code-acp" },
+            "claude (ssh)": {
+                "type": "stdio",
+                "command": "ssh",
+                "diff": { "url": "ws://localhost:7331/ws", "headers": { "Authorization": "Bearer ${TOKEN}" } },
+            },
+            "codex (VM)": {
+                "type": "websocket",
+                "url": "wss://vm:8765",
+                "diff": { "endpoint": { "command": "./diff-endpoint.sh", "args": ["${INSTANCE_ID}"] } },
+            },
+        }}),
+    );
+
+    let catalog = agents(None).catalog(project.path());
+
+    assert!(catalog.problems().is_empty());
+    assert_eq!(catalog.get("claude").unwrap().config.diff, None);
+    assert_eq!(
+        catalog.get("claude (ssh)").unwrap().config.diff,
+        Some(EndpointSource::Fixed(Endpoint {
+            url: "ws://localhost:7331/ws".to_owned(),
+            headers: [("Authorization".to_owned(), "Bearer ${TOKEN}".to_owned())].into(),
+        }))
+    );
+    assert_eq!(
+        catalog.get("codex (VM)").unwrap().config.diff,
+        Some(EndpointSource::Command(AgentCommand::new("./diff-endpoint.sh").args(["${INSTANCE_ID}"])))
+    );
 }
 
 #[test]
@@ -77,6 +125,10 @@ fn an_agent_whose_fields_do_not_go_together_is_reported() {
         json!({ "type": "websocket", "url": "ws://host", "launches": command }),
         json!({ "type": "stdio", "commnd": "aether" }),
         json!({ "type": "carrier-pigeon", "command": "aether" }),
+        json!({ "type": "stdio", "command": "claude", "diff": {} }),
+        json!({ "type": "stdio", "command": "claude", "diff": { "url": "ws://host", "endpoint": command } }),
+        json!({ "type": "stdio", "command": "claude", "diff": { "endpoint": command, "headers": { "Authorization": "token" } } }),
+        json!({ "type": "stdio", "command": "claude", "diff": { "uri": "ws://host" } }),
     ];
 
     for config in invalid {

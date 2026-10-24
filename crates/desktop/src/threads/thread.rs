@@ -263,8 +263,16 @@ impl Thread {
                 self.session_id = Some(config.session_response.session_id.clone());
                 // Replaces any earlier core, since a resumed session replays its history from the
                 // start and would otherwise duplicate what the thread already shows.
-                self.core.insert(SessionCore::new(*config)).open_git_review();
+                self.core = Some(SessionCore::new(*config));
                 self.connection = ThreadStatus::Idle;
+            }
+            DriverMessage::OpenReview(source) => {
+                if let Some(core) = self.core.as_mut() {
+                    match source {
+                        Some(source) => core.open_git_review_from(source),
+                        None => core.open_git_review(),
+                    }
+                }
             }
             DriverMessage::ConnectFailed(error) => self.connection = ThreadStatus::Errored(error.to_string()),
             DriverMessage::Event(event) => {

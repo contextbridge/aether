@@ -119,7 +119,7 @@ impl<T> FakeExecutor<T> {
                 let status = self.git.workspace_status();
                 Some(CommandResult::WorkspaceResolved { cwd: cwd.clone(), status })
             }
-            Command::GitReview(GitReviewCommand::Open { .. }) => {
+            Command::GitReview(GitReviewCommand::Open(_)) => {
                 self.git_completion = None;
                 self.published = Some(Arc::new(ClientState::default().apply(&ServerEvent::Initialize {
                     protocol_version: LIVE_PROTOCOL_VERSION,

@@ -85,11 +85,18 @@ impl FakeAgent {
     /// Advertises prompt search and answers it from `prompts`, oldest first: the ones that
     /// contain the query, newest first.
     pub fn prompt_history(mut self, prompts: &[&str]) -> Self {
-        let capabilities = AetherCapabilities { prompt_search: true, ..AetherCapabilities::default() };
-        let session = self.initialize.capabilities.session.take().unwrap_or_default();
-        self.initialize.capabilities.session = Some(session.meta(Some(capabilities.to_meta())));
         self.prompt_history = prompts.iter().map(|prompt| (*prompt).to_owned()).collect();
-        self
+        self.advertise(|capabilities| capabilities.prompt_search = true)
+    }
+
+    pub fn git_diff(self) -> Self {
+        self.advertise(|capabilities| capabilities.git_diff = true)
+    }
+
+    pub fn aether_capabilities(&self) -> AetherCapabilities {
+        AetherCapabilities::from_meta(
+            self.initialize.capabilities.session.as_ref().and_then(|session| session.meta.as_ref()),
+        )
     }
 
     pub fn agent_info(mut self, info: Implementation) -> Self {
@@ -338,6 +345,14 @@ impl HandleDispatchFrom<Client> for FakeAgent {
 }
 
 impl FakeAgent {
+    fn advertise(mut self, enable: impl FnOnce(&mut AetherCapabilities)) -> Self {
+        let mut capabilities = self.aether_capabilities();
+        enable(&mut capabilities);
+        let session = self.initialize.capabilities.session.take().unwrap_or_default();
+        self.initialize.capabilities.session = Some(session.meta(Some(capabilities.to_meta())));
+        self
+    }
+
     /// The prompts in its history that contain the query, newest first.
     fn search_prompts(&self, request: PromptSearchParams) -> PromptSearchResponse {
         let results = self
