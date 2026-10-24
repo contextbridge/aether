@@ -7,6 +7,7 @@ mod prompt;
 mod prompt_cache_key;
 mod queued_input;
 mod retry_config;
+mod sub_agent_sessions;
 mod tool_execution;
 
 pub use crate::events::{AgentCommand, AgentEvent, Command, UserCommand};
@@ -17,6 +18,7 @@ pub use agent_registry::*;
 pub use error::*;
 pub use prompt::*;
 pub use retry_config::RetryConfig;
+pub use sub_agent_sessions::{SubAgentSession, SubAgentSessions};
 
 use llm::StreamingModelProvider;
 use std::sync::Arc;

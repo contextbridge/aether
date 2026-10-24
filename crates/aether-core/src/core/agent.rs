@@ -668,15 +668,13 @@ impl Agent {
 
     async fn apply_tool_update(&mut self, tool_id: String, update: ToolExecutionUpdate, state: &mut IterationState) {
         match update {
-            ToolExecutionUpdate::Event(event) => {
-                if let ToolEvent::SubAgentProgress { payload, .. } = &event
-                    && let AgentEvent::SessionUsage(child) = &payload.event
-                {
-                    let folded = self.session_usage.record_child(&payload.task_id, child.clone());
-                    self.emit(AgentEvent::SessionUsage(folded)).await;
-                }
-                self.emit(AgentEvent::Tool(event)).await;
+            ToolExecutionUpdate::Event(ToolEvent::SubAgentProgress { ref payload, .. })
+                if let AgentEvent::SessionUsage(child) = &payload.event =>
+            {
+                let folded = self.session_usage.record_child(&payload.session_id, child.clone());
+                self.emit(AgentEvent::SessionUsage(folded)).await;
             }
+            ToolExecutionUpdate::Event(event) => self.emit(AgentEvent::Tool(event)).await,
             ToolExecutionUpdate::Completed(event) => {
                 self.streams.remove(&StreamKey::Tool(tool_id));
                 self.emit(AgentEvent::Tool(event)).await;

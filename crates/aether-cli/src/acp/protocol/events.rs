@@ -31,7 +31,7 @@ pub(crate) fn project_agent_event(msg: &AgentEvent, mode: NotificationMode, io: 
                 io.send(SubAgentProgressParams {
                     session_id: io.session_id().clone(),
                     parent_tool_id: request.id.clone(),
-                    task_id: payload.task_id.clone(),
+                    task_id: payload.session_id.clone(),
                     agent_name: payload.agent_name.clone(),
                     event,
                 });
@@ -362,7 +362,11 @@ mod tests {
     fn sub_agent_progress(event: AgentEvent) -> AgentEvent {
         AgentEvent::Tool(ToolEvent::SubAgentProgress {
             request: ToolCallRequest { id: "parent".into(), name: "spawn".into(), arguments: "{}".into() },
-            payload: Box::new(SubAgentProgressPayload { task_id: "task".into(), agent_name: "worker".into(), event }),
+            payload: Box::new(SubAgentProgressPayload {
+                session_id: "task".into(),
+                agent_name: "worker".into(),
+                event,
+            }),
         })
     }
 
