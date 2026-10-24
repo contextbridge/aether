@@ -93,7 +93,7 @@ pub(crate) fn read_capped(path: &Path, display_name: &str) -> Result<Vec<u8>, St
 }
 
 const MAX_EMBED_TEXT_BYTES: usize = 1024 * 1024;
-const MAX_MEDIA_BYTES: usize = 10 * 1024 * 1024;
+const MAX_MEDIA_BYTES: usize = 5 * 1024 * 1024;
 const IMAGE_MIME_TYPES: &[&str] = &["image/png", "image/jpeg", "image/gif", "image/webp"];
 const AUDIO_MIME_TYPES: &[&str] = &["audio/wav", "audio/mpeg", "audio/mp3", "audio/ogg"];
 

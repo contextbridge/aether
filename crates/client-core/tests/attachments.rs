@@ -9,7 +9,7 @@ use std::path::Path;
 use utils::testing::TestWorkspace;
 
 const ONE_MIB: usize = 1024 * 1024;
-const TEN_MIB: usize = 10 * 1024 * 1024;
+const FIVE_MIB: usize = 5 * 1024 * 1024;
 
 #[test]
 fn classify_attachment_whitelists_media_and_text_types() {
@@ -40,14 +40,14 @@ fn attachments_enforce_media_and_text_size_limits() {
     early_invalid[100] = 0xff;
     let svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>".to_vec();
     let flac = b"fake but valid UTF-8 audio metadata".to_vec();
-    let too_large = |name: &str| format!("Skipped {name}: file too large (max 10485760)");
+    let too_large = |name: &str| format!("Skipped {name}: file too large (max 5242880)");
     let binary = |name: &str| format!("Skipped binary or non-UTF8 file: {name}");
     let truncated = |name: &str| format!("Truncated {name} to 1048576 bytes");
     let cases = [
-        ("photo.png", vec![0; TEN_MIB], Some(("image", "image/png", TEN_MIB)), None),
-        ("photo.png", vec![0; TEN_MIB + 1], None, Some(too_large("photo.png"))),
-        ("note.wav", vec![0; TEN_MIB], Some(("audio", "audio/wav", TEN_MIB)), None),
-        ("note.wav", vec![0; TEN_MIB + 1], None, Some(too_large("note.wav"))),
+        ("photo.png", vec![0; FIVE_MIB], Some(("image", "image/png", FIVE_MIB)), None),
+        ("photo.png", vec![0; FIVE_MIB + 1], None, Some(too_large("photo.png"))),
+        ("note.wav", vec![0; FIVE_MIB], Some(("audio", "audio/wav", FIVE_MIB)), None),
+        ("note.wav", vec![0; FIVE_MIB + 1], None, Some(too_large("note.wav"))),
         ("notes.txt", text(ONE_MIB - 1), Some(("text", "text/plain", ONE_MIB - 1)), None),
         ("notes.txt", text(ONE_MIB), Some(("text", "text/plain", ONE_MIB)), None),
         ("notes.txt", text(ONE_MIB + 1), Some(("text", "text/plain", ONE_MIB)), Some(truncated("notes.txt"))),
