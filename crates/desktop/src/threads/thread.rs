@@ -32,6 +32,9 @@ pub enum ThreadEvent {
     PromptSearchResults { query: String, result: Result<PromptSearchResponse, String> },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ElicitationId(usize);
+
 /// One agent session the app runs or shows: its state, and the driver that connects it to its
 /// agent.
 pub struct Thread {
@@ -48,6 +51,7 @@ pub struct Thread {
     connection: ThreadStatus,
     /// The question the agent waits on. Replacing or dropping it cancels the agent's request.
     elicitation: Option<PendingElicitation>,
+    elicitations: usize,
     /// A prompt that never reached the agent, for the composer to give back.
     restored_submissions: Vec<Submission>,
     /// The agent's view of the working tree's changes, kept current for as long as the session is
@@ -83,6 +87,7 @@ impl Thread {
             core: None,
             connection: ThreadStatus::Connecting,
             elicitation: None,
+            elicitations: 0,
             restored_submissions: Vec::new(),
             review: None,
             driver: None,
@@ -133,14 +138,14 @@ impl Thread {
         }
     }
 
-    pub fn elicitation(&self) -> Option<&Elicitation> {
-        self.elicitation.as_ref().map(|pending| &pending.elicitation)
+    pub fn elicitation(&self) -> Option<(ElicitationId, &Elicitation)> {
+        self.elicitation.as_ref().map(|pending| (pending.id, &pending.elicitation))
     }
 
     /// Answers the question the agent waits on through `respond`, which lets its turn go on.
     /// Without a question waiting, `respond` is not called.
-    pub fn answer(&mut self, respond: impl FnOnce(ElicitationResponder), cx: &mut Context<Self>) {
-        if let Some(pending) = self.elicitation.take() {
+    pub fn answer(&mut self, id: ElicitationId, respond: impl FnOnce(ElicitationResponder), cx: &mut Context<Self>) {
+        if let Some(pending) = self.elicitation.take_if(|pending| pending.id == id) {
             respond(pending.responder);
             self.changed(cx);
         }
@@ -298,7 +303,9 @@ impl Thread {
                     }
                 }
                 Effect::ShowElicitation { elicitation, responder } => {
-                    self.elicitation = Some(PendingElicitation { elicitation, responder });
+                    let id = ElicitationId(self.elicitations);
+                    self.elicitations += 1;
+                    self.elicitation = Some(PendingElicitation { id, elicitation, responder });
                     cx.emit(ThreadEvent::NeedsInput);
                 }
                 Effect::RestoreSubmission(submission) => self.restored_submissions.push(submission),
@@ -338,6 +345,7 @@ impl Thread {
 impl EventEmitter<ThreadEvent> for Thread {}
 
 struct PendingElicitation {
+    id: ElicitationId,
     elicitation: Elicitation,
     /// Dropping it unanswered cancels the agent's request.
     responder: ElicitationResponder,

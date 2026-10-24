@@ -7,4 +7,4 @@ mod thread;
 
 pub use manager::{Attention, ThreadManager};
 pub use status::ThreadStatus;
-pub use thread::{Thread, ThreadEvent};
+pub use thread::{ElicitationId, Thread, ThreadEvent};

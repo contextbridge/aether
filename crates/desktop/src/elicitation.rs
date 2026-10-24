@@ -2,7 +2,7 @@
 //! answer at, or an artifact to review.
 
 use crate::theme::DesktopTheme;
-use crate::threads::Thread;
+use crate::threads::{ElicitationId, Thread};
 use crate::ui::UiTheme;
 use crate::ui::tokens::{CONTENT_MAX_WIDTH, RADIUS_CONTROL, rem};
 use crate::ui::{Button, ButtonVariant, SurfaceExt, Typography, TypographyExt};
@@ -24,7 +24,7 @@ use gpui_base::input::{Enter, Input, InputState};
 pub(crate) struct ElicitationCard {
     thread: Entity<Thread>,
     /// The answer being written, while the thread has a question waiting.
-    draft: Option<Draft>,
+    draft: Option<(ElicitationId, Draft)>,
     _subscription: Subscription,
 }
 
@@ -75,15 +75,18 @@ impl ElicitationCard {
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let draft = match self.thread.read(cx).elicitation() {
             None => None,
-            Some(_) if self.draft.is_some() => return,
-            Some(Elicitation::Request(request)) => Some(match &request.mode {
-                ElicitationMode::Form(form) => form_fields(&form.requested_schema)
-                    .map_or(Draft::Unsupported, |fields| Draft::form(fields, window, cx)),
-                ElicitationMode::Url(url) => Draft::Url(url.url.clone()),
-                _ => Draft::Unsupported,
-            }),
-            Some(Elicitation::ArtifactReview(meta)) => {
-                Some(Draft::ArtifactReview(meta.path.as_ref().map(|path| path.display().to_string())))
+            Some((id, _)) if self.draft.as_ref().is_some_and(|(drafted, _)| *drafted == id) => return,
+            Some((id, Elicitation::Request(request))) => Some((
+                id,
+                match &request.mode {
+                    ElicitationMode::Form(form) => form_fields(&form.requested_schema)
+                        .map_or(Draft::Unsupported, |fields| Draft::form(fields, window, cx)),
+                    ElicitationMode::Url(url) => Draft::Url(url.url.clone()),
+                    _ => Draft::Unsupported,
+                },
+            )),
+            Some((id, Elicitation::ArtifactReview(meta))) => {
+                Some((id, Draft::ArtifactReview(meta.path.as_ref().map(|path| path.display().to_string()))))
             }
         };
         self.draft = draft;
@@ -92,12 +95,13 @@ impl ElicitationCard {
 
     /// Sends the form's answers, unless one cannot be sent, which is shown beside its field.
     fn submit(&mut self, cx: &mut Context<Self>) {
-        let Some(Draft::Form { fields, error }) = &mut self.draft else {
+        let Some((id, Draft::Form { fields, error })) = &mut self.draft else {
             return;
         };
         match accept_content(fields.iter().map(|draft| (&draft.field, draft.answer.input(cx)))) {
             Ok(content) => {
-                self.thread.update(cx, |thread, cx| thread.answer(|answer| answer.accept(Some(content)), cx));
+                let id = *id;
+                self.thread.update(cx, |thread, cx| thread.answer(id, |answer| answer.accept(Some(content)), cx));
             }
             Err(refused) => {
                 *error = Some(refused);
@@ -108,20 +112,24 @@ impl ElicitationCard {
 
     /// Opens the page the agent asks the user to answer at, and tells the agent it was opened.
     fn open_url(&mut self, cx: &mut Context<Self>) {
-        if let Some(Draft::Url(url)) = &self.draft {
+        if let Some((id, Draft::Url(url))) = &self.draft {
+            let id = *id;
             cx.open_url(url);
-            self.thread.update(cx, |thread, cx| thread.answer(|answer| answer.accept(None), cx));
+            self.thread.update(cx, |thread, cx| thread.answer(id, |answer| answer.accept(None), cx));
         }
     }
 
     fn decline(&mut self, cx: &mut Context<Self>) {
-        self.thread.update(cx, |thread, cx| thread.answer(ElicitationResponder::decline, cx));
+        if let Some((id, _)) = &self.draft {
+            let id = *id;
+            self.thread.update(cx, |thread, cx| thread.answer(id, ElicitationResponder::decline, cx));
+        }
     }
 
     /// Clicks option `option` of field `index`: a boolean field flips, a single-select field
     /// chooses the option, and a multi-select field checks or unchecks it.
     fn pick(&mut self, index: usize, option: usize, cx: &mut Context<Self>) {
-        let Some(Draft::Form { fields, .. }) = &mut self.draft else {
+        let Some((_, Draft::Form { fields, .. })) = &mut self.draft else {
             return;
         };
         let Some(FieldAnswer::Picked(input)) = fields.get_mut(index).map(|draft| &mut draft.answer) else {
@@ -235,7 +243,7 @@ impl EventEmitter<OpenReview> for ElicitationCard {}
 
 impl Render for ElicitationCard {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (Some(draft), Some(elicitation)) = (&self.draft, self.thread.read(cx).elicitation()) else {
+        let (Some((_, draft)), Some((_, elicitation))) = (&self.draft, self.thread.read(cx).elicitation()) else {
             return div().into_any_element();
         };
         let theme = DesktopTheme::global(cx).ui();

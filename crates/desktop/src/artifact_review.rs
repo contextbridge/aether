@@ -1,5 +1,5 @@
 use crate::theme::DesktopTheme;
-use crate::threads::Thread;
+use crate::threads::{ElicitationId, Thread};
 use clankerdiff_core::ReviewCapabilities;
 use clankerdiff_gpui::{MarkdownReviewer, MarkdownReviewerOptions};
 use clankerdiff_markdown::{MarkdownDocument, MarkdownReviewDecision, MarkdownReviewEvent, MarkdownReviewSubmission};
@@ -21,14 +21,15 @@ pub(crate) struct ArtifactReview {
 }
 
 /// The artifact review `thread`'s agent waits on, if any.
-pub(crate) fn pending_review(thread: &Thread) -> Option<&ArtifactReviewElicitationMeta> {
+pub(crate) fn pending_review(thread: &Thread) -> Option<(ElicitationId, &ArtifactReviewElicitationMeta)> {
     match thread.elicitation() {
-        Some(Elicitation::ArtifactReview(meta)) => Some(meta),
+        Some((id, Elicitation::ArtifactReview(meta))) => Some((id, meta)),
         _ => None,
     }
 }
 
 struct Reviewer {
+    id: ElicitationId,
     view: Entity<MarkdownReviewer>,
     _subscription: Subscription,
 }
@@ -52,30 +53,26 @@ impl ArtifactReview {
     /// Starts reviewing an artifact when one arrives, and drops it once it is answered or
     /// withdrawn.
     fn sync(&mut self, cx: &mut Context<Self>) {
-        let meta = pending_review(self.thread.read(cx)).cloned();
-        match (meta, &self.reviewer) {
-            (Some(_), Some(_)) | (None, None) => {}
-            (Some(meta), None) => {
-                self.reviewer = Some(Reviewer::new(meta, cx));
-                cx.notify();
-            }
-            (None, Some(_)) => {
-                self.reviewer = None;
-                cx.notify();
-            }
+        let pending = pending_review(self.thread.read(cx));
+        if pending.map(|(id, _)| id) == self.reviewer.as_ref().map(|reviewer| reviewer.id) {
+            return;
         }
+        let pending = pending.map(|(id, meta)| (id, meta.clone()));
+        self.reviewer = pending.map(|(id, meta)| Reviewer::new(id, meta, cx));
+        cx.notify();
     }
 
-    fn on_reviewer_event(&mut self, event: &MarkdownReviewEvent, cx: &mut Context<Self>) {
+    fn on_reviewer_event(&mut self, id: ElicitationId, event: &MarkdownReviewEvent, cx: &mut Context<Self>) {
         match event {
             MarkdownReviewEvent::Submit(submission) => {
                 let answer = answer(submission);
-                self.thread
-                    .update(cx, |thread, cx| thread.answer(|responder| responder.accept_strings(answer.fields()), cx));
+                self.thread.update(cx, |thread, cx| {
+                    thread.answer(id, |responder| responder.accept_strings(answer.fields()), cx);
+                });
             }
             MarkdownReviewEvent::CopyFormatted(text) => cx.write_to_clipboard(ClipboardItem::new_string(text.clone())),
             MarkdownReviewEvent::Cancel => {
-                self.thread.update(cx, |thread, cx| thread.answer(ElicitationResponder::cancel, cx));
+                self.thread.update(cx, |thread, cx| thread.answer(id, ElicitationResponder::cancel, cx));
             }
         }
     }
@@ -91,7 +88,7 @@ impl Render for ArtifactReview {
 }
 
 impl Reviewer {
-    fn new(meta: ArtifactReviewElicitationMeta, cx: &mut Context<ArtifactReview>) -> Self {
+    fn new(id: ElicitationId, meta: ArtifactReviewElicitationMeta, cx: &mut Context<ArtifactReview>) -> Self {
         let ArtifactReviewElicitationMeta { path, title, markdown, .. } = meta;
         let document =
             MarkdownDocument::parse_with_metadata(path.map(|path| path.display().to_string()), Some(title), markdown);
@@ -106,8 +103,8 @@ impl Reviewer {
             reviewer
         });
         let subscription =
-            cx.subscribe(&view, |this, _, event: &MarkdownReviewEvent, cx| this.on_reviewer_event(event, cx));
-        Self { view, _subscription: subscription }
+            cx.subscribe(&view, move |this, _, event: &MarkdownReviewEvent, cx| this.on_reviewer_event(id, event, cx));
+        Self { id, view, _subscription: subscription }
     }
 }
 

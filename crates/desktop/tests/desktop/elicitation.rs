@@ -36,6 +36,21 @@ fn a_required_field_left_empty_is_flagged_and_the_agent_keeps_waiting(cx: &mut T
 }
 
 #[gpui::test]
+fn a_question_that_replaces_another_starts_with_a_fresh_answer(cx: &mut TestAppContext) {
+    let schema = ElicitationSchema::new().property("name", StringPropertySchema::new().title("Name"), true);
+    let (harness, thread) = questioned(agent().prompt_form("Who are you?", schema), cx);
+    harness.click(cx, "elicitation-field-name").unwrap();
+    harness.simulate_input(cx, "Ada");
+
+    thread.update(cx, |thread, cx| thread.submit("again", cx));
+    harness.run_until(cx, |cx| texts(thread.read(cx)).len() == 3);
+    harness.click(cx, "elicitation-submit").unwrap();
+
+    assert!(harness.bounds(cx, "elicitation-error-name").is_some(), "the new question's field starts empty");
+    assert_eq!(thread.read_with(cx, |thread, _| thread.status()), ThreadStatus::NeedsInput);
+}
+
+#[gpui::test]
 fn chosen_options_reach_the_agent(cx: &mut TestAppContext) {
     let sizes = StringPropertySchema::new().one_of(vec![EnumOption::new("s", "Small"), EnumOption::new("l", "Large")]);
     let schema =
