@@ -1,0 +1,12 @@
+name: Set up workspace
+description: Installs the system libraries and linker the workspace builds with
+
+runs:
+  using: composite
+  steps:
+    - name: Install system dependencies
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo apt-get update
+        sudo apt-get install -y libdbus-1-dev libfontconfig1-dev libxkbcommon-x11-dev mold

@@ -5,6 +5,13 @@ default:
 run:
     cargo run -p aether-wisp -- -a 'cargo run -p aether-agent-cli acp'
 
+desktop:
+    cargo run -p aether-desktop -- --agent 'cargo run -p aether-agent-cli acp'
+
+desktop-release:
+    cargo build --release -p aether-agent-cli
+    cargo run --release -p aether-desktop -- --agent '{{justfile_directory()}}/target/release/aether acp'
+
 # Build the workspace
 build:
     cargo build
@@ -40,6 +47,9 @@ fmt:
 # Run clippy
 lint *PKGS:
     cargo clippy --all-targets --all-features {{ if PKGS == "" { "--workspace" } else { PKGS } }} -- -D warnings
+
+desktop-style-check:
+    scripts/desktop-style-check
 
 # Verify checked SQL queries match the session-index schema
 sqlx-check:
@@ -83,7 +93,7 @@ sdk-e2e *ARGS:
     pnpm sdk:e2e {{ARGS}}
 
 # Run all CI checks
-ci: fmt-check lint test-ci doc-check sqlx-check wasm-check wasm-test
+ci: fmt-check lint desktop-style-check test-ci doc-check sqlx-check wasm-check wasm-test
     pnpm fmt-check
     pnpm sdk:typecheck
     pnpm sdk:test

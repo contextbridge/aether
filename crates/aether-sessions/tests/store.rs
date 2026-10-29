@@ -3,7 +3,7 @@ use aether_sessions::testing::{
     DEFAULT_CREATED_AT, TestStore, agent_switched, assistant_text, partial_text, session_meta, tool_call, user_message,
     user_message_with,
 };
-use aether_sessions::{ScanLimits, SessionStore, SessionStoreError};
+use aether_sessions::{ScanLimits, SessionStore, SessionStoreError, SessionSummary, SummaryCache};
 use llm::ContentBlock;
 use std::fs;
 use std::io::Write;
@@ -71,6 +71,25 @@ fn list_sorts_sessions_and_extracts_first_user_title() {
     let sessions = store.store().list();
     assert_eq!(sessions.iter().map(|session| session.meta.session_id.as_str()).collect::<Vec<_>>(), ["new", "old"]);
     assert_eq!(sessions[0].title.as_deref(), Some("new title"));
+}
+
+#[test]
+fn cached_list_rereads_changed_sessions_and_forgets_removed_ones() {
+    let store = TestStore::new().session("kept", &[]).session("removed", &[]);
+    let mut cache = SummaryCache::default();
+    let titles = |sessions: Vec<SessionSummary>| {
+        sessions.into_iter().map(|session| (session.meta.session_id, session.title)).collect::<Vec<_>>()
+    };
+    assert_eq!(
+        titles(store.store().list_cached(&mut cache)),
+        [("removed".to_owned(), None), ("kept".to_owned(), None)]
+    );
+
+    store.append("kept", &user_message("now titled"));
+    fs::remove_file(store.path().join("removed.jsonl")).unwrap();
+
+    assert_eq!(titles(store.store().list_cached(&mut cache)), [("kept".to_owned(), Some("now titled".to_owned()))]);
+    assert_eq!(store.store().list_cached(&mut cache), store.store().list());
 }
 
 #[test]
