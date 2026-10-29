@@ -67,6 +67,7 @@ dependencies = [
  "aether-agent-cli",
  "aether-agent-core",
  "aether-auth",
+ "aether-client-core",
  "aether-llm",
  "aether-mcp-servers",
  "aether-mcp-utils",

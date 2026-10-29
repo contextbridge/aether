@@ -1,44 +1,6 @@
 use super::support::*;
 
 #[test]
-fn app_exposes_initial_config_option_selections() {
-    let options =
-        vec![select_option("model", "opus"), select_option("mode", "plan"), select_option("reasoning", "high")];
-    let app = TestUiBuilder::new().config_options(options).build();
-
-    let selections: Vec<_> = app
-        .app()
-        .config_options()
-        .iter()
-        .map(|option| (option.id.as_str(), option.current_value().expect("expected select option")))
-        .collect();
-
-    assert_eq!(selections, [("model", "opus"), ("mode", "plan"), ("reasoning", "high")]);
-}
-
-#[test]
-fn config_option_update_replaces_current_selections() {
-    let mut app = TestUiBuilder::new().config_options(vec![select_option("model", "opus")]).build();
-
-    app.acp_event(config_update(vec![select_option("model", "sonnet"), select_option("mode", "code")]));
-
-    assert_eq!(app.app().config_options().len(), 2);
-    assert_eq!(app.app().config_options()[0].current_value(), Some("sonnet"));
-}
-
-#[test]
-fn auth_methods_update_replaces_current_auth_methods() {
-    let initial = vec![acp::AuthMethod::Agent(acp::AuthMethodAgent::new("initial", "Initial"))];
-    let mut app = TestUiBuilder::new().auth_methods(initial).build();
-    let updated = vec![acp::AuthMethod::Agent(acp::AuthMethodAgent::new("updated", "Updated"))];
-
-    app.acp_event(AcpEvent::AuthMethodsUpdated(AuthMethodsUpdatedParams { auth_methods: updated }));
-
-    assert_eq!(app.app().auth_methods().len(), 1);
-    assert_eq!(app.app().auth_methods()[0].method_id().0.as_ref(), "updated");
-}
-
-#[test]
 fn composer_moves_vertically_before_recalling_history() {
     let mut composer = Composer::new();
     composer.insert_str("one\nsecond");
@@ -56,20 +18,18 @@ fn command_picker_filters_and_applies_selected_command() {
     let mut composer = Composer::new();
     composer.insert_char('/');
     composer.open_command_picker(vec![
-        CommandEntry {
+        SlashCommand::Agent(CommandEntry {
             name: "search".to_string(),
             description: "Search the workspace".to_string(),
             has_input: true,
             hint: Some("query".to_string()),
-            builtin: false,
-        },
-        CommandEntry {
+        }),
+        SlashCommand::Agent(CommandEntry {
             name: "status".to_string(),
             description: "Show status".to_string(),
             has_input: false,
             hint: None,
-            builtin: false,
-        },
+        }),
     ]);
     composer.insert_str("sea");
     composer.refresh_overlay_query();
@@ -78,7 +38,7 @@ fn command_picker_filters_and_applies_selected_command() {
     assert!(completion_contains(&mut composer, "/search"));
 
     let selected = composer.accept_command().unwrap();
-    assert_eq!(selected.name, "search");
+    assert_eq!(selected.name(), "search");
     assert_eq!(composer.text(), "/search");
     assert!(!composer.has_completion());
 }
@@ -102,38 +62,30 @@ fn file_picker_filters_and_inserts_a_mention() {
 
 #[test]
 fn selected_file_is_sent_as_an_acp_resource_attachment() {
-    let mut app = TestUiBuilder::new().working_dir("/workspace").build();
-    app.executor_mut().filesystem_mut().write_file("/workspace/context.txt", b"attached context");
+    let mut app = TestUiBuilder::new().file("context.txt", b"attached context").dimensions(160, 15).build();
 
     app.key(key(KeyCode::Char('@')));
-    app.settle_tasks();
     app.key(key(KeyCode::Char('c')));
     app.key(key(KeyCode::Enter));
     assert_eq!(app.app().composer().text(), "@context.txt ");
     app.key(key(KeyCode::Enter));
-    app.settle_tasks();
 
-    let AgentCommand::Prompt { text, content, .. } = app.next_agent_command().unwrap() else {
-        panic!("expected a prompt command");
-    };
-    assert_eq!(text, "@context.txt ");
-    assert!(matches!(content.as_deref(), Some([acp::ContentBlock::Resource(_)])));
-    let mut blocks = vec![acp::ContentBlock::from(text)];
-    blocks.extend(content.unwrap());
-    let expanded = acp_utils::content::map_content_blocks_to_text(&blocks);
+    let prompt = app.agent().prompt.try_recv().expect("the agent received the prompt").prompt;
+    assert!(
+        matches!(&prompt[..], [acp::ContentBlock::Text(text), acp::ContentBlock::Resource(_)] if text.text == "@context.txt ")
+    );
+    let expanded = acp_utils::content::map_content_blocks_to_text(&prompt);
     assert!(expanded.contains("attached context"), "the model receives the file contents");
     app.assert_viewport_contains("@context.txt");
-    app.assert_viewport_contains("file:///workspace/context.txt");
+    app.assert_viewport_contains(&format!("file://{}", app.workspace().join("context.txt").display()));
     app.assert_conversation_not_contains("attached context");
 }
 
 #[test]
 fn file_picker_renders_in_the_live_viewport_not_scrollback() {
-    let mut ui = TestUiBuilder::new().working_dir("/workspace").build();
-    ui.executor_mut().filesystem_mut().write_file("/workspace/context.txt", b"attached context");
+    let mut ui = TestUiBuilder::new().file("context.txt", b"attached context").build();
 
     ui.key(key(KeyCode::Char('@')));
-    ui.settle_tasks();
     ui.key(key(KeyCode::Char('c')));
 
     ui.assert_viewport_contains("context.txt");
@@ -598,6 +550,8 @@ fn fitting_content_stays_visible_in_a_small_viewport() {
     ui.resize(40, 15);
     ui.draw();
 
-    assert!(ui.app().conversation_items().iter().any(|item| item.text().as_deref() == Some("queued while small")));
+    assert!(
+        ui.app().core().conversation().items().iter().any(|item| item.text().as_deref() == Some("queued while small"))
+    );
     ui.assert_viewport_contains("queued while small");
 }

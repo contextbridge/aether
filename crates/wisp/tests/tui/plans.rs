@@ -5,9 +5,7 @@ fn plan_entry(content: &str, status: acp::PlanEntryStatus) -> acp::PlanEntry {
 }
 
 fn plan_update(entries: Vec<acp::PlanEntry>) -> AcpEvent {
-    session_update(acp::SessionUpdate::PlanUpdate(acp::PlanUpdate::new(acp::PlanUpdateContent::Items(
-        acp::PlanItems::new("plan", entries),
-    ))))
+    session_update(plan("plan", entries))
 }
 
 #[test]
@@ -18,7 +16,7 @@ fn plan_renders_in_viewport() {
         plan_entry("Implement", acp::PlanEntryStatus::Pending),
     ]));
 
-    assert!(ui.app().has_plan());
+    assert_eq!(ui.app().plan_entries().len(), 2);
 
     ui.assert_viewport_contains("Plan");
     ui.assert_viewport_contains("Research");
@@ -67,7 +65,7 @@ fn plan_grace_period_timestamp_preserved_across_repeated_updates() {
     ui.acp_event(plan_update(vec![plan_entry("Task", acp::PlanEntryStatus::Completed)]));
 
     ui.tick(now);
-    assert!(ui.app().has_plan(), "still visible at original completion time");
+    assert_eq!(ui.app().plan_entries().len(), 1, "still visible at original completion time");
 
     ui.tick(now + Duration::from_secs(10));
     let entries = ui.app().plan_entries();
@@ -144,10 +142,10 @@ fn plan_not_in_scrollback() {
 fn plan_cleared_on_context_cleared() {
     let mut ui = TestUi::new();
     ui.acp_event(plan_update(vec![plan_entry("Task", acp::PlanEntryStatus::Pending)]));
-    assert!(ui.app().has_plan());
+    assert_eq!(ui.app().plan_entries().len(), 1);
 
     ui.acp_event(context_cleared());
-    assert!(!ui.app().has_plan());
+    assert_eq!(ui.app().plan_entries(), []);
 
     ui.assert_viewport_not_contains("Task");
 }
@@ -156,11 +154,11 @@ fn plan_cleared_on_context_cleared() {
 fn plan_cleared_on_new_session() {
     let mut ui = TestUi::new();
     ui.acp_event(plan_update(vec![plan_entry("Task", acp::PlanEntryStatus::Pending)]));
-    assert!(ui.app().has_plan());
+    assert_eq!(ui.app().plan_entries().len(), 1);
 
     ui.run_command("/clear");
-    ui.deliver_result(new_session_created("new-id", Vec::new()));
-    assert!(!ui.app().has_plan());
+    new_session_created(&mut ui, "new-id", Vec::new());
+    assert_eq!(ui.app().plan_entries(), []);
 
     ui.assert_viewport_not_contains("Task");
 }
@@ -169,11 +167,11 @@ fn plan_cleared_on_new_session() {
 fn plan_cleared_on_session_loaded() {
     let mut ui = TestUi::new();
     ui.acp_event(plan_update(vec![plan_entry("Task", acp::PlanEntryStatus::Pending)]));
-    assert!(ui.app().has_plan());
+    assert_eq!(ui.app().plan_entries().len(), 1);
 
     ui.begin_resume("other-session", "/tmp");
-    ui.deliver_result(session_loaded("other-session", Vec::new()));
-    assert!(!ui.app().has_plan());
+    session_loaded(&mut ui, Vec::new());
+    assert_eq!(ui.app().plan_entries(), []);
 
     ui.assert_viewport_not_contains("Task");
 }

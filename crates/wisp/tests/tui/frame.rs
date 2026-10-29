@@ -31,7 +31,9 @@ fn resize_growth_preserves_native_history_without_duplication() {
     ui.draw();
     assert!(
         ui.app()
-            .conversation_items()
+            .core()
+            .conversation()
+            .items()
             .iter()
             .any(|item| item.text().is_some_and(|text| text.contains("overflow-line-0"))),
         "precondition: the finished reply must be retained"
@@ -56,7 +58,9 @@ fn resize_growth_preserves_native_history_without_duplication() {
     );
     assert!(
         ui.app()
-            .conversation_items()
+            .core()
+            .conversation()
+            .items()
             .iter()
             .any(|item| item.text().is_some_and(|text| text.contains("overflow-line-0")))
     );
@@ -70,18 +74,18 @@ fn repeated_draws_do_not_mutate_application_state() {
     ui.acp_event(text_chunk("streaming reply"));
 
     let before_items: Vec<String> =
-        ui.app().conversation_items().iter().map(|item| item.text().unwrap_or_default().to_string()).collect();
+        ui.app().core().conversation().items().iter().map(|item| item.text().unwrap_or_default().to_string()).collect();
     let before_composer = ui.app().composer().text().to_string();
-    let before_waiting = ui.app().waiting_for_response();
+    let before_waiting = ui.app().core().waiting_for_response();
 
     ui.draw();
     ui.draw();
 
     let after_items: Vec<String> =
-        ui.app().conversation_items().iter().map(|item| item.text().unwrap_or_default().to_string()).collect();
+        ui.app().core().conversation().items().iter().map(|item| item.text().unwrap_or_default().to_string()).collect();
     assert_eq!(after_items, before_items);
     assert_eq!(ui.app().composer().text(), before_composer);
-    assert_eq!(ui.app().waiting_for_response(), before_waiting);
+    assert_eq!(ui.app().core().waiting_for_response(), before_waiting);
 }
 
 #[test]
@@ -149,7 +153,12 @@ fn resize_growth_keeps_canonical_history_visible() {
 
     ui.assert_history_contains("queued-line-0");
     assert!(
-        ui.app().conversation_items().iter().any(|item| item.text().is_some_and(|text| text.contains("queued-line-0"))),
+        ui.app()
+            .core()
+            .conversation()
+            .items()
+            .iter()
+            .any(|item| item.text().is_some_and(|text| text.contains("queued-line-0"))),
         "precondition: the finished reply must be retained"
     );
 
@@ -157,7 +166,12 @@ fn resize_growth_keeps_canonical_history_visible() {
 
     ui.assert_history_contains("queued-line-0");
     assert!(
-        ui.app().conversation_items().iter().any(|item| item.text().is_some_and(|text| text.contains("queued-line-0")))
+        ui.app()
+            .core()
+            .conversation()
+            .items()
+            .iter()
+            .any(|item| item.text().is_some_and(|text| text.contains("queued-line-0")))
     );
     ui.assert_conversation_contains("queued-line-29");
     assert_eq!(ui.history_text().matches("queued-line-0").count(), 1);

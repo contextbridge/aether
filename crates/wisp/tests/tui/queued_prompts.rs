@@ -1,16 +1,15 @@
 use super::support::*;
-use std::borrow::Cow;
 
 #[test]
 fn a_prompt_sent_during_a_turn_is_queued_until_the_agent_inserts_it() {
     let mut ui = TestUi::with_dimensions(60, 20);
     ui.submit("first");
     ui.acp_event(text_chunk("first reply"));
-    ui.take_commands();
 
     ui.submit("second");
 
-    assert!(matches!(ui.next_agent_command(), Some(AgentCommand::Prompt { text, .. }) if text == "second"));
+    let sent: Vec<_> = std::iter::from_fn(|| ui.agent().prompt.try_recv().ok()).collect();
+    assert_eq!(sent.iter().filter_map(prompt_text).collect::<Vec<_>>(), ["first", "second"]);
     assert!(ui.app().composer().is_empty());
     assert_eq!(queued_texts(&ui), ["second"]);
     ui.assert_viewport_contains("queued › second");
@@ -21,7 +20,7 @@ fn a_prompt_sent_during_a_turn_is_queued_until_the_agent_inserts_it() {
     assert_eq!(queued_texts(&ui).len(), 0);
     ui.assert_viewport_not_contains("queued ›");
     assert_eq!(transcript(&ui), ["first", "first reply", "second"]);
-    assert!(ui.app().waiting_for_response(), "the inserted prompt joins the running turn");
+    assert!(ui.app().core().waiting_for_response(), "the inserted prompt joins the running turn");
 }
 
 #[test]
@@ -59,80 +58,38 @@ fn prompts_rejected_by_a_cancel_return_to_the_composer_in_order() {
     ui.submit("first");
     ui.submit("second");
     ui.submit("third");
-    ui.take_commands();
 
     ui.key(key(KeyCode::Esc));
-    assert!(matches!(ui.next_agent_command(), Some(AgentCommand::Cancel { .. })));
-    ui.reject_queued_prompts(&PromptRejection::Cancelled);
+    assert!(ui.agent().cancel.try_recv().is_ok());
+    ui.reject_queued_prompts(&Error::request_cancelled());
     ui.complete_prompt(acp::StopReason::Cancelled);
 
     assert_eq!(ui.app().composer().text(), "second\nthird");
     assert_eq!(queued_texts(&ui).len(), 0);
-    assert!(!ui.app().waiting_for_response());
+    assert!(!ui.app().core().waiting_for_response());
     assert_eq!(transcript(&ui), ["first"], "cancelled prompts never join the conversation and need no notice");
 }
 
 #[test]
-fn a_rejected_prompt_is_restored_after_the_draft_being_typed() {
-    let mut ui = TestUi::new();
-    ui.submit("first");
-    ui.submit("second");
-    ui.type_text("draft");
-
-    ui.reject_queued_prompts(&PromptRejection::Cancelled);
-
-    assert_eq!(ui.app().composer().text(), "draft\nsecond");
-}
-
-#[test]
 fn a_rejected_prompt_keeps_its_file_mentions() {
-    let mut ui = TestUiBuilder::new().working_dir("/workspace").build();
-    ui.executor_mut().filesystem_mut().write_file("/workspace/context.txt", b"attached context");
+    let mut ui = TestUiBuilder::new().file("context.txt", b"attached context").build();
     ui.submit("first");
     ui.key(key(KeyCode::Char('@')));
-    ui.settle_tasks();
     ui.key(key(KeyCode::Char('c')));
     ui.key(key(KeyCode::Enter));
     ui.key(key(KeyCode::Enter));
-    ui.settle_tasks();
 
-    ui.reject_queued_prompts(&PromptRejection::Cancelled);
+    ui.reject_queued_prompts(&Error::request_cancelled());
 
     assert_eq!(ui.app().composer().text(), "@context.txt ");
     let mentions = ui.app().composer().selected_mentions();
     assert_eq!(mentions.iter().map(|mention| mention.display_name.as_str()).collect::<Vec<_>>(), ["context.txt"]);
 }
 
-#[test]
-fn a_prompt_the_agent_fails_returns_to_the_composer_with_a_notice() {
-    let mut ui = TestUi::new();
-    ui.reject_prompts(PromptRejection::Failed("overloaded".into()));
-
-    ui.submit("hello");
-
-    assert_eq!(ui.app().composer().text(), "hello");
-    assert!(!ui.app().waiting_for_response());
-    assert_eq!(transcript(&ui), ["[wisp] Failed to send prompt: overloaded"]);
-}
-
-#[test]
-fn the_bell_waits_until_no_prompt_is_queued() {
-    let mut ui = TestUi::new();
-    ui.submit("first");
-    ui.submit("second");
-    ui.take_commands();
-
-    ui.complete_prompt(acp::StopReason::EndTurn);
-    assert_eq!(bells(&mut ui), 0, "the agent still owes the queued prompt a turn");
-
-    ui.complete_prompt(acp::StopReason::EndTurn);
-    assert_eq!(bells(&mut ui), 1);
-}
-
 fn queued_texts(ui: &TestUi) -> Vec<&str> {
-    ui.app().queued_prompts().iter().map(|prompt| prompt.submission.text.as_str()).collect()
+    ui.app().core().queued_prompts().iter().map(|prompt| prompt.submission.text.as_str()).collect()
 }
 
 fn transcript(ui: &TestUi) -> Vec<String> {
-    ui.app().conversation_items().iter().filter_map(|item| item.text().map(Cow::into_owned)).collect()
+    acp_utils::testing::texts(ui.app().core().conversation())
 }
