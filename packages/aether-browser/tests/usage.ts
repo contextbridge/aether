@@ -103,7 +103,7 @@ function describe(item: ConversationItem): string {
       return `${toolCall.title ?? "tool"}: ${status} (${subAgents.map(describeSubAgent).join(", ")})`;
     }
     case "notice":
-      return item.content;
+      return item.content.text;
   }
 }
 

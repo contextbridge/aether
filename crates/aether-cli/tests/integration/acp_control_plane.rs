@@ -11,12 +11,12 @@ async fn initialize_exposes_only_v2_nested_capabilities() {
         assert_eq!(response.protocol_version, ProtocolVersion::V2);
         assert_eq!(response.info.name, "Aether");
         let wire = serde_json::to_value(&response).unwrap();
+        let meta = AetherCapabilities::of(&response.capabilities);
+        assert!(meta.prompt_search && meta.session_preview && meta.workspace_move && meta.git_diff);
         let session = response.capabilities.session.unwrap();
         assert!(session.prompt.as_ref().unwrap().embedded_context.is_some());
         assert!(session.mcp.as_ref().unwrap().stdio.is_some());
         assert!(session.mcp.as_ref().unwrap().http.is_some());
-        let meta = AetherCapabilities::from_meta(session.meta.as_ref());
-        assert!(meta.prompt_search && meta.session_preview && meta.workspace_move);
         assert_eq!(AetherCapabilities::from_meta(session.prompt.unwrap().meta.as_ref()), AetherCapabilities::default());
         for key in ["loadSession", "list", "resume", "close", "sse"] {
             assert!(!wire.to_string().contains(&format!("\"{key}\":")));

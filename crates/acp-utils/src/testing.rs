@@ -1,15 +1,21 @@
 //! In-memory test harness for ACP connections.
 
 mod fake_agent;
-pub use fake_agent::{FakeAgent, FakeAgentRequests};
+pub use fake_agent::{FakeAgent, FakeAgentRequests, HeldRequests, Question, QueuedTurns};
 
-use crate::notifications::{AetherMeta, AuthMethodsUpdatedParams, GitDiffEventPayload, McpNotification, SubAgentMeta};
+use crate::config_meta::{ConfigOptionMeta, SelectOptionMeta};
+use crate::notifications::{
+    AetherMeta, AuthMethodsUpdatedParams, GitDiffEventPayload, McpNotification, PromptSearchResponse,
+    PromptSearchResult, SessionPreviewResponse, SessionPreviewRole, SessionPreviewTurn, SubAgentMeta,
+};
 pub use agent_client_protocol::Channel;
 use agent_client_protocol::schema::v2::{
-    CompleteElicitationNotification, CreateElicitationRequest, CreateElicitationResponse, ElicitationFormMode,
-    ElicitationSchema, ElicitationSessionScope, IdleStateUpdate, Implementation, InitializeRequest, InitializeResponse,
-    PlanEntry, PlanId, PlanUpdate, PlanUpdateContent, RunningStateUpdate, SessionId, SessionUpdate, StateUpdate,
-    StopReason, SubagentUpdate, ToolCallUpdate, UpdateSessionNotification,
+    CompleteElicitationNotification, ContentBlock, ContentChunk, CreateElicitationRequest, CreateElicitationResponse,
+    ElicitationFormMode, ElicitationSchema, ElicitationSessionScope, IdleStateUpdate, Implementation,
+    InitializeRequest, InitializeResponse, PlanEntry, PlanId, PlanUpdate, PlanUpdateContent, RunningStateUpdate,
+    SessionConfigOption, SessionConfigSelectGroup, SessionConfigSelectOption, SessionConfigSelectOptions, SessionId,
+    SessionUpdate, StateUpdate, StopReason, SubagentUpdate, ToolCallStatus, ToolCallUpdate, UpdateSessionNotification,
+    UserMessage,
 };
 use agent_client_protocol::schema::{IntoOption, ProtocolVersion};
 use agent_client_protocol::{
@@ -155,6 +161,82 @@ impl TestPeer {
     }
 }
 
+pub fn texts(conversation: &crate::conversation::Conversation) -> Vec<String> {
+    conversation.items().iter().filter_map(|item| item.text().map(std::borrow::Cow::into_owned)).collect()
+}
+
+pub fn message_chunk(message_id: &str, text: &str) -> SessionUpdate {
+    SessionUpdate::AgentMessageChunk(ContentChunk::new(text.into(), message_id.to_owned()))
+}
+
+pub fn thought_chunk(message_id: &str, text: &str) -> SessionUpdate {
+    SessionUpdate::AgentThoughtChunk(ContentChunk::new(text.into(), message_id.to_owned()))
+}
+
+pub fn user_message(message_id: &str, content: Vec<ContentBlock>) -> SessionUpdate {
+    SessionUpdate::UserMessage(UserMessage::new(message_id.to_owned()).content(content))
+}
+
+pub fn plan(plan_id: impl Into<PlanId>, entries: Vec<PlanEntry>) -> SessionUpdate {
+    SessionUpdate::PlanUpdate(PlanUpdate::new(PlanUpdateContent::items(plan_id, entries)))
+}
+
+pub fn tool_call(id: &str, title: &str, status: ToolCallStatus) -> SessionUpdate {
+    SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(id.to_owned()).title(title).status(status))
+}
+
+pub fn select(id: &str, name: &str, current: &str, values: &[(&str, &str)]) -> SessionConfigOption {
+    SessionConfigOption::select(id.to_owned(), name.to_owned(), current.to_owned(), choices(values))
+}
+
+pub fn choices(values: &[(&str, &str)]) -> Vec<SessionConfigSelectOption> {
+    values.iter().map(|&(value, label)| SessionConfigSelectOption::new(value.to_owned(), label.to_owned())).collect()
+}
+
+pub fn model_picker(current: &str, choices: impl Into<SessionConfigSelectOptions>) -> SessionConfigOption {
+    SessionConfigOption::select("model", "Model", current.to_owned(), choices)
+        .meta(ConfigOptionMeta { multi_select: true }.into_meta())
+}
+
+pub fn model_choice(value: &str, name: &str, meta: SelectOptionMeta) -> SessionConfigSelectOption {
+    SessionConfigSelectOption::new(value.to_owned(), name.to_owned()).meta(meta.into_meta())
+}
+
+pub fn option_group(name: &str, options: Vec<SessionConfigSelectOption>) -> SessionConfigSelectGroup {
+    SessionConfigSelectGroup::new(name.to_owned(), name.to_owned(), options)
+}
+
+pub fn session_preview(session_id: &str, cwd: &str) -> SessionPreviewResponse {
+    SessionPreviewResponse {
+        session_id: session_id.to_owned(),
+        cwd: cwd.into(),
+        created_at: "2025-01-01T00:00:00Z".to_owned(),
+        model: "claude".to_owned(),
+        selected_mode: Some("code".to_owned()),
+        transcript: vec![
+            SessionPreviewTurn { role: SessionPreviewRole::User, text: "hello".to_owned() },
+            SessionPreviewTurn { role: SessionPreviewRole::Assistant, text: "hi there".to_owned() },
+        ],
+        tool_call_count: 1,
+        truncated: false,
+    }
+}
+
+pub fn prompt_search_hit(prompt: &str, match_start: usize, match_end: usize) -> PromptSearchResult {
+    PromptSearchResult {
+        session_id: "s1".to_owned(),
+        cwd: "/tmp/repo".into(),
+        session_created_at: "2026-05-17T00:00:00Z".to_owned(),
+        prompt: prompt.to_owned(),
+        match_start,
+        match_end,
+    }
+}
+
+pub fn prompt_search_response(query: &str, results: Vec<PromptSearchResult>) -> PromptSearchResponse {
+    PromptSearchResponse { query: query.to_owned(), results, truncated: false }
+}
+
 /// Build a live `ConnectionTo<Client>` over an in-memory duplex transport with
 /// a peer on the other end. Must be called inside a `LocalSet`.
 pub async fn test_connection() -> (ConnectionTo<Client>, TestPeer) {
@@ -268,10 +350,7 @@ pub fn plan_notification(
     plan_id: impl Into<PlanId>,
     entries: Vec<PlanEntry>,
 ) -> UpdateSessionNotification {
-    UpdateSessionNotification::new(
-        session_id,
-        SessionUpdate::PlanUpdate(PlanUpdate::new(PlanUpdateContent::items(plan_id, entries))),
-    )
+    UpdateSessionNotification::new(session_id, plan(plan_id, entries))
 }
 
 #[expect(clippy::unnecessary_wraps, reason = "notification handlers must return a Result")]
