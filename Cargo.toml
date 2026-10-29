@@ -115,7 +115,16 @@ nucleo = "0.5.0"
 mime_guess = "2"
 unicode-width = "0.2.2"
 
+gpui = { package = "gpui-pre", version = "=0.3.7", default-features = false }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.7", features = ["font-kit", "runtime_shaders", "wayland", "x11"] }
+gpui-base = "=0.7.0"
+clankerdiff-gpui = { version = "0.8.0" }
+clankerdiff-remote = { version = "0.8.0" }
 clankerdiff-lspd = { version = "0.8.0" }
+clankerdiff-gpui-shell = { version = "0.8.0" }
+clankerdiff-markdown = { version = "0.8.0" }
+clankerdiff-syntax = { version = "0.8.0" }
+clankerdiff-ui-core = { version = "0.8.0" }
 
 # Wasm
 wasm-bindgen = "0.2.128"
