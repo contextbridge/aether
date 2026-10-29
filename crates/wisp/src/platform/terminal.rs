@@ -109,7 +109,8 @@ impl TerminalSession {
     fn try_keyboard_enhancement(&mut self) {
         let flags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
             | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
-            | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES;
+            | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+            | KeyboardEnhancementFlags::REPORT_EVENT_TYPES;
         if execute!(io::stdout(), PushKeyboardEnhancementFlags(flags)).is_ok() {
             self.keyboard_enhancement = true;
         } else if execute!(io::stdout(), PopKeyboardEnhancementFlags).is_err() {

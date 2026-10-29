@@ -1,63 +1,42 @@
-// Items reachable only through the `testing` harness look dead and
-// unreachable in default builds; the all-features lint gate still checks both.
-#![cfg_attr(not(feature = "testing"), allow(dead_code, unused_imports, unreachable_pub))]
-
+pub mod app;
 pub mod cli;
+pub mod command;
+pub mod conversation;
 pub mod error;
+pub mod platform;
+pub mod renderer;
+pub mod runtime;
+pub mod screens;
 pub mod settings;
-
-// The crate's public API is the entry points above plus [`Session`]. The
-// internal module graph opens up only under the `testing` feature, for the
-// integration suite's cohesive harness in [`testing`].
-#[cfg(all(test, not(feature = "testing")))]
-mod testing;
-#[cfg(feature = "testing")]
+pub mod surfaces;
+#[cfg(any(test, feature = "testing"))]
 pub mod testing;
+pub mod theme;
+pub mod view;
 
-macro_rules! internal_modules {
-    ($($name:ident),* $(,)?) => {
-        $(
-            #[cfg(feature = "testing")]
-            pub mod $name;
-            #[cfg(not(feature = "testing"))]
-            mod $name;
-        )*
-    };
-}
+use agent_client_protocol::schema::v2::{Implementation, SessionId};
+use agent_client_protocol::{AcpAgent, Client, ConnectTo};
+use client_core::connection::{Connection, Session};
 
-internal_modules!(
-    app,
-    attachment,
-    conversation,
-    command,
-    file_index,
-    git_review,
-    renderer,
-    request,
-    runtime,
-    screens,
-    session,
-    surfaces,
-    theme,
-    view,
-);
-
-use agent_client_protocol::{Client, ConnectTo, schema::v2::SessionId};
-pub use session::Session;
-
-use app::App;
+use app::{App, AppConfig};
 use error::AppError;
 use renderer::Renderer;
 use settings::UiSettings;
+use std::env::current_dir;
 use std::fs::create_dir_all;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use tracing_appender::rolling::daily;
 use tracing_subscriber::EnvFilter;
+
+pub const DEFAULT_LOG_DIR: &str = "/tmp/wisp-logs";
 
 /// Launch the Wisp TUI with the given agent subprocess command.
 pub async fn run_tui(agent_command: &str, settings: UiSettings, log_dir: Option<&str>) -> Result<(), AppError> {
     setup_logging(log_dir.map(Path::new));
-    let session = Session::connect(agent_command).await?;
+    let agent = AcpAgent::from_str(agent_command).map_err(AppError::InvalidAgentCommand)?;
+    let working_dir = current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let session = Connection::connect_to(client_info(), agent).await?.open(None, working_dir).await?;
     run_with_session(session, settings).await
 }
 
@@ -69,14 +48,12 @@ pub async fn run_remote_tui(
     log_dir: Option<&Path>,
 ) -> Result<(), AppError> {
     setup_logging(log_dir);
-    let session = Session::connect_remote_to(transport, requested_session).await?;
-    run_with_session(session, settings).await
+    let connection = Connection::connect_to(client_info(), transport).await?;
+    run_with_session(connection.open_remote(requested_session).await?, settings).await
 }
 
-/// Run the TUI from an already-initialized ACP session.
-pub async fn run_with_session(session: Session, settings: UiSettings) -> Result<(), AppError> {
-    let (app, event_rx, client_handle) = App::from_session(session, settings);
-    runtime::run(app, Renderer::new(), event_rx, client_handle).await
+pub fn client_info() -> Implementation {
+    Implementation::new("wisp", env!("CARGO_PKG_VERSION"))
 }
 
 pub fn init_file_logging(dir: &Path, file_name: &str, default_filter: &str) {
@@ -88,8 +65,13 @@ pub fn init_file_logging(dir: &Path, file_name: &str, default_filter: &str) {
         .try_init();
 }
 
+/// Run the TUI from an already-initialized ACP session.
+async fn run_with_session(session: Session, settings: UiSettings) -> Result<(), AppError> {
+    let (session, session_runtime) = session.into_core();
+    let app = App::new(AppConfig { session, settings });
+    runtime::run(app, Renderer::new(), session_runtime).await
+}
+
 fn setup_logging(log_dir: Option<&Path>) {
     init_file_logging(log_dir.unwrap_or(Path::new(DEFAULT_LOG_DIR)), "wisp.log", "info");
 }
-
-pub const DEFAULT_LOG_DIR: &str = "/tmp/wisp-logs";

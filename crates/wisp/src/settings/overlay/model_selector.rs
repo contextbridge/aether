@@ -1,5 +1,4 @@
 use super::{KeyHint, SettingsChange, value_match_key};
-use crate::session::session_config_view::LocalConfigValue;
 use crate::surfaces::input::UiOutput;
 use crate::surfaces::modal::frame::MODAL_HORIZONTAL_PADDING;
 use crate::theme::Theme;
@@ -9,6 +8,7 @@ use crate::view::reasoning_bar::{reasoning_bar, reasoning_column_width, reasonin
 use crate::view::selection::Direction;
 use crate::view::wrap::truncate_to_width;
 use acp_utils::config_option_id::ConfigOptionId;
+use client_core::session_config_view::{LocalConfigSelect, LocalConfigValue};
 use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -66,20 +66,11 @@ const CAPABILITY_WIDTH: usize = 11;
 const STATUS_WIDTH: usize = 18;
 
 impl ModelSelector {
-    pub(super) fn new(
-        config_id: String,
-        items: Vec<LocalConfigValue>,
-        current_selection: &str,
-        current_reasoning_effort: Option<&str>,
-    ) -> Self {
-        let selected_models: BTreeSet<String> = current_selection
-            .split(',')
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .collect();
+    pub(super) fn new(config_id: String, select: &LocalConfigSelect, current_reasoning_effort: Option<&str>) -> Self {
+        let selected_models: BTreeSet<String> = select.current_values().map(str::to_owned).collect();
         let reasoning = current_reasoning_effort.and_then(|effort| effort.parse().ok());
 
-        let rows = build_rows(items);
+        let rows = build_rows(select.values.clone());
         let mut items = FilterableList::new(rows, ModelSelectorRow::match_key)
             .selectable(ModelSelectorRow::is_selectable)
             .preserve_order()

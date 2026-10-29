@@ -11,16 +11,15 @@ pub(crate) use self::provider_login::ProviderLoginStatus;
 use self::provider_login::{ProviderLoginEntry, ProviderLoginPane, build_provider_login_entries};
 use self::server_status::ServerStatusPane;
 use crate::renderer::DrawContext;
-use crate::session::platform::{BrowserOpener, ClipboardWriter};
-use crate::session::session_config_view::{LocalConfigOption, LocalConfigValue, LocalConfigView};
-use crate::surfaces::input::UiOutput;
+use crate::surfaces::input::{UiOutput, one};
 use crate::surfaces::modal::{ElicitationModal, frame::ModalFrame};
 use crate::theme::Theme;
 use crate::view::input::{Nav, UiEvent};
 use crate::view::widgets::key_hints;
-use acp_utils::notifications::McpServerStatusEntry;
-use agent_client_protocol::Responder;
-use agent_client_protocol::schema::v2::{AuthMethod, CreateElicitationRequest, CreateElicitationResponse};
+use agent_client_protocol::schema::v2::AuthMethod;
+use client_core::elicitation::ElicitationId;
+use client_core::session_config_view::{LocalConfigOption, LocalConfigSelect, LocalConfigValue, LocalConfigView};
+use client_core::session_model::{SessionModel, SessionSetting};
 use crossterm::event::KeyCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
@@ -40,9 +39,7 @@ pub struct SettingsChange {
 pub struct SettingsMenuEntry {
     pub config_id: String,
     pub title: String,
-    pub values: Vec<LocalConfigValue>,
-    pub current_raw_value: String,
-    pub multi_select: bool,
+    pub select: LocalConfigSelect,
     /// Client-side rather than part of the agent's schema, so it survives a
     /// config-options push that replaces every agent-provided row.
     pub local: bool,
@@ -50,7 +47,7 @@ pub struct SettingsMenuEntry {
 
 /// A settings screen that is not a config option.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PaneKind {
+pub(crate) enum PaneKind {
     McpServers,
     ProviderLogins,
 }
@@ -63,10 +60,10 @@ impl PaneKind {
         }
     }
 
-    fn summary(self, live: &LiveSettingsData) -> String {
+    fn summary(self, session: &SessionModel, providers: &[ProviderLoginEntry]) -> String {
         match self {
-            Self::McpServers => server_status::summary(&live.servers),
-            Self::ProviderLogins => provider_login::summary(&live.providers),
+            Self::McpServers => server_status::summary(session.server_statuses()),
+            Self::ProviderLogins => provider_login::summary(providers),
         }
     }
 }
@@ -76,19 +73,13 @@ pub struct SettingsOverlay {
     menu: SettingsMenu,
     /// The pane drawn over the menu. `None` means the menu itself has focus.
     pane: Option<SettingsPane>,
-    current_reasoning_effort: Option<String>,
-    live: LiveSettingsData,
+    /// Built from the session's auth methods, plus the login status the
+    /// overlay tracks while a provider authenticates.
+    providers: Vec<ProviderLoginEntry>,
     /// A request the overlay answers itself, drawn under the pane and owning
     /// input until it is answered. Authenticating an OAuth server asks for a
     /// browser this way, so the pane that started it has to survive the ask.
     pending_elicitation: Option<ElicitationModal>,
-}
-
-/// Agent-pushed state that panes display. The overlay owns it so a pane opened
-/// later sees current data, and an open pane can be refreshed in place.
-pub(crate) struct LiveSettingsData {
-    pub(crate) servers: Vec<McpServerStatusEntry>,
-    pub(crate) providers: Vec<ProviderLoginEntry>,
 }
 
 pub(crate) use crate::view::widgets::KeyHint;
@@ -119,14 +110,6 @@ impl SettingsPane {
         }
     }
 
-    fn refresh(&mut self, live: &LiveSettingsData) {
-        match self {
-            Self::ServerStatus(pane) => pane.refresh(live),
-            Self::ProviderLogin(pane) => pane.refresh(live),
-            Self::ModelSelector(_) | Self::Picker(_) => {}
-        }
-    }
-
     fn take_changes(&mut self) -> Option<Vec<UiOutput>> {
         match self {
             Self::ServerStatus(_) | Self::ProviderLogin(_) | Self::Picker(_) => Some(Vec::new()),
@@ -144,16 +127,11 @@ impl SettingsPane {
     }
 }
 impl SettingsOverlay {
-    pub fn new(
-        config_options: &[LocalConfigOption],
-        server_statuses: Vec<McpServerStatusEntry>,
-        auth_methods: &[AuthMethod],
-    ) -> Self {
+    pub fn new(session: &SessionModel) -> Self {
         let mut overlay = Self {
-            menu: SettingsMenu::from_config_options(config_options),
+            menu: SettingsMenu::from_config_options(session.config_options()),
             pane: None,
-            current_reasoning_effort: reasoning_effort_of(config_options),
-            live: LiveSettingsData { servers: server_statuses, providers: build_provider_login_entries(auth_methods) },
+            providers: build_provider_login_entries(session.auth_methods()),
             pending_elicitation: None,
         };
         overlay.sync_pane_rows();
@@ -165,49 +143,108 @@ impl SettingsOverlay {
         self.menu.upsert_local_entries(entries);
     }
 
-    pub fn update_config_options(&mut self, options: &[LocalConfigOption]) {
-        self.current_reasoning_effort = reasoning_effort_of(options);
-        self.menu.update_options(options);
+    pub fn on_setting_changed(&mut self, setting: SessionSetting, session: &SessionModel) {
+        match setting {
+            SessionSetting::ConfigOptions => self.menu.update_options(session.config_options()),
+            SessionSetting::AuthMethods => self.update_auth_methods(session.auth_methods()),
+            SessionSetting::ServerStatuses => {
+                if let Some(SettingsPane::ServerStatus(pane)) = self.pane.as_mut() {
+                    pane.refresh(session.server_statuses());
+                }
+            }
+        }
     }
 
     pub fn apply_change(&mut self, change: &SettingsChange) {
         self.menu.apply_change(change);
     }
 
-    pub fn update_server_statuses(&mut self, statuses: Vec<McpServerStatusEntry>) {
-        self.live.servers = statuses;
-        self.refresh_pane();
-    }
-
-    pub fn update_auth_methods(&mut self, methods: &[AuthMethod]) {
-        self.live.providers = build_provider_login_entries(methods);
-        self.sync_pane_rows();
-        self.refresh_pane();
-    }
-
     pub(crate) fn set_provider_status(&mut self, method_id: &str, status: ProviderLoginStatus) {
-        if let Some(entry) = self.live.providers.iter_mut().find(|entry| entry.method_id == method_id) {
+        if let Some(entry) = self.providers.iter_mut().find(|entry| entry.method_id == method_id) {
             entry.status = status;
         }
-        self.refresh_pane();
+        self.refresh_providers();
     }
 
-    /// Queues the request for the overlay to answer in place, against the given
-    /// host handlers so tests observe URL opens without spawning a browser.
-    pub fn on_elicitation_request(
+    pub(crate) fn show_elicitation(&mut self, modal: ElicitationModal) {
+        self.pending_elicitation = Some(modal);
+    }
+
+    pub fn take_pending_elicitation(&mut self) -> Option<ElicitationId> {
+        self.pending_elicitation.take().map(|pending| pending.id())
+    }
+
+    pub(crate) fn pending_elicitation_mut(&mut self) -> Option<&mut ElicitationModal> {
+        self.pending_elicitation.as_mut()
+    }
+
+    pub(crate) fn dismiss_elicitation(&mut self, id: ElicitationId) {
+        self.pending_elicitation.take_if(|pending| pending.id() == id);
+    }
+
+    pub fn on_ui_event(&mut self, event: &UiEvent, session: &SessionModel) -> Vec<UiOutput> {
+        if let Some(pending) = self.pending_elicitation.as_mut() {
+            return one(pending.on_ui_event(event));
+        }
+        let Some(pane) = self.pane.as_mut() else {
+            return self.on_menu_event(event, session);
+        };
+        let outputs = match event {
+            UiEvent::Key(key) if key.code == KeyCode::Esc => pane
+                .take_changes()
+                .map(|mut outputs| {
+                    outputs.push(UiOutput::Close);
+                    outputs
+                })
+                .unwrap_or_default(),
+            event => pane.on_ui_event(event),
+        };
+        self.apply(outputs)
+    }
+
+    pub(crate) fn needs_mouse_capture(&self) -> bool {
+        self.pending_elicitation.as_ref().is_none_or(ElicitationModal::needs_mouse_capture)
+    }
+
+    pub fn render(
         &mut self,
-        params: CreateElicitationRequest,
-        responder: Responder<CreateElicitationResponse>,
-        browser_opener: BrowserOpener,
-        clipboard_writer: ClipboardWriter,
-    ) {
-        self.pending_elicitation =
-            ElicitationModal::with_url_handlers(params, responder, browser_opener, clipboard_writer);
-    }
+        area: Rect,
+        buf: &mut Buffer,
+        cx: &mut DrawContext<'_>,
+        session: &SessionModel,
+    ) -> Option<Position> {
+        let theme = cx.theme;
+        if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
+            Clear.render(area, buf);
+            Paragraph::new(Line::styled("(terminal too small)", theme.text_secondary)).render(area, buf);
+            return None;
+        }
+        let footer = key_hints(&self.footer_hints(), theme);
+        let frame = ModalFrame::new(
+            "Configuration",
+            Some(footer),
+            Constraint::Percentage(80),
+            Constraint::Percentage(80),
+            theme,
+        );
+        let inner = frame.inner(area);
+        (&frame).render(area, buf);
 
-    /// Drops an unanswered request, which cancels it.
-    pub fn cancel_pending_elicitation(&mut self) {
-        self.pending_elicitation = None;
+        let (content, prompt) = self.split_for_prompt(inner, theme);
+        self.render_content(content, buf, theme, session);
+
+        let (Some(prompt), Some(pending)) = (prompt, self.pending_elicitation.as_mut()) else {
+            return None;
+        };
+        pending.render_inline(prompt, buf, theme)
+    }
+}
+
+impl SettingsOverlay {
+    fn update_auth_methods(&mut self, methods: &[AuthMethod]) {
+        self.providers = build_provider_login_entries(methods);
+        self.sync_pane_rows();
+        self.refresh_providers();
     }
 
     /// Key hints for the current focus, shown in the overlay footer.
@@ -222,19 +259,19 @@ impl SettingsOverlay {
 
     fn sync_pane_rows(&mut self) {
         self.menu.show_pane_row(PaneKind::McpServers, true);
-        self.menu.show_pane_row(PaneKind::ProviderLogins, !self.live.providers.is_empty());
+        self.menu.show_pane_row(PaneKind::ProviderLogins, !self.providers.is_empty());
     }
 
-    fn refresh_pane(&mut self) {
-        if let Some(pane) = self.pane.as_mut() {
-            pane.refresh(&self.live);
+    fn refresh_providers(&mut self) {
+        if let Some(SettingsPane::ProviderLogin(pane)) = self.pane.as_mut() {
+            pane.refresh(&self.providers);
         }
     }
 
-    fn render_content(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
+    fn render_content(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme, session: &SessionModel) {
         match self.pane.as_mut() {
             Some(pane) => pane.render(area, buf, theme),
-            None => self.menu.render(area, buf, theme, &self.live),
+            None => self.menu.render(area, buf, theme, |kind| kind.summary(session, &self.providers)),
         }
     }
 
@@ -260,28 +297,27 @@ impl SettingsOverlay {
 
     /// Handles an event the menu itself owns, because no pane or request is open
     /// above it.
-    fn on_menu_event(&mut self, event: &UiEvent) -> Vec<UiOutput> {
+    fn on_menu_event(&mut self, event: &UiEvent, session: &SessionModel) -> Vec<UiOutput> {
         match self.menu.selection.on_nav_event(event, self.menu.rows.len(), |_| true) {
             Nav::Close => return vec![UiOutput::Close],
-            Nav::Activate | Nav::Clicked => self.pane = self.open_selected_pane(),
+            Nav::Activate | Nav::Clicked => self.pane = self.open_selected_pane(session),
             Nav::Moved | Nav::Unhandled => {}
         }
         Vec::new()
     }
 
-    fn open_selected_pane(&self) -> Option<SettingsPane> {
+    fn open_selected_pane(&self, session: &SessionModel) -> Option<SettingsPane> {
         let pane = match self.menu.selected_row()? {
             MenuRow::Pane(PaneKind::McpServers) => {
-                SettingsPane::ServerStatus(ServerStatusPane::new(self.live.servers.clone()))
+                SettingsPane::ServerStatus(ServerStatusPane::new(session.server_statuses().to_vec()))
             }
             MenuRow::Pane(PaneKind::ProviderLogins) => {
-                SettingsPane::ProviderLogin(ProviderLoginPane::new(self.live.providers.clone()))
+                SettingsPane::ProviderLogin(ProviderLoginPane::new(self.providers.clone()))
             }
-            MenuRow::Select(entry) if entry.multi_select => SettingsPane::ModelSelector(ModelSelector::new(
+            MenuRow::Select(entry) if entry.select.multi_select => SettingsPane::ModelSelector(ModelSelector::new(
                 entry.config_id.clone(),
-                entry.values.clone(),
-                &entry.current_raw_value,
-                self.current_reasoning_effort.as_deref(),
+                &entry.select,
+                reasoning_effort_of(session.config_options()).as_deref(),
             )),
             MenuRow::Select(entry) => SettingsPane::Picker(SettingsPicker::from_entry(entry)?),
         };
@@ -299,77 +335,6 @@ impl SettingsOverlay {
                 _ => true,
             })
             .collect()
-    }
-}
-
-impl SettingsOverlay {
-    /// Routes every event to whichever of the three things inside the overlay
-    /// owns input, innermost first.
-    ///
-    /// One entry point rather than one override per event kind, because the
-    /// triage is the same for all of them — and because only routing them
-    /// together makes "a request closing returns focus to the pane behind it"
-    /// hold for a click as reliably as it does for a keystroke.
-    pub fn on_ui_event(&mut self, event: &UiEvent) -> Vec<UiOutput> {
-        if let Some(pending) = self.pending_elicitation.as_mut() {
-            // Answering a request returns focus to the pane behind it rather
-            // than closing the overlay the request arrived in.
-            if pending.on_ui_event(event).iter().any(|output| matches!(output, UiOutput::Close)) {
-                self.pending_elicitation = None;
-            }
-            return Vec::new();
-        }
-        let Some(pane) = self.pane.as_mut() else {
-            return self.on_menu_event(event);
-        };
-        // Esc leaves the pane rather than the overlay, committing whatever the
-        // pane batched up while it was open.
-        let outputs = match event {
-            UiEvent::Key(key) if key.code == KeyCode::Esc => pane
-                .take_changes()
-                .map(|mut outputs| {
-                    outputs.push(UiOutput::Close);
-                    outputs
-                })
-                .unwrap_or_default(),
-            event => pane.on_ui_event(event),
-        };
-        self.apply(outputs)
-    }
-
-    /// A URL request wants the terminal's own text selection back, so the URL
-    /// can be copied by hand when opening a browser is not an option.
-    pub(crate) fn needs_mouse_capture(&self) -> bool {
-        self.pending_elicitation.as_ref().is_none_or(ElicitationModal::needs_mouse_capture)
-    }
-}
-
-impl SettingsOverlay {
-    pub fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
-        let theme = cx.theme;
-        if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
-            Clear.render(area, buf);
-            Paragraph::new(Line::styled("(terminal too small)", theme.text_secondary)).render(area, buf);
-            return None;
-        }
-        let footer = key_hints(&self.footer_hints(), theme);
-        let frame = ModalFrame::new(
-            "Configuration",
-            Some(footer),
-            Constraint::Percentage(80),
-            Constraint::Percentage(80),
-            theme,
-        );
-        let inner = frame.inner(area);
-        (&frame).render(area, buf);
-
-        let (content, prompt) = self.split_for_prompt(inner, theme);
-        self.render_content(content, buf, theme);
-
-        let (Some(prompt), Some(pending)) = (prompt, self.pending_elicitation.as_mut()) else {
-            return None;
-        };
-        pending.render_inline(prompt, buf, theme)
     }
 }
 

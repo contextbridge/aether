@@ -1,4 +1,4 @@
-use acp_utils::client::AcpClientError;
+use client_core::connection::ConnectionError;
 use thiserror::Error;
 
 /// Fatal errors that can terminate the TUI.
@@ -8,12 +8,12 @@ pub enum AppError {
         "ACP connection lost. The agent may still be running. No prompts were retried; reconnect and inspect the session before resubmitting"
     )]
     ConnectionLost,
-    #[error("Server did not advertise the Aether remote-server contract; connect to `aether server`")]
-    MissingRemoteContract,
+    #[error("invalid agent command: {0}")]
+    InvalidAgentCommand(#[source] agent_client_protocol::Error),
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
     #[error("{0}")]
-    Acp(#[from] AcpClientError),
+    Client(#[from] ConnectionError),
     #[error(transparent)]
     Render(#[from] RenderError<std::io::Error>),
 }

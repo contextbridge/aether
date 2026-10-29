@@ -1,8 +1,10 @@
-use crate::view::edit_buffer::EditBuffer;
-use crate::view::filterable_list::FilterableList;
 use crate::theme::Theme;
+use crate::view::input::{Nav, UiEvent};
+use crate::view::list_view::ListView;
+use crate::view::selection::SelectionState;
 use crate::view::wrap::truncate_spans;
-use acp_utils::notifications::{PromptSearchResponse, PromptSearchResult};
+use acp_utils::notifications::PromptSearchResult;
+use client_core::composer::prompt_search::{PromptSearchState, PromptSearchStatus};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
@@ -16,102 +18,37 @@ const MAX_CWD_WIDTH: usize = 32;
 const CWD_GAP: usize = 2;
 const MIN_PROMPT_WIDTH: usize = 16;
 
-#[derive(Debug)]
+/// The cursor over the session's prompt-history results. The query and the
+/// results themselves live in [`PromptSearchState`], already ranked by the
+/// agent.
+#[derive(Debug, Default)]
 pub struct PromptSearchPicker {
-    query: EditBuffer,
-    results: FilterableList<PromptSearchResult>,
-    loading: bool,
-    error: Option<String>,
-}
-
-impl Default for PromptSearchPicker {
-    fn default() -> Self {
-        Self::new()
-    }
+    selection: SelectionState,
 }
 
 impl PromptSearchPicker {
-    pub fn new() -> Self {
-        Self { query: EditBuffer::default(), results: Self::result_list(Vec::new()), loading: false, error: None }
+    pub fn selected_result<'a>(&self, search: &'a PromptSearchState) -> Option<&'a PromptSearchResult> {
+        self.selection.selected().and_then(|selected| search.results().get(selected))
     }
 
-    pub fn query(&self) -> &str {
-        self.query.text()
+    pub(crate) fn navigate(&mut self, event: &UiEvent, search: &PromptSearchState) -> Nav {
+        self.selection.on_nav_event(event, search.results().len(), |_| true)
     }
 
-    pub fn selected_result(&self) -> Option<&PromptSearchResult> {
-        self.results.selected_entry()
+    /// Starts over at the first of a fresh set of results.
+    pub fn on_results(&mut self, search: &PromptSearchState) {
+        self.selection = SelectionState::new(search.results().len());
     }
 
-    pub fn results_mut(&mut self) -> &mut FilterableList<PromptSearchResult> {
-        &mut self.results
-    }
-
-    /// Responses echo the query they answered; one for a query the user has
-    /// since edited away from is stale and dropped.
-    pub fn on_results(&mut self, response: PromptSearchResponse) -> bool {
-        if response.query != self.query.text() {
-            return false;
-        }
-        self.replace_results(response.results);
-        self.loading = false;
-        self.error = None;
-        true
-    }
-
-    pub fn on_failed(&mut self, query: &str, error: String) -> bool {
-        if query != self.query.text() {
-            return false;
-        }
-        self.replace_results(Vec::new());
-        self.loading = false;
-        self.error = Some(error);
-        true
-    }
-
-    fn refresh_query_state(&mut self) {
-        self.error = None;
-        if self.query.text().trim().is_empty() {
-            self.replace_results(Vec::new());
-            self.loading = false;
-        } else {
-            self.loading = true;
+    /// Rows the open picker wants: its header, then the results or a status line.
+    pub fn height(search: &PromptSearchState, max_rows: usize) -> usize {
+        1 + match search.status() {
+            PromptSearchStatus::Results => search.results().len().min(max_rows),
+            _ => 1,
         }
     }
 
-    /// Appends `c` to the query, returning the query it produced.
-    pub fn push_char(&mut self, c: char) -> String {
-        self.query.insert_char(c);
-        self.refresh_query_state();
-        self.query.text().to_string()
-    }
-
-    /// Appends the printable part of `text` to the query, returning the query it
-    /// produced. Pastes that are entirely control characters leave it unchanged.
-    pub fn push_str(&mut self, text: &str) -> String {
-        let sanitized: String = text.chars().filter(|c| !c.is_control()).collect();
-        if !sanitized.is_empty() {
-            self.query.insert_str(&sanitized);
-            self.refresh_query_state();
-        }
-        self.query.text().to_string()
-    }
-
-    pub fn backspace(&mut self) -> String {
-        self.query.backspace();
-        self.refresh_query_state();
-        self.query.text().to_string()
-    }
-
-    pub fn height(&self, max_rows: usize) -> usize {
-        1 + if self.error.is_some() || self.query.text().trim().is_empty() || self.results.is_empty() {
-            1
-        } else {
-            self.results.filtered_len().min(max_rows)
-        }
-    }
-
-    pub fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
+    pub fn render(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme, search: &PromptSearchState) {
         if area.is_empty() {
             return;
         }
@@ -120,41 +57,23 @@ impl PromptSearchPicker {
             ratatui::layout::Constraint::Min(0),
         ])
         .areas(area);
-        Paragraph::new(Line::styled(format!("history search: {}", self.query.text()), theme.info))
+        Paragraph::new(Line::styled(format!("history search: {}", search.query()), theme.info))
             .render(header_area, buf);
 
-        let message = self.error.as_deref().map(|error| format!("  error: {error}"));
-        let message = message.or_else(|| {
-            if self.query.text().trim().is_empty() {
-                Some("  type to search prompt history".to_string())
-            } else if self.loading && self.results.is_empty() {
-                Some("  searching…".to_string())
-            } else if self.results.is_empty() {
-                Some("  no matching prompts".to_string())
-            } else {
-                None
+        let message = match search.status() {
+            PromptSearchStatus::Failed(error) => format!("  error: {error}"),
+            PromptSearchStatus::Blank => "  type to search prompt history".to_owned(),
+            PromptSearchStatus::Searching => "  searching…".to_owned(),
+            PromptSearchStatus::NoMatches => "  no matching prompts".to_owned(),
+            PromptSearchStatus::Results => {
+                let width = usize::from(results_area.width.max(1));
+                let results = search.results();
+                let view = ListView::lazy(results.len(), |index| result_line(&results[index], width, theme), theme);
+                StatefulWidget::render(view, results_area, buf, &mut self.selection);
+                return;
             }
-        });
-        if let Some(message) = message {
-            Paragraph::new(message).style(theme.muted).render(results_area, buf);
-            return;
-        }
-
-        let width = usize::from(results_area.width.max(1));
-        let (view, selection) = self.results.view(theme, |result| result_line(result, width, theme));
-        StatefulWidget::render(view, results_area, buf, selection);
-    }
-
-    fn result_list(results: Vec<PromptSearchResult>) -> FilterableList<PromptSearchResult> {
-        // The agent already filters and ranks these results. Keep the shared list's
-        // query empty so it supplies selection and scrolling without re-filtering.
-        FilterableList::new(results, |result| result.prompt.clone())
-    }
-
-    /// Replacing server-filtered results resets focus to the first result. This
-    /// keeps response replacement and clearing consistent with query changes.
-    fn replace_results(&mut self, results: Vec<PromptSearchResult>) {
-        self.results = Self::result_list(results);
+        };
+        Paragraph::new(message).style(theme.muted).render(results_area, buf);
     }
 }
 
@@ -172,12 +91,8 @@ fn result_line(result: &PromptSearchResult, max_width: usize, theme: &Theme) -> 
     let shows_cwd = cwd_width > 0 && max_width >= cwd_width + CWD_GAP + MIN_PROMPT_WIDTH;
     let prompt_budget = if shows_cwd { max_width - cwd_width - CWD_GAP } else { max_width };
 
-    let prompt = prompt_spans(
-        &result.prompt,
-        result.match_start..result.match_end,
-        theme.text_secondary,
-        theme.warning,
-    );
+    let prompt =
+        prompt_spans(&result.prompt, result.match_start..result.match_end, theme.text_secondary, theme.warning);
     let mut spans = truncate_spans(&prompt, prompt_budget, Style::default());
     if shows_cwd {
         let used: usize = spans.iter().map(Span::width).sum();
@@ -218,4 +133,3 @@ fn prompt_spans(prompt: &str, matched: Range<usize>, base: Color, highlight: Col
         })
         .collect()
 }
-

@@ -1,11 +1,11 @@
-use crate::command::CommandResult;
-use acp_utils::client::AcpEvent;
+use crate::command::HostCommandResult;
+use client_core::runtime::Input;
 use crossterm::event::Event;
 use std::time::Instant;
 
 pub enum Message {
     Terminal(Event),
-    Agent(Box<AcpEvent>),
-    CommandFinished(Box<CommandResult>),
+    Session(Box<Input>),
+    Host(Box<HostCommandResult>),
     Tick(Instant),
 }

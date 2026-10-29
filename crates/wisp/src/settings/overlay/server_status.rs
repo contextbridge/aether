@@ -1,4 +1,4 @@
-use super::{LiveSettingsData, summarize};
+use super::summarize;
 use crate::surfaces::input::{UiOutput, one};
 use crate::surfaces::modal::frame::MODAL_HORIZONTAL_PADDING;
 use crate::theme::Theme;
@@ -91,9 +91,9 @@ impl ServerStatusPane {
     }
 }
 impl ServerStatusPane {
-    pub(crate) fn refresh(&mut self, live: &LiveSettingsData) {
+    pub(crate) fn refresh(&mut self, servers: &[McpServerStatusEntry]) {
         let keep = self.selected_entry().map(|entry| entry.name.clone());
-        self.set_rows(live.servers.clone(), keep.as_deref());
+        self.set_rows(servers.to_vec(), keep.as_deref());
     }
 }
 

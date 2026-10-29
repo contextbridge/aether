@@ -1,4 +1,4 @@
-use crate::view::input::{Nav, UiEvent};
+use crate::view::input::{MouseAction, Nav, UiEvent};
 use crossterm::event::KeyCode;
 use ratatui::layout::Rect;
 
@@ -126,8 +126,8 @@ impl SelectionState {
                 KeyCode::Down => Direction::Forward,
                 _ => return Nav::Unhandled,
             },
-            UiEvent::Paste(_) => return Nav::Unhandled,
-            UiEvent::Mouse(action, (_, row)) => match action.direction() {
+            UiEvent::Paste(_) | UiEvent::Mouse(MouseAction::Moved, ..) => return Nav::Unhandled,
+            UiEvent::Mouse(action, (_, row), _) => match action.direction() {
                 Some(direction) => direction,
                 None if self.select_at(*row, len, selectable) => return Nav::Clicked,
                 None => return Nav::Unhandled,

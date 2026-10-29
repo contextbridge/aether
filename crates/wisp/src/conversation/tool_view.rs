@@ -1,9 +1,9 @@
 use crate::theme::Theme;
 use crate::view::syntax::SyntaxHighlighter;
 use crate::view::wrap::{as_u16, truncate_to_width, wrap_line};
-use acp_utils::conversation::{SubAgent, ToolCall, ToolStatus};
+use acp_utils::conversation::{SubAgent, ToolCall, ToolStatus, diff_change_label};
 use agent_client_protocol::schema::v2 as acp;
-use clankerdiff_ratatui::diff::{RepoPath, parse_git_diff_with_path_mapper};
+use clankerdiff_core::parse_detached_git_diff;
 use clankerdiff_ratatui::{DiffPreviewOptions, render_diff_preview};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -28,16 +28,14 @@ pub(crate) fn tool_lines(
         Span::raw(" ".repeat(padding)),
         status_glyph(tool.status, spinner_tick, theme),
         Span::raw(" "),
-        Span::styled(tool.title().to_string(), theme.text_primary),
+        Span::styled(tool.headline().unwrap_or_default().to_string(), theme.text_primary),
     ]);
     let mut lines = tool_line(tool, prefix, content_width, padding + 2, theme, highlighter);
     for diff in tool.diffs().filter(|_| tool.status == ToolStatus::Success) {
         if let Some(patch) = &diff.patch
             && patch.format == acp::DiffPatchFormat::GitPatch
         {
-            match parse_git_diff_with_path_mapper(patch.text.as_bytes(), |path| {
-                RepoPath::new(path.strip_prefix('/').unwrap_or(path))
-            }) {
+            match parse_detached_git_diff(patch.text.as_bytes()) {
                 Ok(files) => {
                     for file in files {
                         lines.extend(indent_lines(
@@ -68,17 +66,6 @@ pub(crate) fn tool_lines(
     lines
 }
 
-fn diff_change_label(change: &acp::DiffChange) -> String {
-    match &change.operation {
-        acp::DiffChangeOperation::Add(change) => format!("A {}", change.path.0.display()),
-        acp::DiffChangeOperation::Delete(change) => format!("D {}", change.path.0.display()),
-        acp::DiffChangeOperation::Modify(change) => format!("M {}", change.path.0.display()),
-        acp::DiffChangeOperation::Move(change) => format!("R {} → {}", change.old_path.0.display(), change.path.0.display()),
-        acp::DiffChangeOperation::Copy(change) => format!("C {} → {}", change.old_path.0.display(), change.path.0.display()),
-        _ => "Unknown file change".into(),
-    }
-}
-
 /// Tree of sub-agents beneath a spawning tool, each with its recent tool calls.
 fn sub_agent_tree_lines(
     sub_agents: &[SubAgent],
@@ -99,7 +86,9 @@ fn sub_agent_tree_lines(
 
         lines.push(Line::from(vec![
             Span::raw(format!("{pad}  ")),
-            agent.status().map_or_else(|| Span::styled("?", theme.muted), |status| status_glyph(status, spinner_tick, theme)),
+            agent
+                .status()
+                .map_or_else(|| Span::styled("?", theme.muted), |status| status_glyph(status, spinner_tick, theme)),
             Span::raw(format!(" {}", agent.title().unwrap_or("sub-agent"))),
         ]));
 
@@ -115,7 +104,7 @@ fn sub_agent_tree_lines(
             let prefix = Line::from(vec![
                 Span::raw(format!("{pad}{branch}")),
                 status_glyph(tool.status, spinner_tick, theme),
-                Span::raw(format!(" {}", tool.title())),
+                Span::raw(format!(" {}", tool.headline().unwrap_or_default())),
             ]);
             lines.extend(tool_line(tool, prefix, content_width, padding + 6, theme, highlighter));
         }

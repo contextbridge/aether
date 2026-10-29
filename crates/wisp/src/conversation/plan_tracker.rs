@@ -1,3 +1,4 @@
+use acp_utils::conversation::is_plan_entry_finished;
 use agent_client_protocol::schema::v2::{self as acp};
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -38,7 +39,7 @@ impl PlanTracker {
         let active_keys: HashSet<_> = entries.iter().map(|entry| entry.content.as_str()).collect();
         self.completed_at.retain(|key, _| active_keys.contains(key.as_str()));
         for entry in &entries {
-            if terminal_status(&entry.status) {
+            if is_plan_entry_finished(&entry.status) {
                 self.completed_at.entry(entry.content.clone()).or_insert(now);
             } else {
                 self.completed_at.remove(&entry.content);
@@ -54,7 +55,7 @@ impl PlanTracker {
         visible.sort_by_key(|entry| match entry.status {
             acp::PlanEntryStatus::InProgress => 0,
             acp::PlanEntryStatus::Pending => 1,
-            _ if terminal_status(&entry.status) => 2,
+            _ if is_plan_entry_finished(&entry.status) => 2,
             _ => 3,
         });
         visible
@@ -68,11 +69,9 @@ impl PlanTracker {
     /// Whether a completed entry is still counting down, which is what keeps the
     /// tick loop running long enough to expire it.
     pub(crate) fn has_completed_in_grace_period(&self) -> bool {
-        self.entries().iter().any(|entry| terminal_status(&entry.status) && self.is_visible(entry, self.last_tick))
-    }
-
-    pub(crate) fn has_entries(&self) -> bool {
-        !self.entries().is_empty()
+        self.entries()
+            .iter()
+            .any(|entry| is_plan_entry_finished(&entry.status) && self.is_visible(entry, self.last_tick))
     }
 
     pub(crate) fn on_tick(&mut self, now: Instant) {
@@ -93,17 +92,13 @@ impl PlanTracker {
     }
 
     fn is_visible(&self, entry: &acp::PlanEntry, now: Instant) -> bool {
-        if !terminal_status(&entry.status) {
+        if !is_plan_entry_finished(&entry.status) {
             return true;
         }
         self.completed_at
             .get(&entry.content)
             .is_some_and(|completed_at| now.saturating_duration_since(*completed_at) <= GRACE_PERIOD)
     }
-}
-
-fn terminal_status(status: &acp::PlanEntryStatus) -> bool {
-    matches!(status, acp::PlanEntryStatus::Completed | acp::PlanEntryStatus::Cancelled)
 }
 
 #[cfg(test)]
@@ -315,10 +310,10 @@ mod tests {
         tracker.sync(Some(&plan), now);
         tracker.sync(Some(&plan), later);
         assert!(tracker.visible_entries(later).is_empty(), "an unchanged plan keeps its completion time");
-        assert!(tracker.has_entries());
+        assert_eq!(tracker.visible_entries(now).len(), 1, "the plan is still tracked");
 
         tracker.sync(None, later);
-        assert!(!tracker.has_entries(), "a conversation without a plan clears it");
+        assert!(tracker.visible_entries(now).is_empty(), "a conversation without a plan clears it");
     }
 
     #[test]
@@ -336,19 +331,6 @@ mod tests {
 
         let visible = tracker.visible_entries(now);
         assert_eq!(visible.len(), 0);
-        assert!(!tracker.has_entries());
-    }
-
-    #[test]
-    fn has_entries_false_after_clear() {
-        let mut tracker = PlanTracker::default();
-        let now = Instant::now();
-
-        tracker.replace("plan".into(), vec![entry("Task A", PlanEntryStatus::Pending)], now);
-        assert!(tracker.has_entries());
-
-        tracker.clear();
-        assert!(!tracker.has_entries());
     }
 
     #[test]

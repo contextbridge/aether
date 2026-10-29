@@ -1,9 +1,10 @@
 use crate::renderer::DrawContext;
 use crate::surfaces::input::{UiOutput, one};
-use crate::view::input::{Nav, UiEvent};
 use crate::theme::Theme;
 use crate::view::filterable_list::FilterableList;
+use crate::view::input::{Nav, UiEvent};
 use crate::view::wrap::truncate_to_width;
+use acp_utils::client::AcpClientError;
 use acp_utils::notifications::SessionPreviewResponse;
 use agent_client_protocol::schema::v2::{self as acp, SessionId};
 use ratatui::buffer::Buffer;
@@ -23,11 +24,10 @@ pub struct SessionPicker {
 /// Below this width the preview pane is dropped and the list gets the full area.
 const PREVIEW_MIN_WIDTH: u16 = 96;
 
-#[derive(Clone)]
 enum PreviewState {
     Loading,
     Loaded(SessionPreviewResponse),
-    Error(String),
+    Error(AcpClientError),
 }
 
 impl SessionPicker {
@@ -46,15 +46,15 @@ impl SessionPicker {
     }
 
     /// Preview to fetch for the initially selected row, if previews are supported.
-    pub fn initial_preview_request(&self) -> Option<String> {
-        self.preview_enabled.then(|| self.sessions.selected_entry())?.map(|session| session.session_id.0.to_string())
+    pub fn initial_preview_request(&self) -> Option<SessionId> {
+        self.preview_enabled.then(|| self.sessions.selected_entry())?.map(|session| session.session_id.clone())
     }
 
     pub fn on_preview_loaded(&mut self, preview: SessionPreviewResponse) {
         self.previews.insert(preview.session_id.clone(), PreviewState::Loaded(preview));
     }
 
-    pub fn on_preview_failed(&mut self, session_id: &str, error: String) {
+    pub fn on_preview_failed(&mut self, session_id: &SessionId, error: AcpClientError) {
         self.previews.insert(session_id.to_string(), PreviewState::Error(error));
     }
 
@@ -64,13 +64,13 @@ impl SessionPicker {
         if !self.preview_enabled {
             return Vec::new();
         }
-        let Some(session_id) = self.sessions.selected_entry().map(|session| session.session_id.0.to_string()) else {
+        let Some(session_id) = self.sessions.selected_entry().map(|session| session.session_id.clone()) else {
             return Vec::new();
         };
-        if self.previews.contains_key(&session_id) {
+        if self.previews.contains_key(&*session_id.0) {
             return Vec::new();
         }
-        self.previews.insert(session_id.clone(), PreviewState::Loading);
+        self.previews.insert(session_id.to_string(), PreviewState::Loading);
         vec![UiOutput::PreviewSession(session_id)]
     }
 
@@ -97,10 +97,7 @@ impl SessionPicker {
         };
         let muted = Style::from(theme.muted);
         let mut lines = vec![
-            Line::styled(
-                format!(" Title: {}", session.title.as_deref().unwrap_or("(untitled)")),
-                theme.text_primary,
-            ),
+            Line::styled(format!(" Title: {}", session.title.as_deref().unwrap_or("(untitled)")), theme.text_primary),
             Line::styled(format!(" Path: {}", session.cwd.0.display()), muted),
         ];
 

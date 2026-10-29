@@ -56,6 +56,7 @@ impl From<Activity> for ProgressPhase {
             Activity::Responding => Self::Responding,
             Activity::RequiresAction => Self::RequiresAction,
             Activity::Working => Self::Working,
+            Activity::Compacting => Self::Compacting,
         }
     }
 }

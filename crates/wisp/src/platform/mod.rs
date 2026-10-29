@@ -1,48 +1,41 @@
-//! Host integrations the UI reaches for: opening a URL and writing the
-//! clipboard. Injected as closures so tests can observe them without spawning
-//! anything.
+pub mod terminal;
 
-use std::sync::Arc;
+use crossterm::execute;
+use crossterm::style::Print;
+use std::io;
 
-pub(crate) type BrowserOpener = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
-pub(crate) type ClipboardWriter = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
-
-pub(crate) fn default_browser_opener() -> BrowserOpener {
-    Arc::new(|url: &str| open_url(url))
-}
-
-pub(crate) fn default_clipboard_writer() -> ClipboardWriter {
-    Arc::new(|text: &str| write_clipboard(text))
+pub(crate) fn ring_bell() -> Result<(), String> {
+    execute!(io::stdout(), Print("\x07")).map_err(|error| error.to_string())
 }
 
 #[cfg(target_os = "macos")]
-fn open_url(url: &str) -> Result<(), String> {
+pub(crate) fn open_url(url: &str) -> Result<(), String> {
     run("open", &[url])
 }
 
 #[cfg(target_os = "linux")]
-fn open_url(url: &str) -> Result<(), String> {
+pub(crate) fn open_url(url: &str) -> Result<(), String> {
     run("xdg-open", &[url])
 }
 
 #[cfg(target_os = "windows")]
-fn open_url(url: &str) -> Result<(), String> {
+pub(crate) fn open_url(url: &str) -> Result<(), String> {
     run("cmd", &["/C", "start", "", url])
 }
 
 // Every other platform falls back to the caller's copy-URL affordance.
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-fn open_url(_url: &str) -> Result<(), String> {
+pub(crate) fn open_url(_url: &str) -> Result<(), String> {
     Err("Unsupported platform for opening URLs".to_string())
 }
 
 #[cfg(target_os = "macos")]
-fn write_clipboard(text: &str) -> Result<(), String> {
+pub(crate) fn write_clipboard(text: &str) -> Result<(), String> {
     pipe_to("pbcopy", &[], text)
 }
 
 #[cfg(target_os = "linux")]
-fn write_clipboard(text: &str) -> Result<(), String> {
+pub(crate) fn write_clipboard(text: &str) -> Result<(), String> {
     pipe_to("wl-copy", &[], text)
         .or_else(|_| pipe_to("xclip", &["-selection", "clipboard"], text))
         .or_else(|_| pipe_to("xsel", &["--clipboard", "--input"], text))
@@ -50,12 +43,12 @@ fn write_clipboard(text: &str) -> Result<(), String> {
 }
 
 #[cfg(target_os = "windows")]
-fn write_clipboard(text: &str) -> Result<(), String> {
+pub(crate) fn write_clipboard(text: &str) -> Result<(), String> {
     pipe_to("clip", &[], text)
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-fn write_clipboard(_text: &str) -> Result<(), String> {
+pub(crate) fn write_clipboard(_text: &str) -> Result<(), String> {
     Err("Unsupported platform for copying text".to_string())
 }
 

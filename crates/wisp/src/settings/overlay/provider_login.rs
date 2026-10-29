@@ -1,4 +1,4 @@
-use super::{LiveSettingsData, summarize};
+use super::summarize;
 use crate::surfaces::input::{UiOutput, one};
 use crate::surfaces::modal::frame::MODAL_HORIZONTAL_PADDING;
 use crate::theme::Theme;
@@ -66,9 +66,9 @@ impl ProviderLoginPane {
     }
 }
 impl ProviderLoginPane {
-    pub(crate) fn refresh(&mut self, live: &LiveSettingsData) {
+    pub(crate) fn refresh(&mut self, providers: &[ProviderLoginEntry]) {
         let keep = self.entries.selected_entry().map(|entry| entry.method_id.clone());
-        self.entries = list_of(live.providers.clone());
+        self.entries = list_of(providers.to_vec());
         if let Some(method_id) = keep
             && let Some(index) = self.entries.entries().iter().position(|entry| entry.method_id == method_id)
         {

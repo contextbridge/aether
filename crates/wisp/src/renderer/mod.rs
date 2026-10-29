@@ -24,11 +24,11 @@ mod transcript;
 use std::collections::HashMap;
 
 use crate::app::App;
-use acp_utils::conversation::{ConversationId, ConversationItemId};
 use crate::error::RenderError;
 use crate::theme::Theme;
 use crate::view::generation::Generation;
 use crate::view::syntax::SyntaxHighlighter;
+use acp_utils::conversation::{ConversationId, ConversationItemId};
 use frame::draw_frame;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
@@ -112,7 +112,7 @@ impl Renderer {
         self.sync_theme(app);
         terminal.autoresize().map_err(RenderError::Backend)?;
         let area = terminal.get_frame().area();
-        self.sync_conversation(app.conversation_id());
+        self.sync_conversation(app.core().conversation().id());
         self.reconcile_history(terminal, app)?;
 
         let lap = Lap::start();

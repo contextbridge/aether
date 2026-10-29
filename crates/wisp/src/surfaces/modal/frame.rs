@@ -59,11 +59,8 @@ impl<'a> ModalFrame<'a> {
 
         if let Some(name) = self.title_right {
             block = block.title_top(
-                Line::from(Span::styled(
-                    format!("{horizontal_padding}{name}{horizontal_padding}"),
-                    self.theme.muted,
-                ))
-                .right_aligned(),
+                Line::from(Span::styled(format!("{horizontal_padding}{name}{horizontal_padding}"), self.theme.muted))
+                    .right_aligned(),
             );
         }
 
