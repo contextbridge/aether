@@ -1,4 +1,4 @@
-use super::common::uri_to_path;
+use super::common::uri_display;
 use crate::workspace_paths::relative_path;
 use lsp_types::Location;
 use std::collections::HashMap;
@@ -18,7 +18,7 @@ impl SourceLine {
     }
 
     pub fn from_location(location: &Location) -> Self {
-        Self::from_range(uri_to_path(&location.uri), &location.range)
+        Self::from_range(uri_display(&location.uri), &location.range)
     }
 }
 

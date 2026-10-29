@@ -1,7 +1,6 @@
-use crate::common::{CodingWorkspace, TestResult, has_errors, has_no_errors};
+use crate::common::{CodingWorkspace, TestResult, cargo_project, has_errors, has_no_errors};
 use crate::fake_lsp;
-use aether_lspd::LanguageId;
-use aether_lspd::testing::cargo_project;
+use clankerdiff_lspd::LanguageId;
 use serde_json::Value;
 use std::fs::canonicalize;
 use std::path::{Path, PathBuf};

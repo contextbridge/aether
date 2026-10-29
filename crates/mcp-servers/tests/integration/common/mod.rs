@@ -2,7 +2,7 @@
 
 #![allow(dead_code)]
 
-use aether_lspd::testing::{TestDaemon, TestDaemonBuilder};
+use clankerdiff_lspd::testing::{TestDaemon, TestDaemonBuilder};
 use mcp_servers::coding::CodingMcp;
 use mcp_servers::coding::tools::web_fetch::WebFetcher;
 use mcp_servers::skills::{
@@ -21,7 +21,10 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
+
+const TYPESCRIPT_PACKAGE: &str = "typescript@7.0.2";
 
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 
@@ -200,6 +203,24 @@ pub(crate) async fn await_terminal_task(client: &McpClient, task_id: &str) -> Te
 
 fn error_count(result: &Value) -> Option<u64> {
     result.get("summary")?.get("errors")?.as_u64()
+}
+
+pub(crate) fn cargo_project(name: &str) -> TestWorkspace {
+    let manifest = format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n");
+    TestWorkspace::new()
+        .file("Cargo.toml", manifest)
+        .file("src/main.rs", "fn main() {\n    println!(\"Hello, world!\");\n}\n")
+}
+
+pub(crate) fn node_project(name: &str) -> TestWorkspace {
+    let package = format!("{{\n  \"name\": \"{name}\",\n  \"version\": \"0.1.0\"\n}}");
+    let tsconfig = "{\n  \"compilerOptions\": {\n    \"strict\": true,\n    \"noEmit\": true\n  }\n}";
+    let project =
+        TestWorkspace::new().file("package.json", package).file("tsconfig.json", tsconfig).file("src/index.ts", "");
+    let args = ["install", "--save-dev", "--no-audit", "--no-fund", "--prefer-offline", TYPESCRIPT_PACKAGE];
+    let output = Command::new("npm").args(args).current_dir(project.root()).output().expect("failed to run npm");
+    assert!(output.status.success(), "npm {} failed:\n{}", args.join(" "), String::from_utf8_lossy(&output.stderr));
+    project
 }
 
 pub(crate) fn has_errors(result: &Value) -> bool {

@@ -1,7 +1,8 @@
-use crate::common::{CodingWorkspace, McpClientExt, TestResult, call_tool_error};
+use crate::common::{CodingWorkspace, McpClientExt, TestResult, call_tool_error, cargo_project};
 use crate::{fake_daemon, fake_lsp};
-use aether_lspd::LanguageId;
-use aether_lspd::testing::{TestGate, TestPoint, TestWorkspace, cargo_project};
+use clankerdiff_lspd::LanguageId;
+use clankerdiff_lspd::testing::{TestGate, TestPoint};
+use mcp_servers::testing::TestWorkspace;
 use serde_json::{Value, json};
 use std::time::Duration;
 
