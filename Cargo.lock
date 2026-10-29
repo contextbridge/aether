@@ -260,33 +260,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "aether-lspd"
-version = "0.3.6"
-dependencies = [
- "aether-lspd",
- "aether-utils",
- "clap",
- "futures",
- "globset",
- "ignore",
- "libc",
- "lsp-types",
- "nix 0.31.3",
- "notify",
- "serde",
- "serde_json",
- "sha2 0.11.1",
- "tempfile",
- "thiserror 2.0.21",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
-]
-
-[[package]]
 name = "aether-mcp-servers"
 version = "0.8.9"
 dependencies = [

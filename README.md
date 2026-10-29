@@ -185,7 +185,6 @@ Use `aether-agent-core` as a Rust library to build your own agent in ~25 lines. 
 | [`aether-agent-cli`](crates/aether-cli) | Headless CLI and ACP server for editor integration ([docs](https://aether-agent.io/aether/running/headless/)) |
 | [`mcp-servers`](crates/mcp-servers) | Pre-built MCP tool servers (coding, skills, tasks, sub-agents, review) ([docs](https://aether-agent.io/aether/built-in-servers/coding/)) |
 | [`aether-evals`](crates/aether-evals) | Automated testing (evals) for LLM agents ([docs](https://docs.rs/aether-evals)) |
-| [`aether-lspd`](crates/aether-lspd) | LSP daemon — shares language servers across agents |
 | [`aether-project`](crates/aether-project) | Project configuration and agent catalog from `.aether/settings.json` |
 
 ## TypeScript packages

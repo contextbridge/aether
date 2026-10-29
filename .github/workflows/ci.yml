@@ -49,8 +49,6 @@ jobs:
           # Six jobs each saving a cache per push put the repo permanently over
           # GitHub's 10 GiB limit, so every run raced eviction. PRs restore only.
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Build aether-lspd
-        run: cargo build -p aether-lspd
       - name: Clippy check
         run: just lint
 
@@ -71,8 +69,6 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Build aether-lspd
-        run: cargo build -p aether-lspd
       - name: Run tests
         run: just test
 
@@ -152,8 +148,6 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Build aether-lspd
-        run: cargo build -p aether-lspd
       - name: Check documentation
         run: just doc-check
 
