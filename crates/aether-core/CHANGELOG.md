@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.10](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.9.9...aether-agent-core-v0.9.10) - 2026-10-29
+
+### Added
+
+- ACP native subagents ([#627](https://github.com/contextbridge/aether/pull/627))
+
 ## [0.9.9](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.9.8...aether-agent-core-v0.9.9) - 2026-10-20
 
 ### Fixed
