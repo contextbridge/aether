@@ -2431,9 +2431,9 @@ dependencies = [
 
 [[package]]
 name = "clankerdiff-client"
-version = "0.3.3"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aff49f6623e39e21886a566017281531fb34e3038f9ab3e87e08faf3eb8e5717"
+checksum = "c61cebe052823bbb53eae52d7e83815b22173e43415493021cbc9153931780b0"
 dependencies = [
  "async-channel",
  "clankerdiff-core",
@@ -2448,12 +2448,12 @@ dependencies = [
 
 [[package]]
 name = "clankerdiff-core"
-version = "0.3.3"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d5b616152c4ffd3f15617e2a3da294b1dccd963c4163ae29bd6a08f059f39eaf"
+checksum = "4b119deae3969559707e5e218e5af670d81c2f48a9042a34ee6f95118eaae535"
 dependencies = [
  "clankerdiff-fingerprint",
- "clankerdiff-theme",
+ "clankerdiff-ui-core",
  "diffy",
  "serde",
  "similar",
@@ -2462,9 +2462,9 @@ dependencies = [
 
 [[package]]
 name = "clankerdiff-fingerprint"
-version = "0.3.3"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e01d25d30ad62a358c4a02b0bf62fcda36c9838a507419ab769783e141329e15"
+checksum = "77c9d369075d81907841a83d964ff8a2f011e3643c253c85c1059eb7f485e6a7"
 dependencies = [
  "blake3",
  "serde",
@@ -2473,9 +2473,9 @@ dependencies = [
 
 [[package]]
 name = "clankerdiff-git"
-version = "0.3.3"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92299a4fa71bade4a659ab8cc6072134c3a5c1455efc9b9e8adda9fe074248a2"
+checksum = "d6e5693822c2117bf8a9f3cb5f4d7ead453a5ff5c80353b370584758e0f24131"
 dependencies = [
  "clankerdiff-core",
  "thiserror 2.0.21",
@@ -2509,9 +2509,9 @@ dependencies = [
 
 [[package]]
 name = "clankerdiff-markdown"
-version = "0.3.3"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6ce6b6e1017365a7532803bb4e4a4ba3d85798306b3c53b8c5d469ddca2df1c"
+checksum = "5ccafeaaca32dbbba976b9bfe90d3a8d7bf5fb3d49a03e5f7e9687c07166190e"
 dependencies = [
  "clankerdiff-core",
  "clankerdiff-fingerprint",
@@ -2522,9 +2522,9 @@ dependencies = [
 
 [[package]]
 name = "clankerdiff-protocol"
-version = "0.3.3"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c77113f75a81393deccc786e6f35349d5dfa8304297c2771b21444a18c000fab"
+checksum = "58c54e8384984e16cb4ba6a359d731a463534aab08e368d0c1a01c11f09f850d"
 dependencies = [
  "async-channel",
  "clankerdiff-core",
@@ -2536,16 +2536,17 @@ dependencies = [
 
 [[package]]
 name = "clankerdiff-ratatui"
-version = "0.3.3"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7253abfb08bdafc6e69497b6bba262082d88b6b4cb5c8bcab31b788d8cbb704d"
+checksum = "00afabf0be3d648beab93d932313c96a4703fe708f4301938326165c70a3e196"
 dependencies = [
  "bitflags 2.13.2",
  "clankerdiff-client",
  "clankerdiff-core",
  "clankerdiff-markdown",
+ "clankerdiff-symbols",
  "clankerdiff-syntax",
- "clankerdiff-theme",
+ "clankerdiff-ui-core",
  "crossterm",
  "imbl",
  "ratatui",
@@ -2553,30 +2554,43 @@ dependencies = [
  "thiserror 2.0.21",
  "unicode-segmentation",
  "unicode-width",
+ "web-time",
 ]
 
 [[package]]
 name = "clankerdiff-server"
-version = "0.3.3"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "803d61146bab37698641b88710cd0c5e57669d6cd8c0fba6c7142dc48ce1c7f9"
+checksum = "9af558427bbe75d7428d060b58a75107e6623d30b483636476518bf5f1f24adb"
 dependencies = [
  "axum",
  "clankerdiff-core",
  "clankerdiff-git",
+ "clankerdiff-lspd",
  "clankerdiff-protocol",
  "clankerdiff-watch",
  "futures-util",
+ "lsp-types",
  "thiserror 2.0.21",
  "tokio",
  "tokio-util",
 ]
 
 [[package]]
-name = "clankerdiff-syntax"
-version = "0.3.3"
+name = "clankerdiff-symbols"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f8c073fcbcd894c2a9e8767bfe8c1df8e967387cffb4d6a3bf06a97936f4924"
+checksum = "449a464de3de5f7885c44118411593acc94332b8d25e1847ab9e090f286bace8"
+dependencies = [
+ "clankerdiff-core",
+ "clankerdiff-syntax",
+]
+
+[[package]]
+name = "clankerdiff-syntax"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a560ecbd0d686f8029b9556052e03987da2cbcb389f15fab8e9627502752fe8f"
 dependencies = [
  "arborium-asm",
  "arborium-bash",
@@ -2642,21 +2656,22 @@ dependencies = [
  "arborium-zsh",
  "cc",
  "clankerdiff-fingerprint",
- "clankerdiff-theme",
+ "clankerdiff-ui-core",
  "imbl",
- "lru",
+ "lru 0.19.0",
  "thiserror 2.0.21",
  "tree-sitter",
 ]
 
 [[package]]
-name = "clankerdiff-theme"
-version = "0.3.3"
+name = "clankerdiff-ui-core"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d86898a98f6d97f7f21b4b86d3ff37b749f89f7101be175700a245c60046d45f"
+checksum = "bf7987dd6415ed35a26685bb10bdde945dad38f6e6d1742f063b6a854976f772"
 dependencies = [
  "arborium-theme",
  "clankerdiff-fingerprint",
+ "nucleo-matcher",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -2664,9 +2679,9 @@ dependencies = [
 
 [[package]]
 name = "clankerdiff-watch"
-version = "0.3.3"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dabe9064bae6d87763295ee0f2389f482a6ab0d830304bd1c65d85cf16c997e7"
+checksum = "fb8e2582ff3ae1ec56e9d0f745d7fc8eb07a937bb8b44321ebebbde5ce7ffdd7"
 dependencies = [
  "clankerdiff-core",
  "clankerdiff-git",
@@ -3879,9 +3894,9 @@ dependencies = [
 
 [[package]]
 name = "gloo-timers"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbb143cf96099802033e0d4f4963b19fd2e0b728bcf076cd9cf7f6634f092994"
+checksum = "482ce8a491a501da4cd806bd190275363d674f2845005c6ddbd5d3e1dd54495d"
 dependencies = [
  "futures-channel",
  "futures-core",
@@ -4915,6 +4930,15 @@ name = "lru"
 version = "0.18.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ef9ac18847474e638e3702b76c65d4eb93428471a74778ef0f1be711717f89b5"
+dependencies = [
+ "hashbrown 0.17.1",
+]
+
+[[package]]
+name = "lru"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4a9f71e3591c7ec44d3e563e87bf14ddc2bada8519dca046e5b0e560cd004e2d"
 dependencies = [
  "hashbrown 0.17.1",
 ]
@@ -6175,7 +6199,7 @@ dependencies = [
  "hashbrown 0.17.1",
  "itertools",
  "kasuari",
- "lru",
+ "lru 0.18.5",
  "palette",
  "serde",
  "strum",
