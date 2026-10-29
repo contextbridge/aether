@@ -1,11 +1,12 @@
 use acp_utils::client::AcpEvent;
 use acp_utils::conversation::{
-    Activity, Conversation, ConversationContent, ItemState, SubAgent, ToolCall, ToolStatus, TurnFinished, TurnPhase,
+    Activity, Conversation, ConversationContent, ItemState, Notice, NoticeLevel, SubAgent, ToolCall, ToolStatus,
+    TurnFinished, TurnPhase,
 };
 use acp_utils::notifications::ContextClearedParams;
 use acp_utils::testing::{
-    announced, idle_notification, idle_state, on_session, plan_notification, running_notification, running_state,
-    sub_agent_tool_update,
+    self, announced, idle_notification, idle_state, message_chunk, on_session, plan_notification, running_notification,
+    running_state, sub_agent_tool_update,
 };
 use agent_client_protocol::schema::{MaybeUndefined, v2 as acp};
 use serde_json::json;
@@ -585,7 +586,6 @@ fn activity_after_the_turn_ends_is_ignored_until_the_next_turn() {
 
     assert_eq!(conversation.activity(), Activity::Idle);
     assert_eq!(tool(&conversation, 0).sub_agents, []);
-    assert!(!conversation.is_compacting());
 
     conversation.apply_event(&running());
     conversation.apply_event(&tool_update(acp::ToolCallUpdate::new("next-spawn").title("spawn_subagent")));
@@ -601,13 +601,13 @@ fn compaction_is_tracked_until_it_completes_or_the_turn_ends() {
     let mut conversation = conversation();
     conversation.apply_event(&running());
     conversation.apply_event(&compaction(acp::CompactionStatus::InProgress));
-    assert!(conversation.is_compacting());
+    assert_eq!(conversation.activity(), Activity::Compacting);
     conversation.apply_event(&compaction(acp::CompactionStatus::Completed));
-    assert!(!conversation.is_compacting());
+    assert_ne!(conversation.activity(), Activity::Compacting);
 
     conversation.apply_event(&compaction(acp::CompactionStatus::InProgress));
     conversation.apply_event(&idle(None));
-    assert!(!conversation.is_compacting());
+    assert_ne!(conversation.activity(), Activity::Compacting);
 }
 
 #[test]
@@ -663,10 +663,13 @@ fn a_closed_connection_ends_the_turn() {
 fn notices_are_distinct_from_user_content() {
     let mut conversation = conversation();
     conversation.apply_event(&user_message("user", "prompt"));
-    conversation.append_notice("Context cleared");
+    conversation.append_notice(NoticeLevel::Info, "Context cleared");
 
     assert!(matches!(conversation.items()[0].content(), ConversationContent::User(_)));
-    assert_eq!(conversation.items()[1].content(), &ConversationContent::Notice("Context cleared".into()));
+    assert_eq!(
+        conversation.items()[1].content(),
+        &ConversationContent::Notice(Notice { level: NoticeLevel::Info, text: "Context cleared".into() })
+    );
 }
 
 #[test]
@@ -676,7 +679,7 @@ fn items_serialize_with_their_kind_and_protocol_content() {
     conversation.apply_event(&agent_chunk("reply", "hello"));
     conversation.apply_event(&tool_update(acp::ToolCallUpdate::new("tool").title("Bash")));
     conversation.apply_event(&idle(Some(acp::StopReason::Cancelled)));
-    conversation.append_notice("note");
+    conversation.append_notice(NoticeLevel::Error, "note");
 
     let items = serde_json::to_value(conversation.items()).unwrap();
 
@@ -695,7 +698,8 @@ fn items_serialize_with_their_kind_and_protocol_content() {
                     "toolCall": {"toolCallId": "tool", "title": "Bash"}
                 }
             },
-            {"id": 2, "messageId": null, "revision": 9, "state": "sealed", "kind": "notice", "content": "note"}
+            {"id": 2, "messageId": null, "revision": 9, "state": "sealed", "kind": "notice",
+             "content": {"level": "error", "text": "note"}}
         ])
     );
     assert_eq!(serde_json::to_value(conversation.activity()).unwrap(), json!("idle"));
@@ -764,15 +768,15 @@ fn agent_message_on(session: &str, id: &str, text: &str) -> AcpEvent {
 }
 
 fn agent_chunk(id: &str, text: &str) -> AcpEvent {
-    update(acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(text.into(), id)))
+    update(message_chunk(id, text))
 }
 
 fn thought_chunk(id: &str, text: &str) -> AcpEvent {
-    update(acp::SessionUpdate::AgentThoughtChunk(acp::ContentChunk::new(text.into(), id)))
+    update(testing::thought_chunk(id, text))
 }
 
 fn user_message(id: &str, text: &str) -> AcpEvent {
-    update(acp::SessionUpdate::UserMessage(acp::UserMessage::new(id).content(vec![text.into()])))
+    update(testing::user_message(id, vec![text.into()]))
 }
 
 fn tool_update(tool_call: acp::ToolCallUpdate) -> AcpEvent {

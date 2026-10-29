@@ -1,30 +1,31 @@
-use super::config::cycle_reasoning_option;
 use super::{App, ExitState, Overlay, Route};
-use crate::command::{AgentCommand, Command, GitReviewCommand};
-use crate::renderer::DrawContext;
+use crate::command::HostCommand;
 use crate::screens::git_diff::GitDiffScreen;
-use crate::session::WorkspaceAccess;
-use crate::session::session_config_view::LocalConfigView;
 use crate::settings::KeyAction;
+use crate::settings::overlay::ProviderLoginStatus;
 use crate::surfaces::composer::ComposerOutcome;
 use crate::surfaces::dropped_files::parse_dropped_file_paths;
+use crate::surfaces::input::{UiOutput, one};
+use crate::surfaces::picker::{Builtin, SlashCommand};
 use crate::view::input::{MouseAction, UiEvent};
-use crate::surfaces::picker::CommandEntry;
+use acp_utils::config_option_id::THEME_CONFIG_ID;
+use client_core::composer::attachment::classify_paths;
+use client_core::session_config_view::LocalConfigView;
+use client_core::session_core::SessionCore;
+use client_core::session_model::WorkspaceAccess;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use ratatui::buffer::Buffer;
-use ratatui::layout::{Position, Rect};
 use std::time::{Duration, Instant};
 
 pub(super) const CTRL_C_CONFIRM_WINDOW: Duration = Duration::from_secs(1);
 
 impl App {
-    pub fn on_terminal_event(&mut self, event: Event) {
+    pub(super) fn on_terminal_event(&mut self, event: Event) {
         let event = match event {
             Event::Key(key) => UiEvent::Key(key),
             Event::Paste(text) => UiEvent::Paste(text),
             Event::Mouse(mouse) => {
                 let Some(action) = MouseAction::from_event(mouse.kind) else { return };
-                UiEvent::Mouse(action, (mouse.column, mouse.row))
+                UiEvent::Mouse(action, (mouse.column, mouse.row), mouse.modifiers)
             }
             Event::FocusLost => {
                 self.swallow_next_click = true;
@@ -44,7 +45,7 @@ impl App {
 
     fn is_refocusing_click(&mut self, event: &UiEvent) -> bool {
         match event {
-            UiEvent::Mouse(MouseAction::Click, _) => std::mem::take(&mut self.swallow_next_click),
+            UiEvent::Mouse(MouseAction::Click, ..) => std::mem::take(&mut self.swallow_next_click),
             UiEvent::Key(_) | UiEvent::Paste(_) => {
                 self.swallow_next_click = false;
                 false
@@ -67,10 +68,10 @@ impl App {
 
         if let Some(overlay) = self.overlay.as_mut() {
             let outputs = match overlay {
-                Overlay::Settings(overlay) => overlay.on_ui_event(&event),
+                Overlay::Settings(overlay) => overlay.on_ui_event(&event, self.core.session()),
                 Overlay::Sessions(picker) => picker.on_ui_event(&event),
                 Overlay::Workspaces(picker) => picker.on_ui_event(&event),
-                Overlay::Elicitation(modal) => modal.on_ui_event(&event),
+                Overlay::Elicitation(modal) => one(modal.on_ui_event(&event)),
             };
             self.dispatch_outputs(outputs);
             return;
@@ -89,7 +90,7 @@ impl App {
                 return match &event {
                     UiEvent::Key(key) => self.dispatch_key(*key),
                     UiEvent::Paste(text) => self.on_composer_paste(text),
-                    UiEvent::Mouse(..) => self.composer.on_overlay_mouse(&event),
+                    UiEvent::Mouse(..) => self.composer.on_overlay_mouse(&event, self.core.prompt_search()),
                 };
             }
         };
@@ -108,7 +109,7 @@ impl App {
     /// Routes a keystroke the conversation owns. Routes and overlays are handled by
     /// [`Self::on_ui_event`] before this is reached.
     fn dispatch_key(&mut self, key: KeyEvent) {
-        if let Some(outcome) = self.composer.on_prompt_search_key(key) {
+        if let Some(outcome) = self.composer.on_prompt_search_key(key, self.core.prompt_search()) {
             self.apply_composer_outcome(outcome);
             return;
         }
@@ -120,26 +121,25 @@ impl App {
     fn apply_composer_outcome(&mut self, outcome: ComposerOutcome) {
         match outcome {
             ComposerOutcome::Handled => {}
-            ComposerOutcome::AcceptedCommand(command) => self.run_accepted_command(&command),
-            ComposerOutcome::Search(query) => self.send_prompt_search_query(query),
+            ComposerOutcome::AcceptedCommand(command) => self.run_accepted_command(command),
+            ComposerOutcome::Search(query) => self.update_core(|core| core.search_prompts(&query)),
         }
     }
 
     fn on_composer_key(&mut self, key: KeyEvent) {
         if self.ui.keybindings.matches(KeyAction::OpenPromptSearch, key)
-            && self.session.capabilities().prompt_search
+            && self.core.session().capabilities().prompt_search
             && !self.composer.has_completion()
         {
             self.composer.open_prompt_search();
+            self.update_core(|core| core.search_prompts(""));
             return;
         }
 
         if self.ui.keybindings.matches(KeyAction::ToggleGitDiff, key) {
             let screen = GitDiffScreen::new();
             self.open_route(Route::GitReview(Box::new(screen)));
-            self.queue(Command::GitReview(GitReviewCommand::Open {
-                session_id: self.session.session_id().0.to_string(),
-            }));
+            self.update_core(SessionCore::open_git_review);
             return;
         }
 
@@ -156,14 +156,12 @@ impl App {
         }
 
         if self.ui.keybindings.matches(KeyAction::CycleReasoning, key) {
-            self.apply_config_cycle(cycle_reasoning_option(self.session.config_options()));
+            self.apply_config_cycle(|view| view.next_reasoning_effort());
             return;
         }
 
         if self.ui.keybindings.matches(KeyAction::CycleMode, key) {
-            let view = LocalConfigView::new(self.session.config_options());
-            let next = view.next_mode().map(|(id, value)| (id.to_string(), value.to_string()));
-            self.apply_config_cycle(next);
+            self.apply_config_cycle(|view| view.next_mode());
             return;
         }
 
@@ -173,9 +171,7 @@ impl App {
         }
 
         if self.ui.keybindings.matches(KeyAction::Cancel, key) {
-            if self.waiting_for_response() {
-                self.queue(Command::Agent(AgentCommand::Cancel { session_id: self.session.session_id().clone() }));
-            }
+            self.update_core(SessionCore::cancel);
             return;
         }
 
@@ -185,12 +181,15 @@ impl App {
             if opens_command_picker || self.ui.keybindings.matches(KeyAction::OpenFilePicker, key) {
                 self.composer.insert_char(character);
                 if opens_command_picker {
-                    self.composer.open_command_picker(self.available_commands.clone());
-                } else if self.session.workspace_access() == WorkspaceAccess::Remote {
-                    self.notify("File picker is unavailable for remote workspaces");
+                    let builtins =
+                        Builtin::offered(self.core.session().capabilities()).into_iter().map(SlashCommand::Builtin);
+                    let advertised = self.core.available_commands().iter().cloned().map(SlashCommand::Agent);
+                    self.composer.open_command_picker(builtins.chain(advertised).collect());
+                } else if self.core.session().workspace_access() == WorkspaceAccess::Remote {
+                    self.update_core(|core| core.notify("File picker is unavailable for remote workspaces"));
                 } else {
-                    let command = self.composer.open_file_picker(self.session.working_dir());
-                    self.queue(Command::Filesystem(command));
+                    self.composer.open_file_picker();
+                    self.queue(HostCommand::IndexFiles { root: self.core.session().working_dir().to_path_buf() });
                 }
                 return;
             }
@@ -211,67 +210,97 @@ impl App {
         }
     }
 
-    fn apply_config_cycle(&mut self, next: Option<(String, String)>) {
-        if let Some((id, value)) = next {
-            self.set_config_option(&id, &value);
-            self.session.update_config_option_value(&id, &value);
+    fn apply_config_cycle(&mut self, next: impl FnOnce(LocalConfigView<'_>) -> Option<(&str, &str)>) {
+        let view = LocalConfigView::new(self.core.session().config_options());
+        if let Some((id, value)) = next(view).map(|(id, value)| (id.to_owned(), value.to_owned())) {
+            self.update_core(|core| core.set_config_option(&id, &value));
         }
     }
 
     /// Builtin commands run as soon as they are accepted; commands taking input
     /// leave the composer ready for it.
-    fn run_accepted_command(&mut self, command: &CommandEntry) {
-        if command.builtin {
-            self.dispatch_builtin_command(command);
-        } else if command.has_input {
-            self.composer.insert_char(' ');
-        } else {
-            self.submit();
+    fn run_accepted_command(&mut self, command: SlashCommand) {
+        match command {
+            SlashCommand::Builtin(builtin) => self.run_builtin(builtin),
+            SlashCommand::Agent(command) if command.has_input => self.composer.insert_char(' '),
+            SlashCommand::Agent(_) => self.submit(),
         }
     }
 
+    fn submit(&mut self) {
+        if self.composer.is_empty() || !self.core.foreground().is_idle() {
+            return;
+        }
+        let submission = self.composer.take_submission();
+        self.update_core(|core| core.submit(submission));
+    }
+
     fn on_composer_paste(&mut self, text: &str) {
-        if let Some(outcome) = self.composer.on_prompt_search_paste(text) {
+        if let Some(outcome) = self.composer.on_prompt_search_paste(text, self.core.prompt_search()) {
             self.apply_composer_outcome(outcome);
             return;
         }
-        let added = self.session.workspace_access() == WorkspaceAccess::Local
-            && parse_dropped_file_paths(text).is_some_and(|paths| self.composer.add_dropped_media(paths));
+        let root = self.core.session().working_dir();
+        let added =
+            parse_dropped_file_paths(text).is_some_and(|paths| self.composer.attach_files(classify_paths(paths, root)));
         if !added {
             self.composer.insert_paste(text);
         }
         self.composer.refresh_overlay_query();
     }
 
-    pub fn render_route(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
-        match &mut self.route {
-            Route::Conversation => None,
-            Route::GitReview(screen) => screen.render(area, buf, cx),
-            Route::ArtifactReview(screen) => screen.render(area, buf, cx),
+    pub(super) fn dispatch_outputs(&mut self, outputs: Vec<UiOutput>) {
+        for output in outputs {
+            self.handle_output(output);
         }
     }
 
-    pub fn render_overlay(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
-        match self.overlay.as_mut() {
-            Some(Overlay::Settings(overlay)) => overlay.render(area, buf, cx),
-            Some(Overlay::Sessions(picker)) => picker.render(area, buf, cx),
-            Some(Overlay::Workspaces(picker)) => picker.render(area, buf, cx),
-            Some(Overlay::Elicitation(modal)) => modal.render(area, buf, cx),
-            None => None,
+    fn handle_output(&mut self, output: UiOutput) {
+        match output {
+            UiOutput::Close => self.close_active(),
+            UiOutput::ConfigChange(change) => {
+                self.apply_settings_change(&change);
+                if change.config_id == THEME_CONFIG_ID {
+                    self.apply_theme_change(&change.new_value);
+                } else {
+                    self.update_core(|core| core.set_config_option(&change.config_id, &change.new_value));
+                }
+            }
+            UiOutput::AuthenticateServer(server_name) => {
+                self.update_core(|core| core.authenticate_mcp_server(server_name));
+            }
+            UiOutput::AuthenticateProvider(method_id) => {
+                if let Some(Overlay::Settings(overlay)) = self.overlay.as_mut() {
+                    overlay.set_provider_status(&method_id, ProviderLoginStatus::Authenticating);
+                }
+                self.update_core(|core| core.authenticate(method_id));
+            }
+            UiOutput::ResumeSession { session_id, cwd } => {
+                self.update_core(|core| core.resume_session(&session_id, &cwd));
+            }
+            UiOutput::PreviewSession(session_id) => self.update_core(|core| core.preview_session(session_id)),
+            UiOutput::MoveWorkspace(target) => {
+                self.close_overlay();
+                self.update_core(|core| core.move_workspace(target));
+            }
+            UiOutput::AnswerElicitation { id, answer } => self.answer_elicitation(id, answer),
+            UiOutput::ArtifactReviewed(summary) => {
+                self.update_core(|core| core.notify(&summary));
+                self.close_active();
+            }
+            UiOutput::SubmitReview(prompt) => self.update_core(|core| core.submit_review(&prompt)),
+            UiOutput::ReviewEvent(event) => self.update_core(|core| core.send_review_event(event)),
+            UiOutput::Host(command) => self.queue(command),
         }
     }
 
-    /// Only the bare composer works without mouse reporting; every other
-    /// route or overlay has scrollable or clickable content.
-    pub fn needs_mouse_capture(&self) -> bool {
-        match self.overlay.as_ref() {
-            Some(Overlay::Elicitation(modal)) => modal.needs_mouse_capture(),
-            Some(Overlay::Settings(overlay)) => overlay.needs_mouse_capture(),
-            Some(_) => true,
-            None => match self.route {
-                Route::Conversation => self.composer.has_open_overlay(),
-                Route::GitReview(_) | Route::ArtifactReview(_) => true,
-            },
+    fn run_builtin(&mut self, builtin: Builtin) {
+        self.composer.clear();
+        match builtin {
+            Builtin::Clear => self.update_core(SessionCore::new_session),
+            Builtin::Resume => self.update_core(SessionCore::list_sessions),
+            Builtin::Settings => self.open_settings(),
+            Builtin::Move => self.update_core(SessionCore::begin_workspace_move),
         }
     }
 }
@@ -287,6 +316,7 @@ fn normalize_ui_event(event: UiEvent) -> Option<UiEvent> {
                 key.kind = KeyEventKind::Press;
                 Some(UiEvent::Key(key))
             }
+            KeyEventKind::Release if matches!(key.code, KeyCode::Modifier(_)) => Some(UiEvent::Key(key)),
             KeyEventKind::Release => None,
         },
         event => Some(event),

@@ -22,7 +22,7 @@ async fn git_diff_open_publishes_snapshot_over_duplex() {
         let Event::Document(update) = next_event(&mut harness).await else {
             panic!("open must publish a document");
         };
-        assert_eq!(update.scope, DiffScope::Both);
+        assert_eq!(update.target, DiffScope::Both.into());
         assert!(
             changed_paths(&update).iter().any(|path| path == "changed.txt"),
             "unexpected files: {:?}",
@@ -47,11 +47,11 @@ async fn git_diff_refresh_tracks_scope_and_reports_status_ref() {
         let _ = next_event(&mut harness).await;
         let _ = next_event(&mut harness).await;
 
-        send(&harness, "s1", ClientCommand::SetScope(DiffScope::Staged));
+        send(&harness, "s1", ClientCommand::SetTarget(DiffScope::Staged.into()));
         let Event::Document(update) = next_event(&mut harness).await else {
             panic!("set scope must publish a document");
         };
-        assert_eq!(update.scope, DiffScope::Staged);
+        assert_eq!(update.target, DiffScope::Staged.into());
         assert!(changed_paths(&update).iter().any(|path| path == "committed.txt"), "staged change must be visible");
         assert!(matches!(next_event(&mut harness).await, Event::RequestResult(Ok(()))));
 
@@ -143,7 +143,11 @@ async fn live(harness: &AcpTestHarness, session_id: &str, cwd: &std::path::Path)
 }
 
 fn initialize(harness: &AcpTestHarness, session_id: &str, scope: DiffScope) {
-    send(harness, session_id, ClientCommand::Initialize { protocol_version: LIVE_PROTOCOL_VERSION, scope });
+    send(
+        harness,
+        session_id,
+        ClientCommand::Initialize { protocol_version: LIVE_PROTOCOL_VERSION, target: scope.into() },
+    );
 }
 
 fn close(harness: &AcpTestHarness, session_id: &str) {

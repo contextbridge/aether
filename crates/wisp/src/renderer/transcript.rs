@@ -2,8 +2,8 @@ use std::rc::Rc;
 
 use crate::app::App;
 use crate::conversation::item_view::{ContentKind, content_kind, item_lines, kind_before};
-use acp_utils::conversation::{ConversationContent, ConversationItem};
 use crate::view::wrap::as_u16;
+use acp_utils::conversation::{ConversationContent, ConversationItem};
 use clankerdiff_ratatui::MarkdownStreamError;
 use ratatui::text::Line;
 
@@ -41,7 +41,7 @@ impl Renderer {
     }
 
     fn live_lines_inner(&mut self, app: &App, width: u16) -> Result<Vec<Line<'static>>, MarkdownStreamError> {
-        let items = app.conversation_items();
+        let items = app.core().conversation().items();
         let commit = self.native_history.commit;
         let Some(item) = items.get(commit.item_index) else {
             return Ok(Vec::new());

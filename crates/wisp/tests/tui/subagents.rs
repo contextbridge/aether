@@ -14,7 +14,9 @@ fn sub_agent_tool_completed(session: &str, tool_id: &str) -> AcpEvent {
 
 fn spawn_tool(app: &TestUi) -> &ToolCall {
     app.app()
-        .conversation_items()
+        .core()
+        .conversation()
+        .items()
         .iter()
         .find_map(|item| match item.content() {
             ConversationContent::Tool(tool) if tool.title() == "spawn_subagent" => Some(tool),
@@ -28,15 +30,15 @@ fn running_sub_agent_keeps_agent_busy_after_its_spawn_completes() {
     let mut app = TestUi::new();
     app.acp_event(tool_call("parent-1", "spawn_subagent"));
     app.acp_event(tool_completed("parent-1"));
-    assert!(!app.app().is_agent_busy(), "a completed spawn with no sub-agents is idle");
+    assert!(!app.app().core().is_agent_busy(), "a completed spawn with no sub-agents is idle");
 
     app.acp_event(sub_agent_started("parent-1", "child-a", "explorer"));
     app.acp_event(sub_agent_tool_call("child-a", "c1", "grep", r#"{"pattern":"test"}"#));
-    assert!(app.app().is_agent_busy());
+    assert!(app.app().core().is_agent_busy());
 
     app.acp_event(sub_agent_tool_completed("child-a", "c1"));
     app.acp_event(sub_agent_finished("parent-1", "child-a", "explorer", acp::StopReason::EndTurn));
-    assert!(!app.app().is_agent_busy());
+    assert!(!app.app().core().is_agent_busy());
 }
 
 #[test]
@@ -49,7 +51,7 @@ fn a_sub_agent_finishes_when_its_own_session_goes_idle() {
     app.acp_event(idle_notification("child-a", Some(acp::StopReason::EndTurn)).into());
 
     assert_eq!(spawn_tool(&app).sub_agents[0].status(), Some(ToolStatus::Success));
-    assert!(app.app().is_agent_busy(), "a sub-agent going idle does not end the parent's turn");
+    assert!(app.app().core().is_agent_busy(), "a sub-agent going idle does not end the parent's turn");
 }
 
 #[test]
@@ -75,7 +77,7 @@ fn sub_agents_and_clears_for_another_session_are_ignored() {
     app.acp_event(sub_agent_tool_call("child-a", "c1", "grep", "{}"));
     app.acp_event(AcpEvent::ContextCleared(ContextClearedParams { session_id: other_session }));
 
-    let items = app.app().conversation_items();
+    let items = app.app().core().conversation().items();
     assert_eq!(items.len(), 1, "another session's sub-agent and clear leave this conversation alone");
     assert_eq!(spawn_tool(&app).sub_agents, []);
 }
@@ -152,10 +154,7 @@ fn a_replayed_running_sub_agent_is_unconfirmed_once_the_resume_completes() {
     );
     assert!(app.app().wants_tick(), "replayed history still looks live until the resume completes");
 
-    app.deliver_result(CommandResult::ResumeSession {
-        session_id: "saved".into(),
-        result: Ok(acp::ResumeSessionResponse::new()),
-    });
+    app.answer::<Resume>(Ok(acp::ResumeSessionResponse::new()));
 
     assert_eq!(spawn_tool(&app).sub_agents[0].status(), None);
     assert!(!app.app().wants_tick());

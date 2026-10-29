@@ -2,7 +2,7 @@
 //! notifications.
 use std::path::PathBuf;
 
-use agent_client_protocol::schema::v2::{AuthMethod, Meta, SessionId, ToolCallId};
+use agent_client_protocol::schema::v2::{self as acp, AuthMethod, Meta, SessionId, ToolCallId};
 use agent_client_protocol::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 use clankerdiff_protocol::client::ClientCommand;
 use clankerdiff_protocol::shared::{DocumentUpdate, Event};
@@ -207,6 +207,7 @@ impl AetherMeta for SessionDisplayMeta {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
+#[expect(clippy::struct_excessive_bools, reason = "each flag is an independent capability on the wire")]
 pub struct AetherCapabilities {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub prompt_search: bool,
@@ -214,9 +215,17 @@ pub struct AetherCapabilities {
     pub session_preview: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub workspace_move: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub git_diff: bool,
 }
 
 impl AetherMeta for AetherCapabilities {}
+
+impl AetherCapabilities {
+    pub fn of(capabilities: &acp::AgentCapabilities) -> Self {
+        Self::from_meta(capabilities.session.as_ref().and_then(|session| session.meta.as_ref()))
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonRpcNotification)]
 #[notification(method = "_aether/git_diff")]

@@ -2,10 +2,9 @@ use acp::schema::v2::{
     CloseSessionRequest, ListSessionsRequest, PromptRequest, PromptResponse, ReplayFrom, ReplayFromStart,
     ResumeSessionRequest, ResumeSessionResponse, SessionId, UpdateSessionNotification,
 };
-use acp_utils::client::{AcpClient, AcpClientError, AcpEvent, connect_acp_client};
-use acp_utils::testing::{initialize_request, running_notification};
-use agent_client_protocol::{self as acp, Channel, Client, ConnectionTo, Responder};
-use tokio::sync::mpsc;
+use acp_utils::client::{AcpClient, AcpClientError, AcpEvent};
+use acp_utils::testing::{FakeAgent, FakeAgentRequests, running_notification};
+use agent_client_protocol::{self as acp, Client, ConnectionTo, Responder};
 use tokio::task::{LocalSet, spawn_local};
 
 #[tokio::test]
@@ -13,7 +12,7 @@ async fn plain_resume_forwards_target_updates_without_collecting_history() {
     LocalSet::new().run_until(async {
         let mut fake = TurnTest::connect().await;
         let resume = fake.resume("one", false);
-        let (request, responder) = fake.resumes.recv().await.unwrap();
+        let (request, responder) = fake.requests.held::<ResumeSessionRequest>().recv().await.unwrap();
         assert!(request.replay_from.is_none());
         fake.send(running_notification("one"));
         assert!(matches!(fake.client.event_rx.recv().await, Some(AcpEvent::SessionUpdate(notification)) if notification.session_id == SessionId::new("one")));
@@ -34,11 +33,11 @@ async fn prompts_and_resumes_do_not_gate_requests() {
             fake.client.handle.request(CloseSessionRequest::new("saved")).await.unwrap();
             assert_eq!(fake.client.handle.request(ListSessionsRequest::new()).await.unwrap().sessions.len(), 0);
             let resume = fake.resume("two", true);
-            let (_, responder) = fake.resumes.recv().await.unwrap();
+            let (_, responder) = fake.requests.held::<ResumeSessionRequest>().recv().await.unwrap();
             assert_eq!(fake.client.handle.request(ListSessionsRequest::new()).await.unwrap().sessions.len(), 0);
             for replay in [false, true] {
                 let other = fake.resume("other", replay);
-                let (_, responder) = fake.resumes.recv().await.unwrap();
+                let (_, responder) = fake.requests.held::<ResumeSessionRequest>().recv().await.unwrap();
                 responder.respond(ResumeSessionResponse::new()).unwrap();
                 other.await.unwrap().unwrap();
             }
@@ -67,29 +66,22 @@ impl PendingPrompt {
 struct TurnTest {
     client: AcpClient,
     connection: ConnectionTo<Client>,
-    prompts: mpsc::UnboundedReceiver<(PromptRequest, Responder<PromptResponse>)>,
-    resumes: mpsc::UnboundedReceiver<(ResumeSessionRequest, Responder<ResumeSessionResponse>)>,
+    requests: FakeAgentRequests,
 }
 
 impl TurnTest {
     async fn connect() -> Self {
-        let (agent_transport, client_transport) = Channel::duplex();
-        let (agent, mut requests) = acp_utils::testing::FakeAgent::default().sessions(vec![]).capture();
-        spawn_local(agent.agent().connect_to(agent_transport));
-        let client = connect_acp_client(client_transport, initialize_request()).await.unwrap();
-        Self {
-            client,
-            connection: requests.connection.recv().await.unwrap(),
-            prompts: requests.prompt,
-            resumes: requests.resume,
-        }
+        let (agent, mut requests) =
+            FakeAgent::default().sessions(vec![]).hold::<PromptRequest>().hold::<ResumeSessionRequest>().capture();
+        let client = agent.build().await.unwrap();
+        Self { client, connection: requests.connection.recv().await.unwrap(), requests }
     }
 
     async fn submit(&mut self, session: &str) -> PendingPrompt {
         let handle = self.client.handle.clone();
         let request = PromptRequest::new(session.to_owned(), vec![]);
         let result = spawn_local(async move { handle.request(request).await });
-        PendingPrompt { responder: self.prompts.recv().await.unwrap().1, result }
+        PendingPrompt { responder: self.requests.held::<PromptRequest>().recv().await.unwrap().1, result }
     }
 
     fn resume(

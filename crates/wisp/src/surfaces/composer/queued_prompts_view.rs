@@ -1,5 +1,5 @@
-use crate::app::QueuedPrompt;
 use crate::theme::Theme;
+use client_core::session_core::QueuedPrompt;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -33,7 +33,9 @@ impl Widget for QueuedPromptsView<'_> {
         let shown = if self.prompts.len() > MAX_PROMPT_ROWS + 1 { MAX_PROMPT_ROWS } else { self.prompts.len() };
         let mut lines: Vec<Line<'static>> = self.prompts[..shown]
             .iter()
-            .map(|prompt| Line::from(vec![Span::styled("queued › ", label), Span::styled(summary(&prompt.submission.text), text)]))
+            .map(|prompt| {
+                Line::from(vec![Span::styled("queued › ", label), Span::styled(summary(&prompt.submission.text), text)])
+            })
             .collect();
         if shown < self.prompts.len() {
             lines.push(Line::styled(format!("+{} more queued", self.prompts.len() - shown), label));

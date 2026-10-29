@@ -413,11 +413,8 @@ mod tests {
 
     #[test]
     fn wrap_line_breaks_at_whitespace_across_span_boundaries() {
-        let line = Line::from(vec![
-            Span::styled("@aaaaa", Color::Red),
-            Span::raw(" "),
-            Span::styled("@bbbbbb", Color::Blue),
-        ]);
+        let line =
+            Line::from(vec![Span::styled("@aaaaa", Color::Red), Span::raw(" "), Span::styled("@bbbbbb", Color::Blue)]);
 
         let rows = wrap_line(line, 10);
 
@@ -428,10 +425,7 @@ mod tests {
 
     #[test]
     fn wrap_line_drops_whitespace_when_a_new_span_starts_at_the_wrap_boundary() {
-        let line = Line::from(vec![
-            Span::styled("abcdefghij", Color::Red),
-            Span::styled(" klm", Color::Blue),
-        ]);
+        let line = Line::from(vec![Span::styled("abcdefghij", Color::Red), Span::styled(" klm", Color::Blue)]);
 
         let rows = wrap_line(line, 10);
 

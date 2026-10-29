@@ -3,31 +3,25 @@ pub(crate) mod frame;
 mod url;
 
 use crate::renderer::DrawContext;
-use crate::surfaces::elicitation::ElicitationResponder;
-use acp_utils::elicitation::source_mcp_server_name;
-use agent_client_protocol::Responder;
-use agent_client_protocol::schema::v2::{CreateElicitationRequest, CreateElicitationResponse, ElicitationMode};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use client_core::elicitation::{ElicitationAnswer, ElicitationId, FormField};
+use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Position, Rect};
 use ratatui::text::Text;
 use ratatui::widgets::{Paragraph, Widget};
 
-use self::form::{FormAction, FormModal};
+use self::form::FormModal;
 use self::frame::{MODAL_HORIZONTAL_PADDING, MODAL_VERTICAL_CHROME, ModalFrame};
 use self::url::UrlModal;
-use crate::session::platform::{BrowserOpener, ClipboardWriter};
 use crate::surfaces::input::UiOutput;
 use crate::theme::Theme;
-use crate::view::input::UiEvent;
+use crate::view::input::{MouseAction, UiEvent};
 use crate::view::widgets::{KeyHint, SCROLLBAR_WIDTH, key_hints};
 use crate::view::wrap::as_u16;
 
 pub struct ElicitationModal {
+    id: ElicitationId,
     kind: ModalKind,
-    responder: ElicitationResponder,
-    browser_opener: BrowserOpener,
-    clipboard_writer: ClipboardWriter,
 }
 
 enum ModalKind {
@@ -36,23 +30,16 @@ enum ModalKind {
 }
 
 impl ElicitationModal {
-    pub fn with_url_handlers(
-        params: CreateElicitationRequest,
-        responder: Responder<CreateElicitationResponse>,
-        browser_opener: BrowserOpener,
-        clipboard_writer: ClipboardWriter,
-    ) -> Option<Self> {
-        let server_name = source_mcp_server_name(params.meta.as_ref()).unwrap_or("Agent").to_string();
-        let message = params.message;
-        let responder = ElicitationResponder::new(responder);
-        let kind = match params.mode {
-            ElicitationMode::Form(form) => {
-                ModalKind::Form(FormModal::new(server_name, message, &form.requested_schema)?)
-            }
-            ElicitationMode::Url(url) => ModalKind::Url(UrlModal::new(server_name, message, url.url)),
-            _ => return None,
-        };
-        Some(Self { kind, responder, browser_opener, clipboard_writer })
+    pub fn form(id: ElicitationId, source: String, message: String, fields: Vec<FormField>) -> Self {
+        Self { id, kind: ModalKind::Form(FormModal::new(source, message, fields)) }
+    }
+
+    pub fn url(id: ElicitationId, source: String, message: String, url: String) -> Self {
+        Self { id, kind: ModalKind::Url(UrlModal::new(source, message, url)) }
+    }
+
+    pub fn id(&self) -> ElicitationId {
+        self.id
     }
 
     pub fn render_inline(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) -> Option<Position> {
@@ -82,47 +69,17 @@ impl ElicitationModal {
         }
     }
 
-    fn on_url_key(&mut self, key: KeyEvent) -> Vec<UiOutput> {
-        let ModalKind::Url(url) = &mut self.kind else {
-            return Vec::new();
-        };
-        let plain_key = key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT;
-        match key.code {
-            KeyCode::Esc => {
-                self.responder.cancel();
-                return vec![UiOutput::Close];
-            }
-            KeyCode::Enter => {
-                if let Err(error) = (self.browser_opener)(&url.url) {
-                    url.launch_error = Some(format!("Failed to open browser: {error}"));
-                } else {
-                    self.responder.accept(None);
-                    return vec![UiOutput::Close];
-                }
-            }
-            KeyCode::Char('c' | 'C') if plain_key => {
-                url.copy_message = Some(match (self.clipboard_writer)(&url.url) {
-                    Ok(()) => "Copied URL to clipboard.".to_string(),
-                    Err(error) => format!("Failed to copy URL: {error}"),
-                });
-            }
-            _ => {}
-        }
-        Vec::new()
-    }
-}
-
-impl ElicitationModal {
-    pub(crate) fn on_ui_event(&mut self, event: &UiEvent) -> Vec<UiOutput> {
+    pub(crate) fn on_ui_event(&mut self, event: &UiEvent) -> Option<UiOutput> {
         match event {
             UiEvent::Key(key) => self.on_key(*key),
             UiEvent::Paste(text) => {
                 if let ModalKind::Form(form) = &mut self.kind {
                     form.paste(text);
                 }
-                Vec::new()
+                None
             }
-            UiEvent::Mouse(action, (column, row)) => {
+            UiEvent::Mouse(MouseAction::Moved, ..) => None,
+            UiEvent::Mouse(action, (column, row), _) => {
                 if let Some(direction) = action.direction() {
                     if let ModalKind::Form(form) = &mut self.kind {
                         form.vertical(direction);
@@ -130,27 +87,22 @@ impl ElicitationModal {
                 } else if let ModalKind::Form(form) = &mut self.kind {
                     form.click(*column, *row);
                 }
-                Vec::new()
+                None
             }
         }
     }
 
-    /// A modal answers a request, so it owns every key: nothing falls through
-    /// to the shared list navigation.
-    fn on_key(&mut self, key: KeyEvent) -> Vec<UiOutput> {
-        let ModalKind::Form(form) = &mut self.kind else {
-            return self.on_url_key(key);
-        };
-        match form.on_key(key) {
-            FormAction::None => Vec::new(),
-            FormAction::Cancel => {
-                self.responder.cancel();
-                vec![UiOutput::Close]
-            }
-            FormAction::Accept(content) => {
-                self.responder.accept(Some(content));
-                vec![UiOutput::Close]
-            }
+    /// The host's answer to [`HostCommand::OpenUrl`](crate::command::HostCommand::OpenUrl).
+    pub(crate) fn on_url_opened(&mut self, result: Result<(), String>) -> Option<ElicitationAnswer> {
+        match &mut self.kind {
+            ModalKind::Url(url) => url.on_opened(result),
+            ModalKind::Form(_) => None,
+        }
+    }
+
+    pub(crate) fn on_url_copied(&mut self, result: Result<(), String>) {
+        if let ModalKind::Url(url) = &mut self.kind {
+            url.on_copied(result);
         }
     }
 
@@ -158,13 +110,6 @@ impl ElicitationModal {
         matches!(self.kind, ModalKind::Form(_))
     }
 
-    /// Dismissing the modal answers the request it was asking about.
-    pub(crate) fn cancel(&mut self) {
-        self.responder.cancel();
-    }
-}
-
-impl ElicitationModal {
     pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
         // The modal hugs its content: wide enough to read, never more than a
         // fraction of the screen, and only as tall as the page it is asking
@@ -193,12 +138,15 @@ impl ElicitationModal {
                 .title_right(server_name);
         let inner = frame.inner(area);
         (&frame).render(area, buf);
+        self.render_inline(inner, buf, cx.theme)
+    }
+}
+
+impl ElicitationModal {
+    fn on_key(&mut self, key: KeyEvent) -> Option<UiOutput> {
         match &mut self.kind {
-            ModalKind::Form(form) => form.render(inner, buf, cx.theme),
-            ModalKind::Url(url) => {
-                Paragraph::new(Text::from(url.body_lines(cx.theme, inner.width))).render(inner, buf);
-                None
-            }
+            ModalKind::Url(url) => url.on_key(self.id, key),
+            ModalKind::Form(form) => form.on_key(key).map(|answer| UiOutput::AnswerElicitation { id: self.id, answer }),
         }
     }
 }
@@ -206,213 +154,133 @@ impl ElicitationModal {
 #[cfg(test)]
 #[allow(clippy::absolute_paths, clippy::similar_names)]
 mod tests {
-    use super::form::permission_like_schema;
     use super::*;
-    use acp_utils::testing::test_connection;
-    use agent_client_protocol::schema::v2::{
-        ElicitationAction, ElicitationFormMode, ElicitationSchema, ElicitationSessionScope, ElicitationUrlMode,
-    };
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use tokio::task::LocalSet;
+    use crate::command::HostCommand;
+    use crate::testing::buffer_text;
+    use agent_client_protocol::schema::v2::{ElicitationSchema, StringPropertySchema};
+    use crossterm::event::{KeyCode, KeyModifiers};
 
-    /// Whether the modal asked to be dismissed.
-    fn closes(messages: &[UiOutput]) -> bool {
-        messages.iter().any(|message| matches!(message, UiOutput::Close))
-    }
+    const LOGIN: &str = "https://github.com/login";
 
-    fn noop_handlers() -> (BrowserOpener, ClipboardWriter) {
-        (Arc::new(|_| Ok(())), Arc::new(|_| Ok(())))
-    }
+    #[test]
+    fn enter_accepts_a_forms_defaults() {
+        let schema = ElicitationSchema::new().property(
+            "decision",
+            StringPropertySchema::new().enum_values(vec!["allow".into(), "deny".into()]).default_value("deny"),
+            true,
+        );
+        let mut modal = form_modal(&schema);
 
-    fn failing_handlers() -> (BrowserOpener, ClipboardWriter) {
-        (
-            Arc::new(|_| Err("simulated open failure".to_string())),
-            Arc::new(|_| Err("simulated copy failure".to_string())),
-        )
-    }
-
-    fn form_request(schema: ElicitationSchema) -> CreateElicitationRequest {
-        CreateElicitationRequest::new(
-            ElicitationFormMode::new(ElicitationSessionScope::new("session-1"), schema),
-            String::new(),
-        )
+        let Some(UiOutput::AnswerElicitation { answer: ElicitationAnswer::Accept(Some(content)), .. }) =
+            modal.on_ui_event(&key(KeyCode::Enter))
+        else {
+            panic!("expected accept")
+        };
+        assert_eq!(content["decision"], "deny".into());
     }
 
-    fn url_request(url: &str) -> CreateElicitationRequest {
-        CreateElicitationRequest::new(
-            ElicitationUrlMode::new(ElicitationSessionScope::new("session-1"), "el-1", url),
-            "Authorize GitHub",
-        )
+    #[test]
+    fn enter_asks_the_host_to_open_the_url_once_and_accepts_when_it_opens() {
+        let mut modal = url_modal(LOGIN);
+
+        let output = modal.on_ui_event(&key(KeyCode::Enter));
+        assert!(
+            matches!(&output, Some(UiOutput::Host(HostCommand::OpenUrl { url, .. })) if url == LOGIN),
+            "{output:?}"
+        );
+        assert!(modal.on_ui_event(&key(KeyCode::Enter)).is_none(), "the browser is already opening");
+        assert_eq!(modal.on_url_opened(Ok(())), Some(ElicitationAnswer::Accept(None)));
     }
 
-    async fn make_modal_for_schema(
-        schema: ElicitationSchema,
-    ) -> (ElicitationModal, tokio::sync::oneshot::Receiver<CreateElicitationResponse>) {
-        let (cx, mut peer) = test_connection().await;
-        let (responder, rx) = peer.fake_elicitation(&cx).await;
-        let (opener, writer) = noop_handlers();
-        (ElicitationModal::with_url_handlers(form_request(schema), responder, opener, writer).unwrap(), rx)
+    #[test]
+    fn a_failed_open_shows_the_error_and_keeps_asking() {
+        let mut modal = url_modal(LOGIN);
+        modal.on_ui_event(&key(KeyCode::Enter));
+
+        assert_eq!(modal.on_url_opened(Err("simulated failure".into())), None);
+        assert!(rendered(&mut modal).contains("Failed to open browser: simulated failure"));
+        assert!(modal.on_ui_event(&key(KeyCode::Enter)).is_some(), "Enter retries");
     }
 
-    async fn make_url_modal(
-        url: &str,
-    ) -> (ElicitationModal, tokio::sync::oneshot::Receiver<CreateElicitationResponse>) {
-        let (cx, mut peer) = test_connection().await;
-        let (responder, rx) = peer.fake_elicitation(&cx).await;
-        let (opener, writer) = noop_handlers();
-        (ElicitationModal::with_url_handlers(url_request(url), responder, opener, writer).unwrap(), rx)
+    #[test]
+    fn c_asks_the_host_to_copy_the_url_and_shows_the_outcome() {
+        let mut modal = url_modal(LOGIN);
+
+        let output = modal.on_ui_event(&key(KeyCode::Char('c')));
+        assert!(
+            matches!(&output, Some(UiOutput::Host(HostCommand::CopyUrl { url, .. })) if url == LOGIN),
+            "{output:?}"
+        );
+
+        modal.on_url_copied(Ok(()));
+        assert!(rendered(&mut modal).contains("Copied URL to clipboard."));
+        modal.on_url_copied(Err("simulated failure".into()));
+        assert!(rendered(&mut modal).contains("Failed to copy URL: simulated failure"));
     }
 
-    async fn make_url_modal_with_handlers(
-        url: &str,
-        opener: BrowserOpener,
-        writer: ClipboardWriter,
-    ) -> ElicitationModal {
-        let (cx, mut peer) = test_connection().await;
-        let (responder, _rx) = peer.fake_elicitation(&cx).await;
-        ElicitationModal::with_url_handlers(url_request(url), responder, opener, writer).unwrap()
-    }
-    #[tokio::test(flavor = "current_thread")]
-    async fn permission_like_form_returns_default_on_enter() {
-        LocalSet::new()
-            .run_until(async {
-                let schema = permission_like_schema();
-                let (mut modal, rx) = make_modal_for_schema(schema).await;
-                assert!(closes(&modal.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))));
-                let response = rx.await.unwrap();
-                let ElicitationAction::Accept(accept) = response.action else { panic!("expected accept") };
-                assert_eq!(accept.content.unwrap()["decision"], "deny".into());
-            })
-            .await;
-    }
-    #[tokio::test(flavor = "current_thread")]
-    async fn esc_returns_cancel() {
-        LocalSet::new()
-            .run_until(async {
-                let schema = ElicitationSchema::new();
-                let (mut modal, rx) = make_modal_for_schema(schema).await;
-                assert!(closes(&modal.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))));
-                let response = rx.await.unwrap();
-                assert!(matches!(response.action, ElicitationAction::Cancel));
-            })
-            .await;
+    #[test]
+    fn esc_cancels_a_url() {
+        let mut modal = url_modal(LOGIN);
+
+        let output = modal.on_ui_event(&key(KeyCode::Esc));
+        assert!(
+            matches!(output, Some(UiOutput::AnswerElicitation { answer: ElicitationAnswer::Cancel, .. })),
+            "{output:?}"
+        );
     }
 
-    #[tokio::test(flavor = "current_thread")]
-    async fn dropping_modal_responds_cancel() {
-        LocalSet::new()
-            .run_until(async {
-                let schema = ElicitationSchema::new();
-                let (modal, rx) = make_modal_for_schema(schema).await;
-                drop(modal);
-                let response = rx.await.unwrap();
-                assert!(matches!(response.action, ElicitationAction::Cancel));
-            })
-            .await;
-    }
-    #[tokio::test(flavor = "current_thread")]
-    async fn url_enter_opens_browser_and_accepts_request() {
-        LocalSet::new()
-            .run_until(async {
-                let opened = Arc::new(AtomicBool::new(false));
-                let url_opener: BrowserOpener = {
-                    let opened = opened.clone();
-                    Arc::new(move |_| {
-                        opened.store(true, Ordering::SeqCst);
-                        Ok(())
-                    })
-                };
-                let mut modal =
-                    make_url_modal_with_handlers("https://github.com/login", url_opener, noop_handlers().1).await;
-                let outcome = modal.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-                assert!(closes(&outcome));
-            })
-            .await;
+    #[test]
+    fn a_url_shows_its_host() {
+        let mut modal = url_modal(LOGIN);
+
+        let screen = rendered(&mut modal);
+        assert!(screen.contains("Host: github.com"), "{screen}");
+        assert!(!screen.contains("Warning"), "{screen}");
     }
 
-    #[tokio::test(flavor = "current_thread")]
-    async fn url_enter_shows_error_on_open_failure() {
-        LocalSet::new()
-            .run_until(async {
-                let mut modal =
-                    make_url_modal_with_handlers("https://github.com/login", failing_handlers().0, noop_handlers().1)
-                        .await;
-                modal.on_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-                match &modal.kind {
-                    ModalKind::Url(url) => {
-                        assert!(url.launch_error.as_deref().unwrap().contains("simulated open failure"));
-                    }
-                    ModalKind::Form(_) => panic!("expected Url"),
-                }
-            })
-            .await;
+    #[test]
+    fn local_http_urls_raise_no_warning() {
+        for url in ["http://localhost:3000/auth", "http://127.0.0.1:8000/api"] {
+            let screen = rendered(&mut url_modal(url));
+            assert!(!screen.contains("Warning"), "{url}: {screen}");
+        }
     }
 
-    #[tokio::test(flavor = "current_thread")]
-    async fn url_c_copies_to_clipboard() {
-        LocalSet::new()
-            .run_until(async {
-                let copied: Arc<std::sync::Mutex<String>> = Arc::new(std::sync::Mutex::new(String::new()));
-                let writer: ClipboardWriter = {
-                    let copied = copied.clone();
-                    Arc::new(move |text: &str| {
-                        *copied.lock().unwrap() = text.to_string();
-                        Ok(())
-                    })
-                };
-                let mut modal =
-                    make_url_modal_with_handlers("https://github.com/login", noop_handlers().0, writer).await;
-                modal.on_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
-                match &modal.kind {
-                    ModalKind::Url(url) => {
-                        assert_eq!(url.copy_message.as_deref(), Some("Copied URL to clipboard."));
-                    }
-                    ModalKind::Form(_) => panic!("expected Url"),
-                }
-            })
-            .await;
+    #[test]
+    fn suspicious_urls_raise_warnings() {
+        let cases = [
+            ("http://example.com/form", &["does not use HTTPS"][..]),
+            ("not a valid url", &["could not be parsed"]),
+            ("https://xn--e1afmkfd.xn--p1ai/", &["punycode"]),
+            ("http://xn--e1afmkfd.xn--p1ai/", &["punycode", "does not use HTTPS"]),
+            ("https://user:pass@example.com/path", &["embedded credentials"]),
+        ];
+        for (url, warnings) in cases {
+            let screen = rendered(&mut url_modal(url));
+            for warning in warnings {
+                assert!(screen.contains(warning), "{url} should warn about {warning}: {screen}");
+            }
+            assert_eq!(screen.matches("Warning").count(), warnings.len(), "{url}: {screen}");
+        }
     }
 
-    #[tokio::test(flavor = "current_thread")]
-    async fn url_copy_shows_error_on_failure() {
-        LocalSet::new()
-            .run_until(async {
-                let mut modal =
-                    make_url_modal_with_handlers("https://github.com/login", noop_handlers().0, failing_handlers().1)
-                        .await;
-                modal.on_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE));
-                match &modal.kind {
-                    ModalKind::Url(url) => {
-                        assert!(url.copy_message.as_deref().unwrap().contains("simulated copy failure"));
-                    }
-                    ModalKind::Form(_) => panic!("expected Url"),
-                }
-            })
-            .await;
+    fn form_modal(schema: &ElicitationSchema) -> ElicitationModal {
+        let fields = client_core::elicitation::form_fields(schema).unwrap();
+        ElicitationModal::form(ElicitationId::next(), "Agent".into(), String::new(), fields)
     }
 
-    #[tokio::test(flavor = "current_thread")]
-    async fn url_esc_cancels() {
-        LocalSet::new()
-            .run_until(async {
-                let (mut modal, rx) = make_url_modal("https://github.com/login").await;
-                assert!(closes(&modal.on_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))));
-                let response = rx.await.unwrap();
-                assert!(matches!(response.action, ElicitationAction::Cancel));
-            })
-            .await;
+    fn url_modal(url: &str) -> ElicitationModal {
+        ElicitationModal::url(ElicitationId::next(), "Agent".into(), "Authorize GitHub".into(), url.into())
     }
 
-    #[tokio::test(flavor = "current_thread")]
-    async fn url_drop_sends_cancel() {
-        LocalSet::new()
-            .run_until(async {
-                let (modal, rx) = make_url_modal("https://github.com/login").await;
-                drop(modal);
-                let response = rx.await.unwrap();
-                assert!(matches!(response.action, ElicitationAction::Cancel));
-            })
-            .await;
+    fn key(code: KeyCode) -> UiEvent {
+        UiEvent::Key(KeyEvent::new(code, KeyModifiers::NONE))
+    }
+
+    fn rendered(modal: &mut ElicitationModal) -> String {
+        let area = Rect::new(0, 0, 200, 20);
+        let mut buffer = Buffer::empty(area);
+        modal.render_inline(area, &mut buffer, &Theme::default());
+        buffer_text(&buffer)
     }
 }

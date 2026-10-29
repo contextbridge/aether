@@ -56,7 +56,6 @@ impl TrackedConversation {
             activity: conversation.activity(),
             plan: conversation.plan(),
             context_usage: conversation.context_usage(),
-            compacting: conversation.is_compacting(),
         })
     }
 }

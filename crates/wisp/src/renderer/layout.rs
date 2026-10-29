@@ -2,6 +2,7 @@ use crate::app::App;
 use crate::conversation::plan_view::PlanView;
 use crate::conversation::status_line::StatusLine;
 use crate::surfaces::composer::{ComposerLayout, QueuedPromptsView};
+use crate::surfaces::prompt_search::PromptSearchPicker;
 use crate::view::wrap::as_u16;
 use agent_client_protocol::schema::v2::PlanEntry;
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
@@ -36,8 +37,11 @@ impl FrameLayout {
         let composer_layout = app.composer().layout(area.width, renderer.theme());
         let completion_rows =
             as_u16(app.composer().completion().map_or(0, |overlay| overlay.row_count(COMPLETION_MAX_ROWS)));
-        let prompt_search_rows =
-            as_u16(app.composer().prompt_search().map_or(0, |picker| picker.height(PROMPT_SEARCH_MAX_ROWS)));
+        let prompt_search_rows = if app.composer().has_prompt_search() {
+            as_u16(PromptSearchPicker::height(app.core().prompt_search(), PROMPT_SEARCH_MAX_ROWS))
+        } else {
+            0
+        };
         let requested_composer_height =
             as_u16(composer_layout.lines.len()).saturating_add(completion_rows).saturating_add(prompt_search_rows);
         let composer_height = requested_composer_height.max(1).min(area.height.saturating_sub(status_line_rows));
@@ -48,7 +52,7 @@ impl FrameLayout {
         // cannot squeeze out the conversation.
         let plan_height =
             as_u16(PlanView::new(&plan_entries, renderer.theme()).line_count()).min(remaining.div_ceil(3));
-        let queued_height = as_u16(QueuedPromptsView::new(app.queued_prompts(), renderer.theme()).line_count())
+        let queued_height = as_u16(QueuedPromptsView::new(app.core().queued_prompts(), renderer.theme()).line_count())
             .min(remaining.saturating_sub(plan_height));
         let progress_height = app.progress_indicator().height();
 

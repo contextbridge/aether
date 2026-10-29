@@ -103,12 +103,12 @@ globset = "0.4"
 ignore = "0.4"
 
 # Terminal UI
-clankerdiff-core = { version = "0.3.2" }
-clankerdiff-ratatui = { version = "0.3.2", features = ["crossterm-backend"] }
-clankerdiff-git = { version = "0.3.2" }
-clankerdiff-protocol = { version = "0.3.2" }
-clankerdiff-server = { version = "0.3.2" }
-clankerdiff-client = { version = "0.3.2", default-features = false }
+clankerdiff-core = { version = "0.8.0" }
+clankerdiff-ratatui = { version = "0.8.0", features = ["crossterm-backend"] }
+clankerdiff-git = { version = "0.8.0" }
+clankerdiff-protocol = { version = "0.8.0" }
+clankerdiff-server = { version = "0.8.0" }
+clankerdiff-client = { version = "0.8.0", default-features = false }
 crossterm = { version = "0.29", features = ["event-stream"] }
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm", "layout-cache", "scrolling-regions"] }
 nucleo = "0.5.0"

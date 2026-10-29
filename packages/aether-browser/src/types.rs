@@ -52,7 +52,6 @@ pub struct ConversationSnapshot<'a> {
     pub activity: Activity,
     pub plan: Option<&'a PlanItems>,
     pub context_usage: Option<&'a UsageUpdate>,
-    pub compacting: bool,
 }
 
 /// Options for `AetherClient.connect`.
@@ -82,7 +81,7 @@ pub enum AetherClientErrorCode {
     AlreadyAnswered,
 }
 
-/// close frame.
+/// The code and reason from a WebSocket close frame.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct WebSocketClose {
     pub code: u16,

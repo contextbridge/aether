@@ -1,4 +1,5 @@
 use crate::view::syntax::HighlightStats;
+#[cfg(feature = "testing")]
 use std::time::Instant;
 
 /// Work one [`Renderer`](super::Renderer) did since the last

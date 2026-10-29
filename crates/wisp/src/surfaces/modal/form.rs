@@ -1,6 +1,6 @@
-use agent_client_protocol::schema::v2::{
-    ElicitationContentValue, ElicitationPropertySchema, ElicitationSchema, EnumOption, MultiSelectItems,
-    MultiSelectPropertySchema, StringPropertySchema,
+use agent_client_protocol::schema::v2::ElicitationContentValue;
+use client_core::elicitation::{
+    ElicitationAnswer, FieldError, FieldInput, FormError, FormField, SelectOption, accept_content,
 };
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::buffer::Buffer;
@@ -8,11 +8,10 @@ use ratatui::layout::{Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
-use std::collections::BTreeMap;
 use unicode_width::UnicodeWidthStr;
 
-use crate::view::edit_buffer::is_composed_char;
 use crate::theme::Theme;
+use crate::view::edit_buffer::is_composed_char;
 use crate::view::edit_buffer::{EditBuffer, apply_edit_key};
 use crate::view::selection::{Direction, scroll_into_view, step_clamped};
 use crate::view::widgets::{KeyHint, RowsView, render_vertical_scrollbar, rows_and_track, visible_window};
@@ -24,11 +23,11 @@ use crate::view::wrap::{as_u16, fit_line, wrap_line};
 pub(super) struct FormModal {
     server_name: String,
     message: String,
-    fields: Vec<FormField>,
+    fields: Vec<Question>,
     /// The question on screen; [`Self::review`] is the summary page.
     page: usize,
     confirming_cancel: bool,
-    validation_error: Option<String>,
+    validation_error: Option<FieldError>,
     body: BodyView,
 }
 
@@ -59,35 +58,16 @@ enum RowSite {
     Review { field: usize },
 }
 
-pub(super) struct FormField {
-    name: String,
-    label: String,
-    description: Option<String>,
-    required: bool,
+struct Question {
+    field: FormField,
+    input: FieldInput,
+    /// Where a text answer is edited; `input` mirrors its text.
+    editor: EditBuffer,
+    /// The focused row of a multi-select, which roams without answering.
+    multi_cursor: usize,
     /// Whether the user answered, so tab state, the progress counter, and the
     /// discard guard can tell an answer from an untouched default.
     touched: bool,
-    kind: FormFieldKind,
-}
-
-pub(super) enum FormFieldKind {
-    Text(EditBuffer),
-    Integer(EditBuffer),
-    Number(EditBuffer),
-    Boolean(bool),
-    Single { options: Vec<SelectOption>, selected: usize },
-    Multi { options: Vec<SelectOption>, selected: Vec<bool>, cursor: usize },
-}
-
-pub(super) struct SelectOption {
-    value: String,
-    title: String,
-}
-
-pub(super) enum FormAction {
-    None,
-    Cancel,
-    Accept(BTreeMap<String, ElicitationContentValue>),
 }
 
 /// The rows of one page, with everything a click or the terminal cursor needs
@@ -127,22 +107,16 @@ impl PageRows {
 }
 
 impl FormModal {
-    pub(super) fn new(server_name: String, message: String, schema: &ElicitationSchema) -> Option<Self> {
-        let required: Vec<&str> = schema.required.as_deref().unwrap_or(&[]).iter().map(String::as_str).collect();
-        let fields = schema
-            .properties
-            .iter()
-            .map(|(name, prop)| FormField::from_schema(name, prop, &required))
-            .collect::<Option<Vec<_>>>()?;
-        Some(Self {
+    pub(super) fn new(server_name: String, message: String, fields: Vec<FormField>) -> Self {
+        Self {
             server_name,
             message,
-            fields,
+            fields: fields.into_iter().map(Question::new).collect(),
             page: 0,
             confirming_cancel: false,
             validation_error: None,
             body: BodyView::default(),
-        })
+        }
     }
 
     pub(super) fn server_name(&self) -> &str {
@@ -167,17 +141,15 @@ impl FormModal {
     }
 
     fn choice_page(&self) -> bool {
-        self.fields.get(self.page).is_some_and(|field| {
-            matches!(field.kind, FormFieldKind::Boolean(_) | FormFieldKind::Single { .. } | FormFieldKind::Multi { .. })
-        })
+        self.fields.get(self.page).is_some_and(|question| !matches!(question.input, FieldInput::Text(_)))
     }
 
     fn multi_page(&self) -> bool {
-        self.fields.get(self.page).is_some_and(|field| matches!(field.kind, FormFieldKind::Multi { .. }))
+        self.fields.get(self.page).is_some_and(|question| matches!(question.input, FieldInput::Multi(_)))
     }
 
-    fn focused_kind(&mut self) -> Option<&mut FormFieldKind> {
-        self.fields.get_mut(self.page).map(|field| &mut field.kind)
+    fn focused(&mut self) -> Option<&mut Question> {
+        self.fields.get_mut(self.page)
     }
 
     /// Marks the focused field answered and retires any stale complaint
@@ -193,23 +165,23 @@ impl FormModal {
         self.fields.iter().filter(|field| field.touched).count()
     }
 
-    fn answer(&mut self, edit: impl FnOnce(&mut FormFieldKind) -> bool) -> FormAction {
-        if self.focused_kind().is_some_and(edit) {
+    fn answer(&mut self, edit: impl FnOnce(&mut Question) -> bool) -> Option<ElicitationAnswer> {
+        if self.focused().is_some_and(edit) {
             self.touch();
         }
-        FormAction::None
+        None
     }
 }
 
 impl FormModal {
-    pub(super) fn on_key(&mut self, key: KeyEvent) -> FormAction {
+    pub(super) fn on_key(&mut self, key: KeyEvent) -> Option<ElicitationAnswer> {
         // The guard swallows whatever answers it: `y`/`Esc` discard, anything
         // else goes back to the form without side effects.
         if self.confirming_cancel {
             self.confirming_cancel = false;
             return match key.code {
-                KeyCode::Esc | KeyCode::Char('y' | 'Y') => FormAction::Cancel,
-                _ => FormAction::None,
+                KeyCode::Esc | KeyCode::Char('y' | 'Y') => Some(ElicitationAnswer::Cancel),
+                _ => None,
             };
         }
         match key.code {
@@ -217,36 +189,38 @@ impl FormModal {
             KeyCode::Enter => self.advance(),
             KeyCode::Tab => {
                 self.move_page(Direction::Forward);
-                FormAction::None
+                None
             }
             KeyCode::BackTab => {
                 self.move_page(Direction::Backward);
-                FormAction::None
+                None
             }
             KeyCode::Up | KeyCode::Left => self.vertical(Direction::Backward),
             KeyCode::Down | KeyCode::Right => self.vertical(Direction::Forward),
-            KeyCode::Char(' ') if !is_composed_char(key) => self.answer(toggle_at_cursor),
-            KeyCode::Char('a' | 'A') if !is_composed_char(key) && self.multi_page() => self.answer(select_all),
+            KeyCode::Char(' ') if !is_composed_char(key) => self.answer(Question::toggle_at_cursor),
+            KeyCode::Char('a' | 'A') if !is_composed_char(key) && self.multi_page() => {
+                self.answer(Question::select_all)
+            }
             KeyCode::Char(digit @ '1'..='9') if !is_composed_char(key) && self.choice_page() => self.pick_digit(digit),
             _ => self.type_key(key),
         }
     }
 
-    fn escape(&mut self) -> FormAction {
+    fn escape(&mut self) -> Option<ElicitationAnswer> {
         // Losing several answered questions to a stray Escape deserves one
         // confirmation; a form barely started goes immediately.
         if self.touched_count() > 1 {
             self.confirming_cancel = true;
-            FormAction::None
+            None
         } else {
-            FormAction::Cancel
+            Some(ElicitationAnswer::Cancel)
         }
     }
 
-    fn advance(&mut self) -> FormAction {
+    fn advance(&mut self) -> Option<ElicitationAnswer> {
         if self.wizard() && self.page < self.review() {
             self.move_page(Direction::Forward);
-            return FormAction::None;
+            return None;
         }
         self.submit()
     }
@@ -264,33 +238,29 @@ impl FormModal {
     /// Vertical motion — an arrow key or a mouse wheel — belongs to the
     /// control in focus: it answers on a choice page and walks questions
     /// everywhere else.
-    pub(super) fn vertical(&mut self, direction: Direction) -> FormAction {
+    pub(super) fn vertical(&mut self, direction: Direction) -> Option<ElicitationAnswer> {
         if self.choice_page() {
-            return self.answer(|kind| step_option(kind, direction));
+            return self.answer(|question| question.step(direction));
         }
         self.move_page(direction);
-        FormAction::None
+        None
     }
 
-    fn pick_digit(&mut self, digit: char) -> FormAction {
+    fn pick_digit(&mut self, digit: char) -> Option<ElicitationAnswer> {
         let index = (digit.to_digit(10).unwrap_or(1) - 1) as usize;
-        self.answer(|kind| set_option(kind, index))
+        self.answer(|question| question.pick(index))
     }
 
-    fn type_key(&mut self, key: KeyEvent) -> FormAction {
-        self.answer(|kind| {
-            kind.text_buffer().is_some_and(|buffer| {
-                let before = buffer.text().to_string();
+    fn type_key(&mut self, key: KeyEvent) -> Option<ElicitationAnswer> {
+        self.answer(|question| {
+            question.edit(|buffer| {
                 apply_edit_key(buffer, key);
-                buffer.text() != before
             })
         })
     }
 
     pub(super) fn paste(&mut self, text: &str) {
-        if !text.is_empty() {
-            self.answer(|kind| kind.text_buffer().map(|buffer| buffer.insert_paste(text)).is_some());
-        }
+        self.answer(|question| question.edit(|buffer| buffer.insert_paste(text)));
     }
 
     /// Focuses whatever the pointer lands on: a tab cell picks its page, an
@@ -305,7 +275,7 @@ impl FormModal {
         let Some(site) = self.site_at(row) else { return };
         match site {
             RowSite::Option { option } => {
-                self.answer(|kind| set_option(kind, option));
+                self.answer(|question| question.pick(option));
             }
             RowSite::Review { field } => self.goto_page(field),
             RowSite::Inert => {}
@@ -320,28 +290,15 @@ impl FormModal {
         self.body.rows.get(self.body.scroll + usize::from(row - area.y)).copied()
     }
 
-    fn submit(&mut self) -> FormAction {
-        let mut content = BTreeMap::new();
-        let mut first_error = None;
-        for (index, field) in self.fields.iter().enumerate() {
-            match field.value() {
-                Ok(Some(value)) => {
-                    content.insert(field.name.clone(), value);
-                }
-                Ok(None) => {}
-                Err(error) => {
-                    first_error.get_or_insert((index, error));
-                }
-            }
-        }
-        match first_error {
-            None => FormAction::Accept(content),
-            Some((index, error)) => {
+    fn submit(&mut self) -> Option<ElicitationAnswer> {
+        match accept_content(self.fields.iter().map(|question| (&question.field, question.input.clone()))) {
+            Ok(answer) => Some(answer),
+            Err(FormError { index, error }) => {
                 // Send the user to the first thing standing between them and
                 // submitting, with the complaint right beside it.
                 self.goto_page(index);
                 self.validation_error = Some(error);
-                FormAction::None
+                None
             }
         }
     }
@@ -405,7 +362,7 @@ impl FormModal {
 
         if let Some(error) = &self.validation_error {
             rows.blank();
-            for line in wrap_line(Line::styled(error.clone(), theme.error), width) {
+            for line in wrap_line(Line::styled(error.to_string(), theme.error), width) {
                 rows.row(line);
             }
         }
@@ -431,13 +388,19 @@ impl FormModal {
         }
         rows.blank();
 
-        let label_width =
-            self.fields.iter().map(|field| field.label.width()).max().unwrap_or(0).min(usize::from(width) * 2 / 5);
-        for (index, field) in self.fields.iter().enumerate() {
-            let value = field.display_value();
+        let label_width = self
+            .fields
+            .iter()
+            .map(|question| question.field.label.width())
+            .max()
+            .unwrap_or(0)
+            .min(usize::from(width) * 2 / 5);
+        for (index, question) in self.fields.iter().enumerate() {
+            let value = question.display_value();
             let value = if value.is_empty() { "—".to_string() } else { value };
-            let style = if field.value().is_err() { Style::from(theme.error) } else { Style::from(theme.text_primary) };
-            let prefix = vec![Span::styled(format!("{:<label_width$}  ", field.label), theme.text_secondary)];
+            let style =
+                if question.value().is_err() { Style::from(theme.error) } else { Style::from(theme.text_primary) };
+            let prefix = vec![Span::styled(format!("{:<label_width$}  ", question.field.label), theme.text_secondary)];
             for line in wrapped_row(&prefix, &value, style, width) {
                 rows.site(line, RowSite::Review { field: index });
             }
@@ -462,7 +425,7 @@ impl FormModal {
                     } else if numbered {
                         (page + 1).to_string()
                     } else {
-                        self.fields[page].label.clone()
+                        self.fields[page].field.label.clone()
                     }
                 })
                 .collect::<Vec<_>>()
@@ -598,77 +561,10 @@ fn cell_width(labels: &[String]) -> usize {
     labels.iter().map(|label| label.width()).max().unwrap_or(0) + 2
 }
 
-/// Steps a choice control's cursor; reports whether the field's answer moved
-/// with it, since a multi-select's cursor roams without answering.
-fn step_option(kind: &mut FormFieldKind, direction: Direction) -> bool {
-    match kind {
-        FormFieldKind::Boolean(value) => {
-            *value = !*value;
-            true
-        }
-        FormFieldKind::Single { options, selected } if !options.is_empty() => {
-            *selected = step_clamped(*selected, direction, 1, options.len() - 1);
-            true
-        }
-        FormFieldKind::Multi { options, cursor, .. } if !options.is_empty() => {
-            *cursor = step_clamped(*cursor, direction, 1, options.len() - 1);
-            false
-        }
-        _ => false,
-    }
-}
-
-/// Picks `index` outright: single answers jump to it, multi-selects land
-/// their cursor on it and toggle it, so a number key always does what it
-/// shows.
-fn set_option(kind: &mut FormFieldKind, index: usize) -> bool {
-    match kind {
-        FormFieldKind::Boolean(value) => {
-            let picked = index == 0;
-            let changed = picked != *value;
-            *value = picked;
-            changed
-        }
-        FormFieldKind::Single { options, selected } if index < options.len() => {
-            let changed = *selected != index;
-            *selected = index;
-            changed
-        }
-        FormFieldKind::Multi { options, selected, cursor } if index < options.len() => {
-            *cursor = index;
-            selected[index] = !selected[index];
-            true
-        }
-        _ => false,
-    }
-}
-
-fn toggle_at_cursor(kind: &mut FormFieldKind) -> bool {
-    if let FormFieldKind::Multi { selected, cursor, .. } = kind
-        && let Some(flag) = selected.get_mut(*cursor)
-    {
-        *flag = !*flag;
-        true
-    } else {
-        false
-    }
-}
-
-fn select_all(kind: &mut FormFieldKind) -> bool {
-    if let FormFieldKind::Multi { options, selected, .. } = kind {
-        let all = !options.is_empty() && selected.iter().all(|flag| *flag);
-        for flag in selected.iter_mut() {
-            *flag = !all;
-        }
-        true
-    } else {
-        false
-    }
-}
-
 /// The question on screen: its label (marked when required), its description,
 /// and the control that answers it.
-fn question_rows(field: &FormField, theme: &Theme, width: u16, rows: &mut PageRows) {
+fn question_rows(question: &Question, theme: &Theme, width: u16, rows: &mut PageRows) {
+    let field = &question.field;
     rows.blank();
     let mut headline = Line::styled(field.label.clone(), (theme.text_primary, Modifier::BOLD));
     if field.required {
@@ -683,43 +579,30 @@ fn question_rows(field: &FormField, theme: &Theme, width: u16, rows: &mut PageRo
         }
     }
 
-    match &field.kind {
-        FormFieldKind::Multi { options, selected, cursor } => {
-            option_rows(options, *cursor, Some(selected), theme, width, rows);
-        }
-        FormFieldKind::Single { options, selected } => option_rows(options, *selected, None, theme, width, rows),
-        FormFieldKind::Boolean(value) => {
-            option_rows(&boolean_options(), boolean_index(*value), None, theme, width, rows);
-        }
-        FormFieldKind::Text(buffer) | FormFieldKind::Integer(buffer) | FormFieldKind::Number(buffer) => {
-            input_rows(buffer, theme, width, rows);
-        }
+    match &question.input {
+        FieldInput::Text(_) => input_rows(&question.editor, theme, width, rows),
+        FieldInput::Boolean(_) => option_rows(&boolean_options(), question, theme, width, rows),
+        FieldInput::Single(_) | FieldInput::Multi(_) => option_rows(field.kind.options(), question, theme, width, rows),
     }
 }
 
 /// The option rows of a choice page: an ordinal column, the checkbox column
 /// for multi-selects, and the cursor row filled with the accent across the
 /// full grid width.
-fn option_rows(
-    options: &[SelectOption],
-    cursor: usize,
-    checked: Option<&[bool]>,
-    theme: &Theme,
-    width: u16,
-    rows: &mut PageRows,
-) {
+fn option_rows(options: &[SelectOption], question: &Question, theme: &Theme, width: u16, rows: &mut PageRows) {
     rows.blank();
     let number_width = options.len().max(1).to_string().len();
+    let cursor = question.cursor();
     for (index, option) in options.iter().enumerate() {
         let focused = index == cursor;
         if focused {
             rows.focus = rows.focus.or(Some(rows.lines.len()));
         }
 
-        let tail = match checked {
-            Some(flags) if flags.get(index).copied().unwrap_or(false) => format!("[x] {}", option.title),
-            Some(_) => format!("[ ] {}", option.title),
-            None => option.title.clone(),
+        let tail = match &question.input {
+            FieldInput::Multi(_) if question.input.is_selected(index) => format!("[x] {}", option.title),
+            FieldInput::Multi(_) => format!("[ ] {}", option.title),
+            _ => option.title.clone(),
         };
 
         let prefix = vec![Span::styled(format!("{:>number_width$}  ", index + 1), theme.muted)];
@@ -793,161 +676,109 @@ fn boolean_index(value: bool) -> usize {
     usize::from(!value)
 }
 
-impl FormField {
-    fn from_schema(name: &str, prop: &ElicitationPropertySchema, required: &[&str]) -> Option<Self> {
-        use FormFieldKind::{Boolean, Integer, Number};
-        let (title, description, kind) = match prop {
-            ElicitationPropertySchema::Boolean(value) => {
-                (&value.title, &value.description, Boolean(value.default.unwrap_or(false)))
-            }
-            ElicitationPropertySchema::Integer(value) => {
-                (&value.title, &value.description, Integer(stringified_default(value.default).into()))
-            }
-            ElicitationPropertySchema::Number(value) => {
-                (&value.title, &value.description, Number(stringified_default(value.default).into()))
-            }
-            ElicitationPropertySchema::String(value) => (&value.title, &value.description, string_kind(value)),
-            ElicitationPropertySchema::Array(value) => (&value.title, &value.description, multi_kind(value)?),
-            _ => return None,
+impl Question {
+    fn new(field: FormField) -> Self {
+        let editor = match &field.default_input {
+            FieldInput::Text(text) => text.clone().into(),
+            _ => EditBuffer::default(),
         };
-        Some(Self {
-            name: name.to_string(),
-            label: title.as_deref().unwrap_or(name).to_string(),
-            description: description.clone(),
-            required: required.contains(&name),
-            touched: false,
-            kind,
-        })
+        Self { input: field.default_input.clone(), field, editor, multi_cursor: 0, touched: false }
     }
 
-    fn value(&self) -> Result<Option<ElicitationContentValue>, String> {
-        let missing = || format!("{} is required", self.label);
-        match &self.kind {
-            FormFieldKind::Text(value) | FormFieldKind::Integer(value) | FormFieldKind::Number(value)
-                if value.is_empty() =>
-            {
-                if self.required {
-                    Err(missing())
-                } else {
-                    Ok(None)
-                }
-            }
-            FormFieldKind::Text(value) => Ok(Some(ElicitationContentValue::String(value.text().to_string()))),
-            FormFieldKind::Integer(value) => {
-                let invalid = || format!("{} must be an integer", self.label);
-                value.text().parse::<i64>().map(ElicitationContentValue::Integer).map(Some).map_err(|_| invalid())
-            }
-            FormFieldKind::Number(value) => {
-                let invalid = || format!("{} must be a number", self.label);
-                value
-                    .text()
-                    .parse::<f64>()
-                    .ok()
-                    .filter(|number| number.is_finite())
-                    .map(ElicitationContentValue::Number)
-                    .map(Some)
-                    .ok_or_else(invalid)
-            }
-            FormFieldKind::Boolean(value) => Ok(Some(ElicitationContentValue::Boolean(*value))),
-            FormFieldKind::Single { options, selected } => {
-                let value = options.get(*selected).map(|option| option.value.clone());
-                if self.required && value.is_none() {
-                    Err(missing())
-                } else {
-                    Ok(value.map(ElicitationContentValue::String))
-                }
-            }
-            FormFieldKind::Multi { options, selected, .. } => Ok(Some(ElicitationContentValue::StringArray(
-                options
-                    .iter()
-                    .zip(selected)
-                    .filter(|(_, selected)| **selected)
-                    .map(|(option, _)| option.value.clone())
-                    .collect(),
-            ))),
-        }
+    fn value(&self) -> Result<Option<ElicitationContentValue>, FieldError> {
+        self.field.value(&self.input)
     }
 
     fn display_value(&self) -> String {
-        match &self.kind {
-            FormFieldKind::Text(value) | FormFieldKind::Integer(value) | FormFieldKind::Number(value) => {
-                value.text().to_string()
-            }
-            FormFieldKind::Boolean(value) => if *value { "Yes" } else { "No" }.to_string(),
-            FormFieldKind::Single { options, selected } => {
-                options.get(*selected).map(|o| o.title.clone()).unwrap_or_default()
-            }
-            FormFieldKind::Multi { options, selected, .. } => options
-                .iter()
-                .zip(selected)
-                .filter(|(_, selected)| **selected)
-                .map(|(opt, _)| opt.title.as_str())
-                .collect::<Vec<_>>()
-                .join(", "),
+        self.field.display_value(&self.input)
+    }
+
+    /// The option row in focus: the chosen one, except on a multi-select.
+    fn cursor(&self) -> usize {
+        match &self.input {
+            FieldInput::Boolean(value) => boolean_index(*value),
+            FieldInput::Single(selected) => *selected,
+            FieldInput::Multi(_) => self.multi_cursor,
+            FieldInput::Text(_) => 0,
         }
     }
-}
 
-impl FormFieldKind {
-    fn text_buffer(&mut self) -> Option<&mut EditBuffer> {
-        match self {
-            Self::Text(buffer) | Self::Integer(buffer) | Self::Number(buffer) => Some(buffer),
-            _ => None,
+    fn option_count(&self) -> usize {
+        match self.input {
+            FieldInput::Boolean(_) => 2,
+            _ => self.field.kind.options().len(),
         }
     }
-}
 
-fn string_kind(schema: &StringPropertySchema) -> FormFieldKind {
-    if let Some(options) = &schema.one_of {
-        single(options_from_enum_options(options), schema.default.as_deref())
-    } else if let Some(options) = &schema.enum_values {
-        single(options_from_strings(options), schema.default.as_deref())
-    } else {
-        FormFieldKind::Text(schema.default.clone().unwrap_or_default().into())
+    /// Edits a text answer; reports whether the text changed.
+    fn edit(&mut self, edit: impl FnOnce(&mut EditBuffer)) -> bool {
+        let FieldInput::Text(text) = &mut self.input else { return false };
+        edit(&mut self.editor);
+        let changed = self.editor.text() != text.as_str();
+        if changed {
+            *text = self.editor.text().to_string();
+        }
+        changed
     }
-}
 
-fn multi_kind(schema: &MultiSelectPropertySchema) -> Option<FormFieldKind> {
-    let options = match &schema.items {
-        MultiSelectItems::String(items) => options_from_strings(&items.values),
-        MultiSelectItems::Titled(items) => options_from_enum_options(&items.options),
-        _ => return None,
-    };
-    Some(multi(options, schema.default.as_deref()))
-}
+    /// Steps a choice control's cursor; reports whether the answer moved with
+    /// it, since a multi-select's cursor roams without answering.
+    fn step(&mut self, direction: Direction) -> bool {
+        let Some(last) = self.option_count().checked_sub(1) else { return false };
+        match self.input {
+            FieldInput::Multi(_) => {
+                self.multi_cursor = step_clamped(self.multi_cursor, direction, 1, last);
+                false
+            }
+            // Yes/No is a pair: any step flips it.
+            FieldInput::Boolean(_) => {
+                self.input.pick(0);
+                true
+            }
+            FieldInput::Single(selected) => {
+                self.input.pick(step_clamped(selected, direction, 1, last));
+                true
+            }
+            FieldInput::Text(_) => false,
+        }
+    }
 
-/// A single-select focused on `default`, or on the first option when the
-/// default names an option that is not offered.
-fn single(options: Vec<SelectOption>, default: Option<&str>) -> FormFieldKind {
-    let selected = default.and_then(|value| options.iter().position(|o| o.value == value)).unwrap_or(0);
-    FormFieldKind::Single { options, selected }
-}
+    /// Picks `index` outright: single answers jump to it, multi-selects land
+    /// their cursor on it and toggle it, so a number key always does what it
+    /// shows. Reports whether the answer changed.
+    fn pick(&mut self, index: usize) -> bool {
+        if index >= self.option_count() {
+            return false;
+        }
+        match self.input {
+            FieldInput::Multi(_) => {
+                self.multi_cursor = index;
+                self.input.pick(index);
+                true
+            }
+            // `pick` flips a boolean, so only picking the other option does.
+            FieldInput::Boolean(_) | FieldInput::Single(_) if self.cursor() != index => {
+                self.input.pick(index);
+                true
+            }
+            _ => false,
+        }
+    }
 
-fn multi(options: Vec<SelectOption>, defaults: Option<&[String]>) -> FormFieldKind {
-    let defaults = defaults.unwrap_or(&[]);
-    let selected = options.iter().map(|o| defaults.contains(&o.value)).collect();
-    FormFieldKind::Multi { options, selected, cursor: 0 }
-}
+    fn toggle_at_cursor(&mut self) -> bool {
+        let multi = matches!(self.input, FieldInput::Multi(_));
+        if multi {
+            self.input.pick(self.multi_cursor);
+        }
+        multi
+    }
 
-fn options_from_strings(values: &[String]) -> Vec<SelectOption> {
-    values.iter().map(|s| SelectOption { value: s.clone(), title: s.clone() }).collect()
-}
-
-fn options_from_enum_options(items: &[EnumOption]) -> Vec<SelectOption> {
-    items.iter().map(|item| SelectOption { value: item.value.clone(), title: item.title.clone() }).collect()
-}
-
-fn stringified_default<T: std::fmt::Display>(default: Option<T>) -> String {
-    default.map(|value| value.to_string()).unwrap_or_default()
-}
-
-#[cfg(test)]
-pub(super) fn permission_like_schema() -> ElicitationSchema {
-    ElicitationSchema::new().property(
-        "decision",
-        StringPropertySchema::new().enum_values(vec!["allow".into(), "deny".into()]).default_value("deny"),
-        true,
-    )
+    fn select_all(&mut self) -> bool {
+        let FieldInput::Multi(selected) = &mut self.input else { return false };
+        let all = !selected.is_empty() && selected.iter().all(|flag| *flag);
+        selected.fill(!all);
+        true
+    }
 }
 
 #[cfg(test)]
@@ -955,7 +786,11 @@ pub(super) fn permission_like_schema() -> ElicitationSchema {
 mod tests {
     use super::*;
     use crate::testing::{buffer_text, row_containing, row_text};
-    use agent_client_protocol::schema::v2::{BooleanPropertySchema, IntegerPropertySchema, NumberPropertySchema};
+    use agent_client_protocol::schema::v2::{
+        BooleanPropertySchema, ElicitationPropertySchema, ElicitationSchema, EnumOption, MultiSelectPropertySchema,
+        StringPropertySchema,
+    };
+    use client_core::elicitation::form_fields;
     use crossterm::event::KeyModifiers;
     use serde_json::Value;
 
@@ -963,7 +798,15 @@ mod tests {
     const HEIGHT: u16 = 24;
 
     fn test_modal(server_name: String, message: String, schema: &ElicitationSchema) -> FormModal {
-        FormModal::new(server_name, message, schema).unwrap()
+        FormModal::new(server_name, message, form_fields(schema).unwrap())
+    }
+
+    fn permission_like_schema() -> ElicitationSchema {
+        ElicitationSchema::new().property(
+            "decision",
+            StringPropertySchema::new().enum_values(vec!["allow".into(), "deny".into()]).default_value("deny"),
+            true,
+        )
     }
 
     fn required(name: &str, property: impl Into<ElicitationPropertySchema>) -> ElicitationSchema {
@@ -1016,7 +859,7 @@ mod tests {
 
     fn submitted(form: &mut FormModal) -> Value {
         for _ in 0..16 {
-            if let FormAction::Accept(content) = form.on_key(key(KeyCode::Enter)) {
+            if let Some(ElicitationAnswer::Accept(Some(content))) = form.on_key(key(KeyCode::Enter)) {
                 return serde_json::to_value(content).expect("elicitation content serializes");
             }
         }
@@ -1032,97 +875,10 @@ mod tests {
     }
 
     #[test]
-    fn text_field_default_submits_as_a_string() {
-        let schema = optional("greeting", StringPropertySchema::new().default_value("hello"));
-        let mut form = test_modal("test".into(), String::new(), &schema);
-        assert_eq!(submitted(&mut form), serde_json::json!({"greeting": "hello"}));
-    }
-
-    #[test]
-    fn numeric_defaults_submit_as_parsed_numbers() {
-        let schema = ElicitationSchema::new()
-            .property("count", IntegerPropertySchema::new().minimum(0).maximum(100).default_value(42), false)
-            .property("score", NumberPropertySchema::new().minimum(0.0).maximum(100.0).default_value(2.5), false);
-        let mut form = test_modal("test".into(), String::new(), &schema);
-        assert_eq!(submitted(&mut form), serde_json::json!({"count": 42, "score": 2.5}));
-    }
-
-    #[test]
-    fn defaults_submit_as_typed_values_and_empty_text_is_omitted() {
-        let schema = ElicitationSchema::new()
-            .property("name", StringPropertySchema::new().title("Name"), false)
-            .property("approved", BooleanPropertySchema::new().default_value(true), false)
-            .property(
-                "color",
-                StringPropertySchema::new().enum_values(vec!["red".into(), "green".into()]).default_value("green"),
-                false,
-            )
-            .property("size", StringPropertySchema::new().enum_values(vec!["s".into(), "m".into()]), true);
-        let mut form = test_modal("test".into(), "Test".into(), &schema);
-        assert_eq!(submitted(&mut form), serde_json::json!({"approved": true, "color": "green", "size": "s"}));
-    }
-
-    #[test]
-    fn empty_form_submits_an_empty_object() {
-        let mut form = test_modal("test".into(), String::new(), &ElicitationSchema::new());
-        assert_eq!(submitted(&mut form), serde_json::json!({}));
-    }
-
-    #[test]
-    fn multi_select_defaults_submit_as_the_selected_array() {
-        let schema = required(
-            "tags",
-            MultiSelectPropertySchema::new(vec!["fast".into(), "reliable".into(), "cheap".into()])
-                .default_value(vec!["reliable".to_string()]),
-        );
-        let mut form = test_modal("test".into(), String::new(), &schema);
-        assert_eq!(submitted(&mut form), serde_json::json!({"tags": ["reliable"]}));
-    }
-
-    #[test]
     fn submit_rejects_required_field() {
         let schema = required("name", StringPropertySchema::new());
         let mut form = test_modal("test".into(), String::new(), &schema);
-        assert!(matches!(form.on_key(key(KeyCode::Enter)), FormAction::None));
-    }
-
-    #[test]
-    fn permission_like_form_submit_returns_default_deny() {
-        let schema = permission_like_schema();
-        let mut form = test_modal("coding".into(), "Allow bash: rm -rf /tmp?".into(), &schema);
-        assert_eq!(submitted(&mut form)["decision"], "deny");
-    }
-
-    #[test]
-    fn integer_field_rejects_fractional_input() {
-        let schema = optional("count", IntegerPropertySchema::new());
-        let mut form = test_modal("test".into(), String::new(), &schema);
-
-        form.on_key(key(KeyCode::Char('1')));
-        form.on_key(key(KeyCode::Char('.')));
-        form.on_key(key(KeyCode::Char('5')));
-
-        assert!(matches!(form.on_key(key(KeyCode::Enter)), FormAction::None));
-    }
-
-    #[test]
-    fn number_field_rejects_non_numeric_input_and_preserves_number_type() {
-        let schema = optional("score", NumberPropertySchema::new().minimum(0.0).maximum(5.0));
-        let mut form = test_modal("test".into(), String::new(), &schema);
-
-        form.on_key(key(KeyCode::Char('4')));
-        form.on_key(key(KeyCode::Char('a')));
-        assert!(matches!(form.on_key(key(KeyCode::Enter)), FormAction::None), "letters block submit");
-
-        form.on_key(key(KeyCode::Backspace));
-        assert_eq!(submitted(&mut form), serde_json::json!({"score": 4.0}));
-    }
-
-    #[test]
-    fn single_field_form_submits_directly_on_enter() {
-        let schema = permission_like_schema();
-        let mut form = test_modal("coding".into(), "Allow bash?".into(), &schema);
-        assert!(matches!(form.on_key(key(KeyCode::Enter)), FormAction::Accept(_)));
+        assert!(form.on_key(key(KeyCode::Enter)).is_none());
     }
 
     #[test]
@@ -1133,18 +889,18 @@ mod tests {
         let mut form = test_modal("survey".into(), "Help us route this".into(), &schema);
 
         form.on_key(key(KeyCode::Down));
-        assert!(matches!(form.on_key(key(KeyCode::Enter)), FormAction::None), "the notify page advances");
+        assert!(form.on_key(key(KeyCode::Enter)).is_none(), "the notify page advances");
         assert!(draw(&mut form).contains('╭'), "the team question has an input");
         for character in "team".chars() {
             form.on_key(key(KeyCode::Char(character)));
         }
-        assert!(matches!(form.on_key(key(KeyCode::Enter)), FormAction::None), "the team page advances");
+        assert!(form.on_key(key(KeyCode::Enter)).is_none(), "the team page advances");
         assert!(draw(&mut form).contains("1  Low"), "the urgency question is a choice page");
         form.on_key(key(KeyCode::Char('2')));
-        assert!(matches!(form.on_key(key(KeyCode::Enter)), FormAction::None), "the last question advances to review");
+        assert!(form.on_key(key(KeyCode::Enter)).is_none(), "the last question advances to review");
         assert!(draw(&mut form).contains("Review your answers"), "the review page");
 
-        let FormAction::Accept(content) = form.on_key(key(KeyCode::Enter)) else {
+        let Some(ElicitationAnswer::Accept(Some(content))) = form.on_key(key(KeyCode::Enter)) else {
             panic!("a complete form submits from review")
         };
         let value = serde_json::to_value(content).unwrap();
@@ -1178,7 +934,7 @@ mod tests {
         let mut form = test_modal("test".into(), String::new(), &schema);
         form.on_key(key(KeyCode::Tab));
         form.on_key(key(KeyCode::Tab));
-        assert!(matches!(form.on_key(key(KeyCode::Enter)), FormAction::None));
+        assert!(form.on_key(key(KeyCode::Enter)).is_none());
         let screen = draw(&mut form);
         assert!(screen.contains("first is required"), "the complaint sits beside the question: {screen}");
         assert!(screen.contains('╭'), "the first unanswered question is back on screen: {screen}");
@@ -1303,16 +1059,16 @@ mod tests {
         form.on_key(key(KeyCode::Tab));
         form.on_key(key(KeyCode::Char('t')));
 
-        assert!(matches!(form.on_key(key(KeyCode::Esc)), FormAction::None), "the first Esc arms the guard");
+        assert!(form.on_key(key(KeyCode::Esc)).is_none(), "the first Esc arms the guard");
         assert!(draw(&mut form).contains("Discard 2 answers?"));
 
-        assert!(matches!(form.on_key(key(KeyCode::Char('n'))), FormAction::None), "n keeps the answers");
+        assert!(form.on_key(key(KeyCode::Char('n'))).is_none(), "n keeps the answers");
         let screen = draw(&mut form);
         assert!(!screen.contains("Discard"), "the guard is gone: {screen}");
         assert!(screen.contains('╭'), "the form stays on the team question: {screen}");
 
         form.on_key(key(KeyCode::Esc));
-        assert!(matches!(form.on_key(key(KeyCode::Esc)), FormAction::Cancel), "Esc twice discards");
+        assert!(matches!(form.on_key(key(KeyCode::Esc)), Some(ElicitationAnswer::Cancel)), "Esc twice discards");
     }
 
     #[test]
@@ -1320,7 +1076,10 @@ mod tests {
         let schema = survey_schema();
         let mut form = test_modal("survey".into(), String::new(), &schema);
         form.on_key(key(KeyCode::Down));
-        assert!(matches!(form.on_key(key(KeyCode::Esc)), FormAction::Cancel), "one answer needs no ceremony");
+        assert!(
+            matches!(form.on_key(key(KeyCode::Esc)), Some(ElicitationAnswer::Cancel)),
+            "one answer needs no ceremony"
+        );
     }
 
     #[test]
@@ -1391,24 +1150,6 @@ mod tests {
     }
 
     #[test]
-    fn clicking_an_option_answers_the_field_under_the_pointer() {
-        let schema = ElicitationSchema::new()
-            .property("alpha", BooleanPropertySchema::new().default_value(false), false)
-            .property("bravo", BooleanPropertySchema::new().default_value(false), false);
-        let mut form = test_modal("test".into(), String::new(), &schema);
-
-        let (column, yes) = cell_of(&mut form, "1  Yes");
-        form.click(column, yes);
-        assert!(draw(&mut form).contains("1 / 2"), "clicking Yes answers alpha");
-
-        form.on_key(key(KeyCode::Tab));
-        let (column, no) = cell_of(&mut form, "2  No");
-        form.click(column, no);
-        assert!(draw(&mut form).contains("1 / 2"), "clicking the answer already in place changes nothing");
-        assert_eq!(submitted(&mut form), serde_json::json!({ "alpha": true, "bravo": false }));
-    }
-
-    #[test]
     fn clicking_a_tab_or_a_review_row_jumps_to_its_page() {
         let schema = survey_schema();
         let mut form = test_modal("survey".into(), String::new(), &schema);
@@ -1420,44 +1161,6 @@ mod tests {
         let (column, row) = cell_of(&mut form, "urgency");
         form.click(column, row);
         assert!(draw(&mut form).contains("1  Low"), "a review row reopens its question");
-    }
-
-    #[test]
-    fn long_forms_window_the_tab_strip_around_the_current_page() {
-        let mut schema = ElicitationSchema::new();
-        for index in 0..40 {
-            schema = schema.property(format!("field_{index:02}"), BooleanPropertySchema::new(), false);
-        }
-        let mut form = test_modal("survey".into(), String::new(), &schema);
-
-        for _ in 0..20 {
-            form.on_key(key(KeyCode::Tab));
-        }
-        let screen = draw(&mut form);
-        assert!(screen.contains('…'), "the strip marks its cut ends: {screen}");
-        assert!(screen.contains("0 / 40"), "the counter counts answers, not pages: {screen}");
-        assert!(screen.contains("field_20"), "the current question is on screen");
-
-        let (column, row) = cell_of(&mut form, " 18 ");
-        form.click(column, row);
-        assert!(draw(&mut form).contains("field_17"), "the strip stays clickable while windowed");
-    }
-
-    #[test]
-    fn scrolling_answers_on_choice_pages_and_walks_pages_elsewhere() {
-        let schema = survey_schema();
-        let mut form = test_modal("survey".into(), String::new(), &schema);
-
-        form.vertical(Direction::Forward);
-        assert!(draw(&mut form).contains("1  Yes"), "vertical motion on a choice page answers instead of paging");
-        form.on_key(key(KeyCode::Tab));
-        form.vertical(Direction::Forward);
-        assert!(draw(&mut form).contains("1  Low"), "vertical motion on a text page walks questions");
-        form.on_key(key(KeyCode::Tab));
-        form.on_key(key(KeyCode::Tab));
-        assert!(draw(&mut form).contains("Review your answers"), "the review page is reachable");
-        form.vertical(Direction::Backward);
-        assert!(draw(&mut form).contains("1  Low"), "vertical motion on the review page walks back through questions");
     }
 
     #[test]

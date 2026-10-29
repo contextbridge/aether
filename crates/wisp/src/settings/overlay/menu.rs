@@ -1,10 +1,10 @@
-use super::{LiveSettingsData, PaneKind, SettingsChange, SettingsMenuEntry};
-use crate::session::session_config_view::{LocalConfigKind, LocalConfigOption, LocalConfigValue};
+use super::{PaneKind, SettingsChange, SettingsMenuEntry};
 use crate::surfaces::modal::frame::MODAL_HORIZONTAL_PADDING;
 use crate::theme::Theme;
 use crate::view::list_view::ListView;
 use crate::view::selection::SelectionState;
 use acp_utils::config_option_id::ConfigOptionId;
+use client_core::session_config_view::LocalConfigOption;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
@@ -26,28 +26,19 @@ pub(super) enum MenuRow {
 }
 
 impl MenuRow {
-    /// The `title: value` line drawn for this row.
-    fn label(&self, live: &LiveSettingsData) -> String {
+    /// The `title: value` line drawn for this row, with `summary` describing a
+    /// pane's live data.
+    fn label(&self, summary: impl Fn(PaneKind) -> String) -> String {
         match self {
             Self::Select(entry) => {
-                let combined = entry
-                    .multi_select
-                    .then(|| combined_display_name(&entry.current_raw_value, &entry.values))
-                    .flatten();
-                let current = combined
-                    .as_deref()
-                    .or_else(|| {
-                        entry
-                            .values
-                            .iter()
-                            .find(|value| value.value == entry.current_raw_value)
-                            .or_else(|| entry.values.first())
-                            .map(|value| value.name.as_str())
-                    })
-                    .unwrap_or("?");
+                let select = &entry.select;
+                let current = select.selected_names().unwrap_or_else(|| match select.current_values().count() {
+                    count if count > 1 => format!("{count} models"),
+                    _ => select.values.first().map_or_else(|| "?".to_owned(), |value| value.name.clone()),
+                });
                 format!("{}: {current}", entry.title)
             }
-            Self::Pane(kind) => format!("{}: {}", kind.title(), kind.summary(live)),
+            Self::Pane(kind) => format!("{}: {}", kind.title(), summary(*kind)),
         }
     }
 }
@@ -101,13 +92,19 @@ impl SettingsMenu {
             _ => None,
         });
         if let Some(entry) = entry {
-            entry.current_raw_value.clone_from(&change.new_value);
+            entry.select.current_value.clone_from(&change.new_value);
         }
     }
 
-    pub(super) fn render(&mut self, area: Rect, buffer: &mut Buffer, theme: &Theme, live: &LiveSettingsData) {
+    pub(super) fn render(
+        &mut self,
+        area: Rect,
+        buffer: &mut Buffer,
+        theme: &Theme,
+        summary: impl Fn(PaneKind) -> String,
+    ) {
         let rows =
-            self.rows.iter().map(|row| Line::styled(format!(" {}", row.label(live)), theme.text_primary)).collect();
+            self.rows.iter().map(|row| Line::styled(format!(" {}", row.label(&summary)), theme.text_primary)).collect();
         let view = ListView::new(rows, theme)
             .pane(" (no settings options)")
             .highlight_horizontal_padding(MODAL_HORIZONTAL_PADDING);
@@ -129,33 +126,11 @@ impl SettingsMenu {
 }
 
 fn menu_entry(option: &LocalConfigOption) -> Option<SettingsMenuEntry> {
-    let LocalConfigKind::Select { current_value, values, multi_select } = &option.kind else {
-        return None;
-    };
-    if values.is_empty() {
-        return None;
-    }
-
+    let select = option.select().filter(|select| !select.values.is_empty())?;
     Some(SettingsMenuEntry {
         config_id: option.id.clone(),
         title: option.name.clone(),
-        current_raw_value: current_value.clone(),
-        values: values.clone(),
-        multi_select: *multi_select,
+        select: select.clone(),
         local: false,
     })
-}
-
-/// The label for a multi-select whose value names several options at once,
-/// falling back to a count when none of them are known.
-fn combined_display_name(current: &str, values: &[LocalConfigValue]) -> Option<String> {
-    if !current.contains(',') {
-        return None;
-    }
-    let parts: Vec<&str> = current.split(',').map(str::trim).collect();
-    let names: Vec<&str> = parts
-        .iter()
-        .filter_map(|part| values.iter().find(|value| value.value == *part).map(|value| value.name.as_str()))
-        .collect();
-    Some(if names.is_empty() { format!("{} models", parts.len()) } else { names.join(", ") })
 }

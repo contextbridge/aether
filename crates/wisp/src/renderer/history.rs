@@ -1,7 +1,7 @@
 use crate::app::App;
-use acp_utils::conversation::{ConversationContent, ConversationId, ConversationItem, ItemState};
 use crate::error::RenderError;
 use crate::view::wrap::{as_u16, wrap_line};
+use acp_utils::conversation::{ConversationContent, ConversationId, ConversationItem, ItemState};
 use clankerdiff_ratatui::MarkdownCommitError;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
@@ -46,7 +46,7 @@ impl Renderer {
         terminal: &mut Terminal<T>,
         app: &App,
     ) -> Result<(), RenderError<T::Error>> {
-        let current = committed_replacements(app.conversation_items(), self.native_history.commit);
+        let current = committed_replacements(app.core().conversation().items(), self.native_history.commit);
         if current != self.native_history.committed_replacements {
             let width = terminal.size().map_err(RenderError::Backend)?.width;
             let notice = wrap_line(Line::raw("Transcript updated; earlier scrollback is superseded."), width);
@@ -66,7 +66,6 @@ impl Renderer {
     /// Moves transcript rows the viewport can no longer show into the
     /// terminal's native scrollback, advancing the commit point, and returns
     /// the live rows left over for the viewport to draw.
-    ///
     pub(super) fn commit_overflow<B: Backend>(
         &mut self,
         terminal: &mut Terminal<B>,
@@ -74,7 +73,7 @@ impl Renderer {
         width: u16,
         capacity: usize,
     ) -> Result<Vec<Line<'static>>, RenderError<B::Error>> {
-        let items = app.conversation_items();
+        let items = app.core().conversation().items();
         let live = self.live_lines(app, width)?;
         let mut overflow = live.len().saturating_sub(capacity);
         if overflow == 0 {

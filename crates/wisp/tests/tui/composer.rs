@@ -89,13 +89,12 @@ fn tiny_terminal_does_not_overwrite_status_line() {
 fn overlay_does_not_duplicate_border_rows() {
     let mut composer = Composer::new();
     composer.insert_char('/');
-    composer.open_command_picker(vec![CommandEntry {
+    composer.open_command_picker(vec![SlashCommand::Agent(CommandEntry {
         name: "test".to_string(),
         description: "A test command".to_string(),
         has_input: false,
         hint: None,
-        builtin: false,
-    }]);
+    })]);
 
     let layout = composer.layout(80, &Theme::default());
 
@@ -189,7 +188,7 @@ fn shift_enter_closes_command_overlay_and_inserts_newline() {
 
 #[test]
 fn ctrl_j_closes_file_overlay_and_inserts_newline() {
-    let mut app = TestUiBuilder::new().working_dir("/workspace").build();
+    let mut app = TestUiBuilder::new().session(|session| session.working_dir("/workspace")).build();
     app.key(key(KeyCode::Char('@')));
     assert!(app.app().composer().has_completion(), "file overlay active");
 
@@ -212,17 +211,18 @@ fn alt_enter_closes_command_overlay_and_inserts_newline() {
 #[test]
 fn clear_replaces_the_conversation_once() {
     let mut app = TestUi::new();
-    let old_conversation = app.app().conversation_id();
+    let old_conversation = app.app().core().conversation().id();
 
     app.run_command("/clear");
-    let _ = app.next_agent_command().unwrap();
 
-    app.deliver_result(new_session_created("new-session", vec![select_option("model", "sonnet")]));
+    new_session_created(&mut app, "new-session", vec![select_option("model", "sonnet")]);
 
-    assert_ne!(app.app().conversation_id(), old_conversation);
+    assert_ne!(app.app().core().conversation().id(), old_conversation);
     assert_eq!(
         app.app()
-            .conversation_items()
+            .core()
+            .conversation()
+            .items()
             .iter()
             .filter(|item| matches!(item.content(), ConversationContent::Notice(_)))
             .count(),
@@ -289,13 +289,10 @@ fn selected_matches_mention_with_exact_token() {
 }
 
 #[test]
-fn file_picker_completes_from_the_fake_filesystem() {
-    let mut ui = TestUiBuilder::new().working_dir("/workspace").build();
-    ui.executor_mut().filesystem_mut().write_file("/workspace/src/main.rs", b"fn main() {}");
-    ui.executor_mut().filesystem_mut().write_file("/workspace/readme.md", b"# readme");
+fn file_picker_completes_from_the_workspace() {
+    let mut ui = TestUiBuilder::new().file("src/main.rs", b"fn main() {}").file("readme.md", b"# readme").build();
 
     ui.type_text("@");
-    ui.settle_tasks();
 
     ui.assert_viewport_contains("readme.md");
     ui.assert_viewport_contains("src/main.rs");
@@ -311,4 +308,15 @@ fn characters_held_with_a_platform_modifier_are_not_typed() {
     ui.key(KeyEvent::new(KeyCode::Char('K'), KeyModifiers::SHIFT));
 
     assert_eq!(ui.app().composer().text(), "K");
+}
+
+#[test]
+fn pasting_a_space_into_a_file_mention_ends_the_completion() {
+    let mut ui = TestUiBuilder::new().file("src/main.rs", b"fn main() {}").build();
+
+    ui.type_text("@");
+    ui.paste("src fix");
+
+    assert_eq!(ui.app().composer().text(), "@src fix");
+    assert!(!ui.app().composer().has_completion(), "a mention ends at whitespace, like a typed space");
 }

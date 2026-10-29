@@ -58,6 +58,17 @@ pub fn map_content_blocks_to_text(blocks: &[acp::ContentBlock]) -> String {
     blocks.iter().map(block_text).collect::<Vec<_>>().join("\n")
 }
 
+pub fn first_line(text: &str) -> Option<&str> {
+    text.lines().map(str::trim).find(|line| !line.is_empty())
+}
+
+pub fn first_text(blocks: &[acp::ContentBlock]) -> Option<&str> {
+    blocks.iter().find_map(|block| match block {
+        acp::ContentBlock::Text(text) => Some(text.text.trim()).filter(|text| !text.is_empty()),
+        _ => None,
+    })
+}
+
 /// Formats an embedded resource as text for inclusion in agent context.
 pub fn format_embedded_resource(resource: &acp::EmbeddedResource) -> String {
     match &resource.resource {

@@ -11,7 +11,10 @@ use utils::ReasoningEffort;
 /// - `High` => `high [■■■]` (3 filled)
 pub(crate) fn reasoning_bar(effort: Option<ReasoningEffort>, levels: &[ReasoningEffort], label_width: usize) -> String {
     let label = ReasoningEffort::config_str(effort);
-    format!("{label:>label_width$} {}", slot_bar(filled_slots(effort, levels), levels.iter().filter(|level| level.is_enabled()).count()))
+    format!(
+        "{label:>label_width$} {}",
+        slot_bar(filled_slots(effort, levels), levels.iter().filter(|level| level.is_enabled()).count())
+    )
 }
 
 /// The width the aligned bar occupies in a column, 0 when there are no levels.
@@ -46,7 +49,9 @@ pub(crate) fn reasoning_color(effort: Option<ReasoningEffort>, levels: &[Reasoni
 }
 
 fn filled_slots(effort: Option<ReasoningEffort>, levels: &[ReasoningEffort]) -> usize {
-    effort.filter(|effort| effort.is_enabled()).map_or(0, |effort| levels.iter().filter(|&&level| level.is_enabled() && level <= effort).count())
+    effort
+        .filter(|effort| effort.is_enabled())
+        .map_or(0, |effort| levels.iter().filter(|&&level| level.is_enabled() && level <= effort).count())
 }
 
 /// A `[■■·]` gauge with `filled` of `total` slots lit.

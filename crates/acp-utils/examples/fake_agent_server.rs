@@ -1,7 +1,7 @@
 use acp_utils::notifications::RemoteServerInfo;
-use acp_utils::testing::{FakeAgent, initialize_response};
+use acp_utils::testing::{FakeAgent, Question, initialize_response};
 use acp_utils::websocket::WebSocketTransport;
-use agent_client_protocol::schema::v2::NewSessionResponse;
+use agent_client_protocol::schema::v2::{ElicitationSchema, NewSessionResponse};
 use futures::{SinkExt, StreamExt};
 use serde_json::json;
 use std::error::Error;
@@ -81,7 +81,11 @@ async fn serve(stream: TcpStream) -> Result<(), Box<dyn Error>> {
             agent().prompt_reply(REPLY).agent().connect_to(WebSocketTransport::new(socket)).await?;
         }
         "/elicitation" => {
-            agent().prompt_elicitation("Continue?").agent().connect_to(WebSocketTransport::new(socket)).await?;
+            agent()
+                .prompt_asks("Continue?", Question::Form(ElicitationSchema::new()))
+                .agent()
+                .connect_to(WebSocketTransport::new(socket))
+                .await?;
         }
         "/attached" => close(&mut socket, ATTACHED_CODE, ATTACHED_REASON).await?,
         "/close" => {

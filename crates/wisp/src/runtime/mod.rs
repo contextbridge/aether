@@ -1,12 +1,5 @@
-mod agent;
-mod dispatcher;
-mod files;
-mod git_review;
-mod runner;
-mod tasks;
+mod host;
+pub(crate) mod runner;
 
-#[cfg(feature = "testing")]
-pub use dispatcher::CommandDispatcher;
-#[cfg(not(feature = "testing"))]
-pub(crate) use dispatcher::CommandDispatcher;
+pub use host::{Host, TuiHost};
 pub(crate) use runner::run;

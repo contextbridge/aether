@@ -6,12 +6,9 @@ fn submit_sends_prompt_and_clears_composer() {
 
     app.submit("hello agent");
 
-    let cmd = app.next_agent_command();
-    assert!(
-        matches!(&cmd, Some(AgentCommand::Prompt { session_id, text, content: None, .. })
-            if session_id.0.as_ref() == "test-session" && text == "hello agent"),
-        "{cmd:?}"
-    );
+    let request = sent_prompt(&mut app);
+    assert_eq!(request.session_id, SessionId::new("test-session"));
+    assert_eq!(request.prompt, vec![acp::ContentBlock::from("hello agent")]);
     assert!(app.app().composer().is_empty());
 }
 
@@ -20,13 +17,12 @@ fn esc_cancels_only_while_busy() {
     let mut app = TestUi::new();
 
     app.key(key(KeyCode::Esc));
-    assert!(app.next_command().is_none());
+    assert!(app.agent().cancel.try_recv().is_err());
 
     app.submit("work");
-    app.next_agent_command().unwrap();
     app.key(key(KeyCode::Esc));
 
-    assert!(matches!(app.next_agent_command().unwrap(), AgentCommand::Cancel { .. }));
+    assert!(app.agent().cancel.try_recv().is_ok());
 }
 
 #[test]
@@ -35,12 +31,12 @@ fn double_ctrl_c_exits_and_first_press_clears_composer() {
     app.type_text("draft");
 
     app.key(ctrl('c'));
-    assert!(!app.app().exit_requested());
+    assert!(app.app().exit_result().is_none());
     assert!(app.app().composer().is_empty());
-    assert!(app.app().exit_confirmation_active());
+    assert!(app.app().status_line_model().exit_confirmation);
 
     app.key(ctrl('c'));
-    assert!(app.app().exit_requested());
+    assert!(app.app().exit_result().is_some());
 }
 
 #[test]
@@ -49,62 +45,29 @@ fn ctrl_c_confirmation_disarms_after_window() {
 
     app.key(ctrl('c'));
     app.tick(Instant::now() + Duration::from_secs(2));
-    assert!(!app.app().exit_confirmation_active());
+    assert!(!app.app().status_line_model().exit_confirmation);
 
     app.key(ctrl('c'));
-    assert!(!app.app().exit_requested());
-}
-
-#[test]
-fn double_ctrl_c_exits_over_session_picker() {
-    let mut app = TestUi::new();
-    app.open_session_picker(vec![session_info("other", "/tmp/elsewhere", "Other", "2025-01-01T00:00:00Z")]);
-    assert_ctrl_c_exits(&mut app);
+    assert!(app.app().exit_result().is_none());
 }
 
 #[test]
 fn ctrl_c_during_streaming_arms_exit_without_cancelling() {
     let mut app = TestUi::new();
     app.submit("stream me");
-    app.next_agent_command().unwrap();
     app.acp_event(text_chunk("partial reply"));
-    assert!(app.app().waiting_for_response());
+    assert!(app.app().core().waiting_for_response());
 
     app.key(ctrl('c'));
-    assert!(app.app().exit_confirmation_active());
-    assert!(!app.app().exit_requested());
-    assert!(app.next_command().is_none(), "Ctrl+C is exit, not cancel");
-    assert!(app.app().waiting_for_response());
+    assert!(app.app().status_line_model().exit_confirmation);
+    assert!(app.app().exit_result().is_none());
+    assert!(app.agent().cancel.try_recv().is_err(), "Ctrl+C is exit, not cancel");
+    assert!(app.app().core().waiting_for_response());
 
     app.acp_event(text_chunk("more reply"));
-    assert!(app.app().exit_confirmation_active());
+    assert!(app.app().status_line_model().exit_confirmation);
     app.key(ctrl('c'));
-    assert!(app.app().exit_requested());
-}
-
-#[test]
-fn double_ctrl_c_exits_over_an_open_completion_overlay() {
-    let mut app = TestUi::new();
-
-    // The completion overlay is composer-owned, not a modal Layer.
-    app.type_text("/");
-    assert!(app.app().composer().has_completion());
-
-    app.key(ctrl('c'));
-    assert!(app.app().exit_confirmation_active());
-    assert!(!app.app().composer().has_completion());
-
-    app.key(ctrl('c'));
-    assert!(app.app().exit_requested());
-}
-
-#[test]
-fn connection_closed_requests_exit() {
-    let mut app = TestUi::new();
-
-    app.acp_event(AcpEvent::ConnectionClosed);
-
-    assert!(app.app().exit_requested());
+    assert!(app.app().exit_result().is_some());
 }
 
 #[test]
@@ -115,7 +78,7 @@ fn alt_enter_inserts_newline_instead_of_submitting() {
     app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
     app.type_text("line two");
 
-    assert!(app.next_command().is_none());
+    assert!(!sent_any_prompt(&mut app));
     assert_eq!(app.app().composer().text(), "line one\nline two");
 }
 
@@ -229,8 +192,13 @@ fn thought_chunks_preserve_identity_without_rendering_in_the_transcript() {
         ui.draw();
     }
 
-    let thoughts =
-        ui.app().conversation_items().iter().filter(|item| matches!(item.content(), ConversationContent::Thought(_)));
+    let thoughts = ui
+        .app()
+        .core()
+        .conversation()
+        .items()
+        .iter()
+        .filter(|item| matches!(item.content(), ConversationContent::Thought(_)));
     assert_eq!(thoughts.count(), 1, "every chunk extends the same thought");
     ui.assert_conversation_not_contains("pondering-line-0");
 
@@ -328,7 +296,18 @@ fn running_tool_holds_later_content_out_of_committed_history() {
 
     ui.assert_conversation_contains("Reading main.rs");
     ui.assert_conversation_contains("tool output summary");
-    assert!(ui.app().conversation_items().iter().all(|item| item.state() == ItemState::Sealed));
+    assert!(ui.app().core().conversation().items().iter().all(|item| item.state() == ItemState::Sealed));
+}
+
+#[test]
+fn a_tool_with_a_multi_line_title_shows_only_its_first_line() {
+    let mut ui = TestUi::new();
+    ui.submit("run a script");
+
+    ui.acp_event(tool_call("tool-1", "\nset -e\ncargo build\n"));
+
+    ui.assert_viewport_contains("set -e");
+    ui.assert_viewport_not_contains("cargo build");
 }
 
 #[test]
@@ -340,10 +319,10 @@ fn cancelled_prompt_marks_running_tool_as_error() {
     app.complete_prompt(acp::StopReason::Cancelled);
 
     let cancelled =
-        app.app().conversation_items().iter().any(
+        app.app().core().conversation().items().iter().any(
             |item| matches!(item.content(), ConversationContent::Tool(tool) if tool.status == ToolStatus::Cancelled),
         );
-    assert!(cancelled, "expected cancelled tool in {:?}", app.app().conversation_items());
+    assert!(cancelled, "expected cancelled tool in {:?}", app.app().core().conversation().items());
 }
 
 fn tool_call_with_raw(id: &str, title: &str, raw_input: serde_json::Value) -> AcpEvent {

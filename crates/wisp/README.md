@@ -80,8 +80,7 @@ cargo doc -p aether-wisp --open
 The primary public entry points are:
 
 - `run_tui` — connect to an ACP agent and launch Wisp
-- `run_with_session` — launch Wisp with an initialized `Session`
-- `Session` — an initialized ACP session
+- `run_remote_tui` — attach Wisp to an Aether remote host over an established transport
 - `UiSettings` and the `settings` module — persistent UI configuration
 
 The `testing` feature exposes Wisp's in-memory integration harness for project tests.

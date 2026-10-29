@@ -1,9 +1,11 @@
 use super::{Conversation, ConversationContent, ConversationItem};
 use crate::client::AcpEvent;
+use crate::content::first_line;
 use agent_client_protocol::schema::{MaybeUndefined, v2 as acp};
 use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Serialize, Serializer};
 use std::borrow::Cow;
+use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SubAgent {
@@ -56,6 +58,20 @@ impl ToolCall {
             acp::ToolCallContent::Diff(diff) => Some(diff),
             _ => None,
         })
+    }
+
+    pub fn headline(&self) -> Option<&str> {
+        first_line(self.title())
+    }
+
+    pub fn changed_paths(&self) -> Vec<&Path> {
+        let mut paths: Vec<&Path> = Vec::new();
+        for path in self.diffs().flat_map(|diff| &diff.changes).filter_map(change_path) {
+            if !paths.contains(&path) {
+                paths.push(path);
+            }
+        }
+        paths
     }
 
     pub fn bash_command(&self) -> Option<&str> {
@@ -118,7 +134,7 @@ impl ToolCall {
         }
     }
 
-    pub(super) fn is_running(&self) -> bool {
+    pub fn is_running(&self) -> bool {
         self.status == ToolStatus::Running || self.sub_agents.iter().any(SubAgent::is_running)
     }
 
@@ -149,6 +165,21 @@ impl ToolCall {
 
     fn meta_str(&self, key: &str) -> Option<&str> {
         self.protocol.meta.value().and_then(|meta| meta.get(key)).and_then(serde_json::Value::as_str)
+    }
+}
+
+pub fn diff_change_label(change: &acp::DiffChange) -> String {
+    match &change.operation {
+        acp::DiffChangeOperation::Add(change) => format!("A {}", change.path.0.display()),
+        acp::DiffChangeOperation::Delete(change) => format!("D {}", change.path.0.display()),
+        acp::DiffChangeOperation::Modify(change) => format!("M {}", change.path.0.display()),
+        acp::DiffChangeOperation::Move(change) => {
+            format!("R {} → {}", change.old_path.0.display(), change.path.0.display())
+        }
+        acp::DiffChangeOperation::Copy(change) => {
+            format!("C {} → {}", change.old_path.0.display(), change.path.0.display())
+        }
+        _ => "Unknown file change".into(),
     }
 }
 
@@ -293,5 +324,15 @@ fn tool_kind(tool_name: &str) -> ToolKind {
         ToolKind::SpawnSubagent
     } else {
         ToolKind::Other
+    }
+}
+
+fn change_path(change: &acp::DiffChange) -> Option<&Path> {
+    match &change.operation {
+        acp::DiffChangeOperation::Add(change)
+        | acp::DiffChangeOperation::Delete(change)
+        | acp::DiffChangeOperation::Modify(change) => Some(&change.path.0),
+        acp::DiffChangeOperation::Move(change) | acp::DiffChangeOperation::Copy(change) => Some(&change.path.0),
+        _ => None,
     }
 }

@@ -3,11 +3,13 @@ use futures::{SinkExt, StreamExt, stream};
 use std::{io, time::Duration};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio::time::{Instant, MissedTickBehavior, interval_at, timeout};
-use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::tungstenite::http::{Request, StatusCode};
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, frame::coding::CloseCode};
 use tokio_tungstenite::tungstenite::{self, Bytes, Message};
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 use tokio_util::sync::PollSender;
 
 #[derive(Debug, Error)]
@@ -24,9 +26,27 @@ pub enum WebSocketError {
     WriteDeadline,
 }
 
+#[derive(Debug, Error)]
+pub enum ConnectError {
+    #[error("another client is already attached to the agent")]
+    Occupied,
+    #[error("failed to connect to the agent's WebSocket: {0}")]
+    Handshake(#[source] Box<tungstenite::Error>),
+}
+
 /// WebSocket transport for ACP
 pub struct WebSocketTransport<T> {
     socket: WebSocketStream<T>,
+}
+
+pub async fn connect(request: Request<()>) -> Result<WebSocketTransport<MaybeTlsStream<TcpStream>>, ConnectError> {
+    match connect_async(request).await {
+        Ok((socket, _)) => Ok(WebSocketTransport::new(socket)),
+        Err(tungstenite::Error::Http(response)) if response.status() == StatusCode::CONFLICT => {
+            Err(ConnectError::Occupied)
+        }
+        Err(error) => Err(ConnectError::Handshake(Box::new(error))),
+    }
 }
 
 impl<T: AsyncRead + AsyncWrite + Unpin> WebSocketTransport<T> {
