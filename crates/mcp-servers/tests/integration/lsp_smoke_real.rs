@@ -1,6 +1,7 @@
-use crate::common::{CodingWorkspace, McpClientExt, TestResult, has_errors};
-use aether_lspd::LanguageId;
-use aether_lspd::testing::{TestDaemon, TestWorkspace, cargo_project, node_project};
+use crate::common::{CodingWorkspace, McpClientExt, TestResult, cargo_project, has_errors, node_project};
+use clankerdiff_lspd::LanguageId;
+use clankerdiff_lspd::testing::TestDaemon;
+use mcp_servers::testing::TestWorkspace;
 use serde_json::json;
 
 #[tokio::test]

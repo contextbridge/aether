@@ -15,3 +15,8 @@ publish = false
 name = "aether-browser"
 release = false
 publish = false
+
+[[package]]
+name = "aether-desktop"
+release = false
+publish = false

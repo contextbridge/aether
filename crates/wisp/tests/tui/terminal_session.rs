@@ -1,4 +1,4 @@
-use wisp::session::terminal::{inline_viewport_height, inline_viewport_needs_resync};
+use wisp::platform::terminal::{inline_viewport_height, inline_viewport_needs_resync};
 
 #[test]
 fn inline_viewport_reserves_two_rows_for_scrollback() {

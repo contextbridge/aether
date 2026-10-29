@@ -16,7 +16,7 @@ async fn initialize_exposes_only_v2_nested_capabilities() {
         assert!(session.mcp.as_ref().unwrap().stdio.is_some());
         assert!(session.mcp.as_ref().unwrap().http.is_some());
         let meta = AetherCapabilities::from_meta(session.meta.as_ref());
-        assert!(meta.prompt_search && meta.session_preview && meta.workspace_move);
+        assert!(meta.prompt_search && meta.session_preview && meta.workspace_move && meta.git_diff);
         assert_eq!(AetherCapabilities::from_meta(session.prompt.unwrap().meta.as_ref()), AetherCapabilities::default());
         for key in ["loadSession", "list", "resume", "close", "sse"] {
             assert!(!wire.to_string().contains(&format!("\"{key}\":")));

@@ -2,25 +2,26 @@ use std::sync::Arc;
 
 use clankerdiff_ratatui::diff::InteractionPhase;
 use clankerdiff_ratatui::theme::ThemeChoice;
-use clankerdiff_ratatui::{DiffReviewState, DiffReviewWidget, InputOutcome, default_diff_keybindings};
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use clankerdiff_ratatui::{DiffReviewState, DiffReviewWidget, InputOutcome};
+use crossterm::event::Event;
 use ratatui::{
     buffer::Buffer,
     layout::{Position, Rect},
     widgets::{Clear, StatefulWidget, Widget},
 };
 
-use crate::command::GitReviewCommand;
-use crate::git_review::{ClientState, DiffReviewEvent, DiffSnapshot, ReviewCapabilities};
 use crate::renderer::DrawContext;
 use crate::screens::reviewer::{crossterm_event, theme_change};
 use crate::settings::builtin_review_theme_choices;
 use crate::surfaces::input::UiOutput;
-use crate::view::input::UiEvent;
 use crate::view::generation::Generation;
+use crate::view::input::UiEvent;
+use clankerdiff_client::{ClientError, ClientState, DiffReviewEvent, LookupReply};
+use clankerdiff_ratatui::ReviewCapabilities;
+use clankerdiff_ratatui::diff::DiffDocument;
 
 pub struct GitDiffScreen {
-    installed: Option<Arc<DiffSnapshot>>,
+    installed: Option<Arc<DiffDocument>>,
     state: DiffReviewState,
     theme_generation: Option<Generation>,
 }
@@ -28,9 +29,6 @@ pub struct GitDiffScreen {
 impl GitDiffScreen {
     pub fn new() -> Self {
         let mut state = DiffReviewState::loading();
-        let mut bindings = default_diff_keybindings();
-        bindings.retain(|binding| binding.key != KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL).into());
-        state.set_keybindings(bindings);
         state.set_theme_choices(builtin_review_theme_choices());
         state.set_capabilities(ReviewCapabilities { clipboard: false, ..ReviewCapabilities::default() });
 
@@ -53,11 +51,28 @@ impl GitDiffScreen {
         self.state.apply_client_state(current, &mut self.installed);
     }
 
-    pub fn on_action_result(&mut self, result: Result<(), String>) {
+    pub fn on_action_result(&mut self, result: Result<(), ClientError>) {
         match result {
             Ok(()) => self.state.clear_repository_pending(),
-            Err(error) => self.state.set_repository_error(error),
+            Err(error) => self.state.set_repository_error(error.to_string()),
         }
+    }
+
+    pub fn on_lookup_result(&mut self, reply: LookupReply) -> Vec<UiOutput> {
+        self.state.lookup_finished(reply);
+        self.lookups()
+    }
+
+    pub fn on_tick(&mut self) -> Vec<UiOutput> {
+        self.lookups()
+    }
+
+    fn lookups(&mut self) -> Vec<UiOutput> {
+        self.state
+            .take_lookups()
+            .into_iter()
+            .map(|lookup| UiOutput::ReviewEvent(DiffReviewEvent::Lookup(lookup)))
+            .collect()
     }
 
     pub fn render(&mut self, area: Rect, buf: &mut Buffer, cx: &mut DrawContext<'_>) -> Option<Position> {
@@ -73,23 +88,23 @@ impl GitDiffScreen {
 
     fn handle_event(&mut self, event: Event) -> Vec<UiOutput> {
         let outcome = clankerdiff_ratatui::handle_crossterm_event(&mut self.state, event);
-        match outcome {
+        let mut outputs = match outcome {
             InputOutcome::Ignored
             | InputOutcome::Consumed
-            | InputOutcome::Emitted(DiffReviewEvent::CopyFormattedReview(_)) => Vec::new(),
+            | InputOutcome::ViewModeSelected(_)
+            | InputOutcome::Emitted(DiffReviewEvent::CopyFormattedReview(_) | DiffReviewEvent::Lookup(_)) => Vec::new(),
             InputOutcome::ThemeSelected(id) => vec![theme_change(id)],
             InputOutcome::Emitted(DiffReviewEvent::Cancel) => vec![UiOutput::Close],
             InputOutcome::Emitted(DiffReviewEvent::SubmitReview(submission)) => {
                 vec![UiOutput::SubmitReview(submission.formatted)]
             }
             InputOutcome::Emitted(event) => {
-                if let DiffReviewEvent::SetScope(scope) = &event {
-                    self.state.set_scope(*scope);
-                }
                 self.state.set_repository_pending();
-                vec![UiOutput::GitReview(GitReviewCommand::Event(event))]
+                vec![UiOutput::ReviewEvent(event)]
             }
-        }
+        };
+        outputs.extend(self.lookups());
+        outputs
     }
 }
 

@@ -1,8 +1,8 @@
 use super::{Composer, ComposerLayout};
-use crate::attachment::{AttachmentKind, classify_attachment};
 use crate::theme::Theme;
 use crate::view::widgets::RowsView;
 use crate::view::wrap::{fit_prefix, wrap_text_char};
+use client_core::composer::attachment::{AttachmentKind, classify_attachment};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::text::{Line, Span};

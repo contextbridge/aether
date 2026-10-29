@@ -1,6 +1,6 @@
 use crate::settings::{ThemeSettings, load_theme_file};
-use clankerdiff_ratatui::{RatatuiTheme, RatatuiUiTheme, composite_color, layered_style};
 use clankerdiff_ratatui::theme::{ReviewTheme, SelectionState, ThemeId};
+use clankerdiff_ratatui::{RatatuiTheme, RatatuiUiTheme, composite_color, layered_style};
 use ratatui::style::{Color, Style};
 use std::path::Path;
 use std::sync::Arc;

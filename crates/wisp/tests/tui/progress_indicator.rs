@@ -40,8 +40,8 @@ fn native_idle_clears_responding_state() {
         acp_utils::testing::idle_notification("test-session", Some(acp::StopReason::EndTurn)).update,
     ));
 
-    assert!(!ui.app().waiting_for_response());
-    assert!(!ui.app().is_agent_busy());
+    assert!(!ui.app().core().waiting_for_response());
+    assert!(!ui.app().core().is_agent_busy());
     ui.assert_viewport_not_contains("Responding…");
 }
 
@@ -57,7 +57,12 @@ fn updates_after_prompt_completion_do_not_restart_progress() {
     ui.acp_event(compaction_update("compaction", acp::CompactionStatus::InProgress));
 
     assert!(
-        ui.app().conversation_items().iter().any(|item| item.text().is_some_and(|text| text.contains("late chunk")))
+        ui.app()
+            .core()
+            .conversation()
+            .items()
+            .iter()
+            .any(|item| item.text().is_some_and(|text| text.contains("late chunk")))
     );
     ui.assert_viewport_not_contains("late thought");
     ui.assert_viewport_not_contains("Responding…");
@@ -65,7 +70,7 @@ fn updates_after_prompt_completion_do_not_restart_progress() {
     ui.assert_viewport_not_contains("Thinking…");
     ui.assert_viewport_not_contains("Compacting context...");
     assert!(!ui.app().progress_indicator().is_active());
-    assert!(!ui.app().waiting_for_response());
+    assert!(!ui.app().core().waiting_for_response());
 }
 
 #[test]
@@ -275,7 +280,7 @@ fn progress_band_shows_while_work_is_in_flight() {
                 name: "loading the moved session",
                 setup: |ui| {
                     move_to_other_workspace(ui);
-                    ui.deliver_result(workspace_moved("/home/user/code/other"));
+                    workspace_moved(ui, "/home/user/code/other");
                 },
                 shown: &["Loading session in new workspace"],
                 hidden: &[],
@@ -315,7 +320,7 @@ fn progress_band_clears_once_work_ends() {
                 name: "failed workspace move",
                 setup: |ui| {
                     move_to_other_workspace(ui);
-                    ui.deliver_result(workspace_move_failed("permission denied"));
+                    ui.answer::<MoveWorkspace>(Err(agent_error("permission denied")));
                 },
                 shown: &[],
                 hidden: &["Moving workspace", "Loading session"],
@@ -324,7 +329,7 @@ fn progress_band_clears_once_work_ends() {
                 name: "failed workspace listing",
                 setup: |ui| {
                     ui.run_command("/move");
-                    ui.deliver_result(workspace_list_failed("network error"));
+                    ui.answer::<ListWorkspaces>(Err(agent_error("network error")));
                 },
                 shown: &[],
                 hidden: &["Moving workspace"],
@@ -344,7 +349,7 @@ fn progress_band_clears_once_work_ends() {
                     compacting_prompt(ui);
                     ui.complete_prompt(acp::StopReason::EndTurn);
                     ui.run_command("/clear");
-                    ui.deliver_result(new_session_created("new-session", Vec::new()));
+                    new_session_created(ui, "new-session", Vec::new());
                 },
                 shown: &[],
                 hidden: &["Compacting"],
@@ -355,7 +360,7 @@ fn progress_band_clears_once_work_ends() {
                     compacting_prompt(ui);
                     ui.complete_prompt(acp::StopReason::EndTurn);
                     ui.begin_resume("loaded-session", "/tmp");
-                    ui.deliver_result(session_loaded("loaded-session", Vec::new()));
+                    session_loaded(ui, Vec::new());
                 },
                 shown: &[],
                 hidden: &["Compacting"],
@@ -390,7 +395,7 @@ fn progress_is_not_inserted_into_scrollback() {
 
 fn assert_progress(ticking: bool, scenarios: &[Scenario]) {
     for Scenario { name, setup, shown, hidden } in scenarios {
-        let mut ui = TestUiBuilder::new().workspace_move().dimensions(120, 30).build();
+        let mut ui = TestUiBuilder::new().session(SessionCoreConfigBuilder::workspace_move).dimensions(120, 30).build();
         setup(&mut ui);
 
         let viewport = ui.viewport_text();

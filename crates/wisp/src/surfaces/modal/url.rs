@@ -1,6 +1,9 @@
+use client_core::elicitation::ElicitationAnswer;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::Modifier;
 use ratatui::text::Line;
 
+use crate::platform::{BrowserOpener, ClipboardWriter, Platform};
 use crate::theme::Theme;
 use crate::view::widgets::KeyHint;
 use crate::view::wrap::wrap_line;
@@ -9,15 +12,17 @@ use std::borrow::Cow;
 pub(super) struct UrlModal {
     pub(super) server_name: String,
     message: String,
-    pub(super) url: String,
+    url: String,
     host: Option<String>,
     warnings: Vec<String>,
-    pub(super) launch_error: Option<String>,
-    pub(super) copy_message: Option<String>,
+    launch_error: Option<String>,
+    copy_message: Option<String>,
+    browser_opener: BrowserOpener,
+    clipboard_writer: ClipboardWriter,
 }
 
 impl UrlModal {
-    pub(super) fn new(server_name: String, message: String, url: String) -> Self {
+    pub(super) fn new(server_name: String, message: String, url: String, platform: &Platform) -> Self {
         let parsed_url = url::Url::parse(&url);
         let host = parsed_url.as_ref().ok().and_then(|parsed| parsed.host_str().map(std::string::ToString::to_string));
 
@@ -48,7 +53,36 @@ impl UrlModal {
             }
         }
 
-        Self { server_name, message, url, host, warnings, launch_error: None, copy_message: None }
+        Self {
+            server_name,
+            message,
+            url,
+            host,
+            warnings,
+            launch_error: None,
+            copy_message: None,
+            browser_opener: platform.browser_opener.clone(),
+            clipboard_writer: platform.clipboard_writer.clone(),
+        }
+    }
+
+    pub(super) fn on_key(&mut self, key: KeyEvent) -> Option<ElicitationAnswer> {
+        let plain_key = key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT;
+        match key.code {
+            KeyCode::Esc => return Some(ElicitationAnswer::Cancel),
+            KeyCode::Enter => match (self.browser_opener)(&self.url) {
+                Ok(()) => return Some(ElicitationAnswer::Accept(None)),
+                Err(error) => self.launch_error = Some(format!("Failed to open browser: {error}")),
+            },
+            KeyCode::Char('c' | 'C') if plain_key => {
+                self.copy_message = Some(match (self.clipboard_writer)(&self.url) {
+                    Ok(()) => "Copied URL to clipboard.".to_string(),
+                    Err(error) => format!("Failed to copy URL: {error}"),
+                });
+            }
+            _ => {}
+        }
+        None
     }
 
     /// What is being authorized, where the browser would go, and anything about
@@ -56,10 +90,7 @@ impl UrlModal {
     /// drawing this inline puts in its own footer.
     pub(super) fn body_lines(&self, theme: &Theme, width: u16) -> Vec<Line<'static>> {
         let mut lines = wrap_line(
-            Line::styled(
-                format!("Request from {}", self.server_name),
-                (theme.accent, Modifier::BOLD),
-            ),
+            Line::styled(format!("Request from {}", self.server_name), (theme.accent, Modifier::BOLD)),
             width,
         );
         lines.extend(wrap_line(Line::raw(self.message.clone()), width));
@@ -92,68 +123,3 @@ impl UrlModal {
 /// The keys a URL request answers, for whichever footer is drawing them.
 pub(super) const HINTS: [KeyHint; 3] =
     [("Enter", Cow::Borrowed("open browser")), ("c", Cow::Borrowed("copy URL")), ("Esc", Cow::Borrowed("cancel"))];
-
-#[cfg(test)]
-#[allow(clippy::absolute_paths, clippy::similar_names)]
-mod tests {
-    use super::*;
-    #[test]
-    fn url_modal_parses_host() {
-        let url = UrlModal::new("github".into(), "Auth".into(), "https://github.com/login".into());
-        assert_eq!(url.host.as_deref(), Some("github.com"));
-        assert_eq!(url.warnings.len(), 0);
-    }
-
-    #[test]
-    fn url_modal_warns_on_non_https() {
-        let url = UrlModal::new("test".into(), "Open".into(), "http://example.com/form".into());
-        assert_eq!(url.warnings.len(), 1);
-        assert!(url.warnings[0].contains("HTTPS"));
-    }
-
-    #[test]
-    fn url_modal_does_not_warn_on_localhost() {
-        let url = UrlModal::new("test".into(), "Local".into(), "http://localhost:3000/auth".into());
-        assert_eq!(url.warnings.len(), 0);
-    }
-
-    #[test]
-    fn url_modal_allows_127_0_0_1_as_localhost() {
-        let url = UrlModal::new("test".into(), "Local".into(), "http://127.0.0.1:8000/api".into());
-        assert_eq!(url.warnings.len(), 0);
-    }
-
-    #[test]
-    fn url_modal_warns_on_invalid_url() {
-        let url = UrlModal::new("test".into(), "Check".into(), "not a valid url".into());
-        assert!(url.host.is_none());
-        assert!(url.warnings.iter().any(|w| w.contains("could not be parsed")));
-    }
-
-    #[test]
-    fn url_modal_warns_on_punycode() {
-        let url = UrlModal::new("test".into(), "Phish".into(), "https://xn--e1afmkfd.xn--p1ai/".into());
-        assert_eq!(url.warnings.len(), 1);
-        assert!(url.warnings[0].contains("punycode"));
-    }
-
-    #[test]
-    fn url_modal_warns_on_punycode_and_non_https() {
-        let url = UrlModal::new("test".into(), "Both".into(), "http://xn--e1afmkfd.xn--p1ai/".into());
-        assert_eq!(url.warnings.len(), 2);
-        assert!(url.warnings.iter().any(|w| w.contains("punycode")));
-        assert!(url.warnings.iter().any(|w| w.contains("HTTPS")));
-    }
-
-    #[test]
-    fn url_modal_warns_on_embedded_credentials() {
-        let url = UrlModal::new("test".into(), "Auth".into(), "https://user:pass@example.com/path".into());
-        assert!(url.warnings.iter().any(|w| w.contains("credentials")), "warnings: {:?}", url.warnings);
-    }
-
-    #[test]
-    fn url_modal_no_credential_warning_for_clean_url() {
-        let url = UrlModal::new("test".into(), "Auth".into(), "https://example.com/path".into());
-        assert!(!url.warnings.iter().any(|w| w.contains("credentials")), "warnings: {:?}", url.warnings);
-    }
-}

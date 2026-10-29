@@ -1,50 +1,68 @@
 use crate::app::App;
 use crate::app::message::Message;
-use crate::command::Command;
+use crate::command::{Command, HostCommand};
 use crate::error::AppError;
+use crate::platform::terminal::{TerminalSession, inline_viewport_height};
 use crate::renderer::Renderer;
-use crate::session::terminal::{TerminalSession, inline_viewport_height};
-use acp_utils::client::{AcpClientHandle, AcpEvent};
+use client_core::runtime::{Input, SessionRuntime};
 use crossterm::event::{Event, EventStream};
 use crossterm::terminal::size;
 use futures::StreamExt;
 use ratatui::Viewport;
-use std::collections::VecDeque;
 use std::future::pending;
 use std::time::{Duration, Instant};
 use tokio::select;
-use tokio::sync::mpsc;
 use tokio::time::{MissedTickBehavior, interval};
 
-use super::CommandDispatcher;
+use super::TuiHost;
 
 const MAX_ACP_EVENTS_PER_FRAME: usize = 1_000;
 
-pub(crate) async fn run(
-    mut app: App,
-    mut renderer: Renderer,
-    mut event_rx: mpsc::UnboundedReceiver<AcpEvent>,
-    client_handle: AcpClientHandle,
-) -> Result<(), AppError> {
-    let mut dispatcher = CommandDispatcher::new(client_handle);
+pub(crate) async fn run(mut app: App, mut renderer: Renderer, runtime: SessionRuntime) -> Result<(), AppError> {
+    let mut runtimes = Runtimes { session: runtime, host: TuiHost::default() };
     let result = async {
         let (_, terminal_height) = size()?;
         let viewport = Viewport::Inline(inline_viewport_height(terminal_height));
         let mut session = TerminalSession::enter(viewport)?;
-        let initial_commands = app.take_commands();
-        dispatch_commands(&mut dispatcher, &mut app, initial_commands);
-        run_event_loop(&mut session, &mut app, &mut renderer, &mut event_rx, &mut dispatcher).await
-    }.await;
-    dispatcher.shutdown().await;
+        runtimes.dispatch(app.take_commands());
+        run_event_loop(&mut session, &mut app, &mut renderer, &mut runtimes).await
+    }
+    .await;
+    runtimes.session.shutdown().await;
+    runtimes.host.shutdown().await;
     result
+}
+
+pub trait Host {
+    fn execute(&mut self, command: HostCommand);
+}
+
+pub(crate) struct Runtimes<THost> {
+    pub(crate) session: SessionRuntime,
+    pub(crate) host: THost,
+}
+
+impl<THost: Host> Runtimes<THost> {
+    pub(crate) fn deliver(&mut self, app: &mut App, message: Message) {
+        let commands = app.update(message);
+        self.dispatch(commands);
+    }
+
+    pub(crate) fn dispatch(&mut self, commands: Vec<Command>) {
+        for command in commands {
+            match command {
+                Command::Core(command) => self.session.dispatch(command),
+                Command::Host(command) => self.host.execute(command),
+            }
+        }
+    }
 }
 
 async fn run_event_loop(
     session: &mut TerminalSession,
     app: &mut App,
     renderer: &mut Renderer,
-    event_rx: &mut mpsc::UnboundedReceiver<AcpEvent>,
-    dispatcher: &mut CommandDispatcher,
+    runtimes: &mut Runtimes<TuiHost>,
 ) -> Result<(), AppError> {
     let mut terminal_events = EventStream::new();
     let mut tick_interval = {
@@ -54,49 +72,34 @@ async fn run_event_loop(
     };
     renderer.draw(session.terminal_mut(), app)?;
     loop {
-        let tick_fut = async {
+        let tick = async {
             if !app.wants_tick() {
                 pending::<()>().await;
             }
             tick_interval.tick().await;
         };
-        let has_pending_tasks = dispatcher.has_pending_tasks();
-
-        select! {
-            terminal_event = terminal_events.next() => {
-                match terminal_event {
-                    Some(Ok(event)) => {
-                        if matches!(event, Event::Resize(..)) {
-                            session.resync_inline_viewport()?;
-                        }
-                        let commands = app.update(Message::Terminal(event));
-                        dispatch_commands(dispatcher, app, commands);
+        let message = select! {
+            terminal_event = terminal_events.next() => match terminal_event {
+                Some(Ok(event)) => {
+                    if matches!(event, Event::Resize(..)) {
+                        session.resync_inline_viewport()?;
                     }
-                    Some(Err(error)) => return Err(AppError::Io(error)),
-                    None => return Ok(()),
+                    Message::Terminal(event)
                 }
-            }
-
-            acp_event = event_rx.recv() => {
-                let event = acp_event.unwrap_or(AcpEvent::ConnectionClosed);
-                handle_acp_event(dispatcher, app, event);
-                for _ in 1..MAX_ACP_EVENTS_PER_FRAME {
-                    let Ok(event) = event_rx.try_recv() else { break };
-                    handle_acp_event(dispatcher, app, event);
-                }
-            }
-
-            result = dispatcher.next_result(), if has_pending_tasks => {
-                if let Some(result) = result {
-                    let commands = app.update(Message::CommandFinished(Box::new(result)));
-                    dispatch_commands(dispatcher, app, commands);
-                }
-            }
-
-            () = tick_fut => {
-                let commands = app.update(Message::Tick(Instant::now()));
-                dispatch_commands(dispatcher, app, commands);
+                Some(Err(error)) => return Err(AppError::Io(error)),
+                None => return Ok(()),
             },
+            input = runtimes.session.next() => Message::Session(Box::new(input)),
+            result = runtimes.host.next() => Message::Host(Box::new(result)),
+            () = tick => Message::Tick(Instant::now()),
+        };
+        let agent_event = matches!(&message, Message::Session(input) if matches!(**input, Input::Event(_)));
+        runtimes.deliver(app, message);
+        if agent_event {
+            for _ in 1..MAX_ACP_EVENTS_PER_FRAME {
+                let Some(event) = runtimes.session.try_next_event() else { break };
+                runtimes.deliver(app, Message::Session(Box::new(Input::Event(event))));
+            }
         }
 
         session.set_mouse_capture(app.needs_mouse_capture());
@@ -105,18 +108,5 @@ async fn run_event_loop(
             return result;
         }
         renderer.draw(session.terminal_mut(), app)?;
-    }
-}
-
-fn handle_acp_event(dispatcher: &mut CommandDispatcher, app: &mut App, event: AcpEvent) {
-    let commands = app.update(Message::Agent(Box::new(event)));
-    dispatch_commands(dispatcher, app, commands);
-}
-
-fn dispatch_commands(dispatcher: &mut CommandDispatcher, app: &mut App, commands: Vec<Command>) {
-    let mut pending = VecDeque::from(commands);
-    while let Some(command) = pending.pop_front() {
-        let Some(result) = dispatcher.dispatch(command) else { continue };
-        pending.extend(app.update(Message::CommandFinished(Box::new(result))));
     }
 }

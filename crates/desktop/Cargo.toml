@@ -1,0 +1,85 @@
+[package]
+name = "aether-desktop"
+version = "0.1.0"
+edition = "2024"
+description = "Native desktop client for running and managing many Aether agent threads"
+license = "MIT"
+repository = "https://github.com/contextbridge/aether"
+publish = false
+default-run = "aether-desktop"
+
+[package.metadata.dist]
+dist = false
+
+[lib]
+name = "aether_desktop"
+path = "src/lib.rs"
+
+[[bin]]
+name = "aether-desktop"
+path = "src/main.rs"
+
+[[bin]]
+name = "fake-acp-agent"
+path = "tests/fixtures/fake_acp_agent.rs"
+test = false
+required-features = ["testing"]
+
+[features]
+testing = [
+    "gpui/test-support",
+    "gpui-base/test-support",
+    "clankerdiff-gpui/test-support",
+    "acp_utils/testing",
+    "client_core/testing",
+    "aether-sessions/testing",
+    "tokio/io-std",
+    "clankerdiff-remote/test-support",
+    "dep:tempfile",
+]
+
+[[test]]
+name = "desktop"
+path = "tests/desktop/main.rs"
+required-features = ["testing"]
+
+[lints]
+workspace = true
+
+[dependencies]
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client", "websocket"], version = "0.5.18" }
+agent-client-protocol = { workspace = true, features = ["process"] }
+aether-sessions = { path = "../aether-sessions", version = "0.3.18" }
+base64 = { workspace = true }
+chrono = { workspace = true }
+client_core = { package = "aether-client-core", path = "../client-core", version = "0.1.0" }
+clankerdiff-client = { workspace = true }
+clankerdiff-core = { workspace = true }
+clankerdiff-gpui = { workspace = true }
+clankerdiff-gpui-shell = { workspace = true }
+clankerdiff-lspd = { workspace = true, features = ["daemon"] }
+clankerdiff-markdown = { workspace = true }
+clankerdiff-remote = { workspace = true }
+clankerdiff-syntax = { workspace = true }
+clankerdiff-ui-core = { workspace = true }
+gpui = { workspace = true }
+gpui-base = { workspace = true }
+gpui_platform = { workspace = true }
+clap = { workspace = true }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true, optional = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "process", "net"] }
+tokio-tungstenite = { workspace = true }
+tokio-util = { workspace = true, features = ["compat"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+utils = { package = "aether-utils", path = "../utils", version = "0.3.0" }
+
+[dev-dependencies]
+clankerdiff-server = { workspace = true }
+client_core = { package = "aether-client-core", path = "../client-core", features = ["testing"], version = "0.1.0" }
+tempfile = { workspace = true }
+utils = { package = "aether-utils", path = "../utils", features = ["testing"], version = "0.3.0" }

@@ -182,7 +182,7 @@ impl AcpState {
         let auth_methods = build_auth_methods(self.oauth_credential_store.as_ref());
         let prompt_capabilities = prompt_capabilities_for_models(&self.factory.available_models().await);
         let aether_capabilities =
-            AetherCapabilities { prompt_search: true, session_preview: true, workspace_move: true };
+            AetherCapabilities { prompt_search: true, session_preview: true, workspace_move: true, git_diff: true };
         let session_capabilities = acp::SessionCapabilities::new()
             .prompt(prompt_capabilities)
             .mcp(McpCapabilities::new().stdio(acp::McpStdioCapabilities::new()).http(acp::McpHttpCapabilities::new()))

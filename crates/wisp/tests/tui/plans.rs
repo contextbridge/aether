@@ -5,9 +5,7 @@ fn plan_entry(content: &str, status: acp::PlanEntryStatus) -> acp::PlanEntry {
 }
 
 fn plan_update(entries: Vec<acp::PlanEntry>) -> AcpEvent {
-    session_update(acp::SessionUpdate::PlanUpdate(acp::PlanUpdate::new(acp::PlanUpdateContent::Items(
-        acp::PlanItems::new("plan", entries),
-    ))))
+    session_update(plan("plan", entries))
 }
 
 #[test]
@@ -159,7 +157,7 @@ fn plan_cleared_on_new_session() {
     assert!(ui.app().has_plan());
 
     ui.run_command("/clear");
-    ui.deliver_result(new_session_created("new-id", Vec::new()));
+    new_session_created(&mut ui, "new-id", Vec::new());
     assert!(!ui.app().has_plan());
 
     ui.assert_viewport_not_contains("Task");
@@ -172,7 +170,7 @@ fn plan_cleared_on_session_loaded() {
     assert!(ui.app().has_plan());
 
     ui.begin_resume("other-session", "/tmp");
-    ui.deliver_result(session_loaded("other-session", Vec::new()));
+    session_loaded(&mut ui, Vec::new());
     assert!(!ui.app().has_plan());
 
     ui.assert_viewport_not_contains("Task");

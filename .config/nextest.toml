@@ -25,7 +25,3 @@ filter = 'package(internal-evals) and test(/_eval$/)'
 test-group = 'evals'
 slow-timeout = { period = "180s", terminate-after = 3 }
 failure-output = "immediate-final"
-
-[[profile.default.overrides]]
-filter = 'binary(e2e_wedge_recovery)'
-slow-timeout = { period = "30s", terminate-after = 1 }

@@ -6,7 +6,6 @@ pub mod cli;
 pub mod error;
 pub mod settings;
 
-// The crate's public API is the entry points above plus [`Session`]. The
 // internal module graph opens up only under the `testing` feature, for the
 // integration suite's cohesive harness in [`testing`].
 #[cfg(all(test, not(feature = "testing")))]
@@ -14,50 +13,69 @@ mod testing;
 #[cfg(feature = "testing")]
 pub mod testing;
 
-macro_rules! internal_modules {
-    ($($name:ident),* $(,)?) => {
-        $(
-            #[cfg(feature = "testing")]
-            pub mod $name;
-            #[cfg(not(feature = "testing"))]
-            mod $name;
-        )*
-    };
-}
+#[cfg(feature = "testing")]
+pub mod app;
+#[cfg(not(feature = "testing"))]
+mod app;
+#[cfg(feature = "testing")]
+pub mod command;
+#[cfg(not(feature = "testing"))]
+mod command;
+#[cfg(feature = "testing")]
+pub mod conversation;
+#[cfg(not(feature = "testing"))]
+mod conversation;
+#[cfg(feature = "testing")]
+pub mod platform;
+#[cfg(not(feature = "testing"))]
+mod platform;
+#[cfg(feature = "testing")]
+pub mod renderer;
+#[cfg(not(feature = "testing"))]
+mod renderer;
+#[cfg(feature = "testing")]
+pub mod runtime;
+#[cfg(not(feature = "testing"))]
+mod runtime;
+#[cfg(feature = "testing")]
+pub mod screens;
+#[cfg(not(feature = "testing"))]
+mod screens;
+#[cfg(feature = "testing")]
+pub mod surfaces;
+#[cfg(not(feature = "testing"))]
+mod surfaces;
+#[cfg(feature = "testing")]
+pub mod theme;
+#[cfg(not(feature = "testing"))]
+mod theme;
+#[cfg(feature = "testing")]
+pub mod view;
+#[cfg(not(feature = "testing"))]
+mod view;
 
-internal_modules!(
-    app,
-    attachment,
-    conversation,
-    command,
-    file_index,
-    git_review,
-    renderer,
-    request,
-    runtime,
-    screens,
-    session,
-    surfaces,
-    theme,
-    view,
-);
+use agent_client_protocol::schema::v2::{Implementation, SessionId};
+use agent_client_protocol::{AcpAgent, Client, ConnectTo};
+use client_core::connection::{Connection, Session};
 
-use agent_client_protocol::{Client, ConnectTo, schema::v2::SessionId};
-pub use session::Session;
-
-use app::App;
+use app::{App, AppConfig};
 use error::AppError;
+use platform::Platform;
 use renderer::Renderer;
 use settings::UiSettings;
+use std::env::current_dir;
 use std::fs::create_dir_all;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use tracing_appender::rolling::daily;
 use tracing_subscriber::EnvFilter;
 
 /// Launch the Wisp TUI with the given agent subprocess command.
 pub async fn run_tui(agent_command: &str, settings: UiSettings, log_dir: Option<&str>) -> Result<(), AppError> {
     setup_logging(log_dir.map(Path::new));
-    let session = Session::connect(agent_command).await?;
+    let agent = AcpAgent::from_str(agent_command).map_err(AppError::InvalidAgentCommand)?;
+    let working_dir = current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let session = Connection::connect_to(client_info(), agent).await?.open(None, working_dir).await?;
     run_with_session(session, settings).await
 }
 
@@ -69,14 +87,19 @@ pub async fn run_remote_tui(
     log_dir: Option<&Path>,
 ) -> Result<(), AppError> {
     setup_logging(log_dir);
-    let session = Session::connect_remote_to(transport, requested_session).await?;
-    run_with_session(session, settings).await
+    let connection = Connection::connect_to(client_info(), transport).await?;
+    run_with_session(connection.open_remote(requested_session).await?, settings).await
 }
 
 /// Run the TUI from an already-initialized ACP session.
 pub async fn run_with_session(session: Session, settings: UiSettings) -> Result<(), AppError> {
-    let (app, event_rx, client_handle) = App::from_session(session, settings);
-    runtime::run(app, Renderer::new(), event_rx, client_handle).await
+    let (session, session_runtime) = session.into_core();
+    let app = App::new(AppConfig { session, settings, platform: Platform::system() });
+    runtime::run(app, Renderer::new(), session_runtime).await
+}
+
+pub fn client_info() -> Implementation {
+    Implementation::new("wisp", env!("CARGO_PKG_VERSION"))
 }
 
 pub fn init_file_logging(dir: &Path, file_name: &str, default_filter: &str) {

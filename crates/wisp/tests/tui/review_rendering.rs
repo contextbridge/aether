@@ -1,9 +1,10 @@
-use super::support::{Buffer, Cell, Color, Modifier, Position, git_diff_screen, plan_meta, render_surface};
+use super::support::{
+    Buffer, Cell, Color, Modifier, Position, elicitation_id, git_diff_screen, plan_meta, render_surface,
+};
+use clankerdiff_ratatui::diff::FileDiff;
 use ratatui::layout::Rect;
-use wisp::git_review::FileDiff;
 use wisp::renderer::DrawContext;
 use wisp::screens::artifact_review::ArtifactReviewScreen;
-use wisp::surfaces::elicitation::ElicitationResponder;
 
 #[test]
 fn git_review_clears_underlying_content_only_inside_its_viewport() {
@@ -23,7 +24,7 @@ fn artifact_review_clears_underlying_content_only_inside_its_viewport() {
     for y in [0, 2] {
         for lines in [1, 60] {
             let markdown = format!("# Plan\n\n{}", "Implement this.\n\n".repeat(lines));
-            let mut screen = ArtifactReviewScreen::new(plan_meta(&markdown), ElicitationResponder::from_fn(|_| {}));
+            let mut screen = ArtifactReviewScreen::new(elicitation_id(), plan_meta(&markdown));
             assert_opaque_viewport(Rect::new(3, y, 120, 24), |area, buffer, cx| {
                 screen.render(area, buffer, cx);
             });

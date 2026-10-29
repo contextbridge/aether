@@ -1,6 +1,6 @@
 use crate::common::{CodingWorkspace, call_tool_error};
-use aether_lspd::LanguageId;
-use aether_lspd::testing::TestDaemon;
+use clankerdiff_lspd::LanguageId;
+use clankerdiff_lspd::testing::TestDaemon;
 use mcp_servers::testing::TestWorkspace;
 use serde_json::json;
 use std::os::unix::fs::PermissionsExt;

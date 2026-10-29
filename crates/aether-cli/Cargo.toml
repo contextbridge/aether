@@ -48,7 +48,7 @@ agent-client-protocol = { workspace = true, features = ["stdio"] }
 clankerdiff-core = { workspace = true }
 clankerdiff-protocol = { workspace = true }
 clankerdiff-server = { workspace = true }
-aether-lspd = { path = "../aether-lspd", version = "0.3.6" }
+clankerdiff-lspd = { workspace = true, features = ["daemon"] }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "io-util", "net", "fs", "time", "signal", "process"] }
 tokio-tungstenite = { workspace = true }
@@ -75,3 +75,4 @@ libc = { workspace = true }
 aether-agent-cli = { path = ".", features = ["testing"] }
 tokio = { workspace = true, features = ["test-util"] }
 acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["testing"], version = "0.5.18" }
+client_core = { package = "aether-client-core", path = "../client-core", version = "0.1.0" }

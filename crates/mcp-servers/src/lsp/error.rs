@@ -1,6 +1,6 @@
 //! LSP-specific error types
 
-use aether_lspd::{ClientError, UriError};
+use clankerdiff_lspd::{ClientError, UriError};
 use thiserror::Error;
 
 #[doc = include_str!("../docs/lsp_error.md")]

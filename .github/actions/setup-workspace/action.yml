@@ -1,0 +1,19 @@
+name: Set up workspace
+description: Installs the system libraries the workspace links against
+
+inputs:
+  extra-packages:
+    description: Space-separated apt packages the job needs on top of the system libraries, such as mold
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Install system dependencies
+      shell: bash
+      env:
+        EXTRA_PACKAGES: ${{ inputs.extra-packages }}
+      run: |
+        set -euo pipefail
+        sudo apt-get update
+        sudo apt-get install -y libdbus-1-dev libfontconfig1-dev libxkbcommon-x11-dev $EXTRA_PACKAGES

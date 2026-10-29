@@ -1,6 +1,6 @@
 use clankerdiff_ratatui::composite_color;
 use clankerdiff_ratatui::theme::{ReviewTheme, Rgba, ThemeError};
-use wisp::session::workspace_status::WorkspaceStatus;
+use client_core::session_model::WorkspaceStatus;
 use wisp::settings::{StatusLineSegmentConfig as Segment, StatusLineSettings, StatusLineStyle};
 
 use super::support::*;
@@ -59,7 +59,7 @@ fn ui_only_theme_switch_recolors_status_mentions_and_message_surfaces() {
         review.ui.info = info;
         review.ui.surface = surface;
         let settings = Box::new(ui.app().ui_settings().clone());
-        ui.deliver_result(CommandResult::ThemeApplied(Ok((settings, Theme::from_review(review.clone())))));
+        ui.deliver_host_result(HostCommandResult::ThemeApplied(Ok((settings, Theme::from_review(review.clone())))));
         let buffer = ui.viewport();
         let color = composite_color(info, review.ui.canvas);
         assert_text_color(&buffer, "aether", color);
@@ -151,8 +151,11 @@ fn status_line_model_max_width_truncates() {
 #[test]
 fn status_line_narrow_wraps_to_two_rows() {
     let settings = segments(vec![CWD], vec![Segment::Agent, MODEL]);
-    let mut ui =
-        TestUiBuilder::new().settings(settings).dimensions(40, 15).config_options(vec![sonnet_model()]).build();
+    let mut ui = TestUiBuilder::new()
+        .session(|session| session.config_options(vec![sonnet_model()]))
+        .settings(settings)
+        .dimensions(40, 15)
+        .build();
 
     ui.assert_viewport_contains("aether");
     ui.assert_viewport_contains("Claude Sonnet");
@@ -162,8 +165,8 @@ fn status_line_narrow_wraps_to_two_rows() {
 #[test]
 fn status_line_wide_stays_on_one_row() {
     let mut ui = TestUiBuilder::new()
+        .session(|session| session.config_options(vec![sonnet_model(), reasoning_option("medium", LEVELS)]))
         .dimensions(160, 15)
-        .config_options(vec![sonnet_model(), reasoning_option("medium", LEVELS)])
         .build();
     ui.acp_event(context_usage(100_000, 200_000));
 
@@ -233,8 +236,11 @@ fn status_line_server_health_counts_unhealthy_servers_while_idle() {
 #[test]
 fn status_line_two_row_never_enters_scrollback() {
     let settings = segments(vec![CWD], vec![Segment::Agent, MODEL]);
-    let mut ui =
-        TestUiBuilder::new().settings(settings).dimensions(30, 15).config_options(vec![sonnet_model()]).build();
+    let mut ui = TestUiBuilder::new()
+        .session(|session| session.config_options(vec![sonnet_model()]))
+        .settings(settings)
+        .dimensions(30, 15)
+        .build();
 
     ui.assert_history_not_contains("aether");
     ui.assert_history_not_contains("Claude Sonnet");
@@ -242,7 +248,8 @@ fn status_line_two_row_never_enters_scrollback() {
 
 #[test]
 fn status_line_zero_width_no_panic() {
-    let mut ui = TestUiBuilder::new().dimensions(0, 15).config_options(vec![sonnet_model()]).build();
+    let mut ui =
+        TestUiBuilder::new().session(|session| session.config_options(vec![sonnet_model()])).dimensions(0, 15).build();
 
     ui.draw();
 }
@@ -253,7 +260,7 @@ fn status_line_multi_model_comma_separated() {
     let both = &[("claude-sonnet", "Claude Sonnet"), ("claude-opus", "Claude Opus")];
     ui.acp_event(config_update(vec![select("model", "Model", "claude-sonnet,claude-opus", both)]));
 
-    ui.assert_viewport_contains("Claude Sonnet + Claude Opus");
+    ui.assert_viewport_contains("Claude Sonnet, Claude Opus");
 }
 
 #[test]
@@ -271,7 +278,11 @@ fn status_line_unicode_truncation_uses_display_width() {
     let settings = segments(vec![Segment::GitRef], vec![Segment::Cwd { max_width: Some(12) }]);
     let workspace_status =
         WorkspaceStatus { display_dir: "~/café/longpath/here".to_string(), git_ref: Some("main".to_string()) };
-    let mut ui = TestUiBuilder::new().settings(settings).workspace_status(workspace_status).dimensions(120, 15).build();
+    let mut ui = TestUiBuilder::new()
+        .session(|session| session.workspace_status(workspace_status))
+        .settings(settings)
+        .dimensions(120, 15)
+        .build();
 
     ui.assert_viewport_contains("…");
 }
@@ -287,8 +298,11 @@ fn status_line_mode_displays_current_mode() {
 #[test]
 fn status_line_hidden_segments_do_not_appear() {
     let settings = segments(vec![CWD], vec![Segment::Agent]);
-    let mut ui =
-        TestUiBuilder::new().settings(settings).dimensions(120, 15).config_options(vec![sonnet_model()]).build();
+    let mut ui = TestUiBuilder::new()
+        .session(|session| session.config_options(vec![sonnet_model()]))
+        .settings(settings)
+        .dimensions(120, 15)
+        .build();
 
     ui.assert_viewport_not_contains("Claude Sonnet");
     ui.assert_viewport_not_contains("main");
@@ -297,8 +311,11 @@ fn status_line_hidden_segments_do_not_appear() {
 #[test]
 fn status_line_narrow_without_right_produces_one_line() {
     let settings = segments(vec![CWD, Segment::Agent, MODEL], vec![]);
-    let mut ui =
-        TestUiBuilder::new().settings(settings).dimensions(30, 15).config_options(vec![sonnet_model()]).build();
+    let mut ui = TestUiBuilder::new()
+        .session(|session| session.config_options(vec![sonnet_model()]))
+        .settings(settings)
+        .dimensions(30, 15)
+        .build();
 
     let text = ui.viewport_text();
     let status_rows: Vec<&str> = text
@@ -315,8 +332,11 @@ fn status_line_two_row_overflow_truncates_at_display_width() {
         let settings = segments(vec![CWD], vec![Segment::Agent]);
         let workspace_status =
             WorkspaceStatus { display_dir: display_dir.to_string(), git_ref: Some("main".to_string()) };
-        let mut ui =
-            TestUiBuilder::new().settings(settings).workspace_status(workspace_status).dimensions(20, 15).build();
+        let mut ui = TestUiBuilder::new()
+            .session(|session| session.workspace_status(workspace_status))
+            .settings(settings)
+            .dimensions(20, 15)
+            .build();
 
         ui.assert_viewport_contains("…");
     }

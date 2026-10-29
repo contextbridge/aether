@@ -12,6 +12,7 @@ pub enum Activity {
     Responding,
     RequiresAction,
     Working,
+    Compacting,
 }
 
 impl Activity {

@@ -1,10 +1,10 @@
 use crate::view::selection::Direction;
-use crossterm::event::KeyEvent;
+use crossterm::event::{KeyEvent, KeyModifiers};
 
 pub enum UiEvent {
     Key(KeyEvent),
     Paste(String),
-    Mouse(MouseAction, (u16, u16)),
+    Mouse(MouseAction, (u16, u16), KeyModifiers),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -12,6 +12,7 @@ pub enum MouseAction {
     ScrollUp,
     ScrollDown,
     Click,
+    Moved,
 }
 
 /// What a navigation event asked of the pane hosting a list.
@@ -36,6 +37,7 @@ impl MouseAction {
             MouseEventKind::ScrollUp => Some(Self::ScrollUp),
             MouseEventKind::ScrollDown => Some(Self::ScrollDown),
             MouseEventKind::Down(_) => Some(Self::Click),
+            MouseEventKind::Moved => Some(Self::Moved),
             _ => None,
         }
     }
@@ -44,7 +46,7 @@ impl MouseAction {
         match self {
             Self::ScrollUp => Some(Direction::Backward),
             Self::ScrollDown => Some(Direction::Forward),
-            Self::Click => None,
+            Self::Click | Self::Moved => None,
         }
     }
 }

@@ -1,9 +1,9 @@
 use crate::renderer::DrawContext;
 use crate::surfaces::input::UiOutput;
-use crate::view::input::{Nav, UiEvent};
 use crate::theme::Theme;
 use crate::view::edit_buffer::{EditBuffer, apply_edit_key};
 use crate::view::filterable_list::FilterableList;
+use crate::view::input::{Nav, UiEvent};
 use crate::view::widgets::visible_window;
 use crate::view::wrap::as_u16;
 use acp_utils::notifications::{WorkspaceEntry, WorkspaceMoveTarget};
@@ -75,9 +75,7 @@ impl WorkspacePicker {
 
     fn render_list(&mut self, area: Rect, buf: &mut Buffer, theme: &Theme) {
         self.rows.render_pane("Workspaces", "  (no matching workspaces)", area, buf, theme, |row| match row {
-            WorkspaceRow::Existing(entry) => {
-                Line::styled(format!("  {}", entry.path.display()), theme.text_secondary)
-            }
+            WorkspaceRow::Existing(entry) => Line::styled(format!("  {}", entry.path.display()), theme.text_secondary),
             WorkspaceRow::CreateNew => Line::styled(format!("  {CREATE_NEW_LABEL}"), theme.info),
         });
     }
@@ -94,10 +92,7 @@ impl WorkspacePicker {
         block.render(area, buf);
 
         if let Some(parent) = parent_dir {
-            let hint = Line::from(Span::styled(
-                format!("  will be created in {}/", parent.display()),
-                theme.muted,
-            ));
+            let hint = Line::from(Span::styled(format!("  will be created in {}/", parent.display()), theme.muted));
             Paragraph::new(vec![Line::raw(""), hint]).render(inner, buf);
         }
 

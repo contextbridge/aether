@@ -3,17 +3,14 @@ use super::support::*;
 #[test]
 fn remote_prompt_search_keeps_server_paths_and_accepts_results() {
     let cwd = std::env::var_os("HOME").map_or_else(|| "/server".into(), std::path::PathBuf::from);
-    let mut ui = TestUiBuilder::new().remote_workspace().prompt_search().dimensions(160, 24).build();
-    search(&mut ui, "h", vec![PromptSearchResult { cwd: cwd.clone(), ..hit("hello world", 0, 1) }]);
+    let mut ui =
+        TestUiBuilder::new().session(|session| session.remote_workspace().prompt_search()).dimensions(160, 24).build();
+    search(&mut ui, "h", vec![PromptSearchResult { cwd: cwd.clone(), ..prompt_search_hit("hello world", 0, 1) }]);
     ui.assert_viewport_contains(&cwd.display().to_string());
     ui.key(key(KeyCode::Enter));
     assert_eq!(ui.app().composer().text(), "hello world");
     ui.key(key(KeyCode::Enter));
-    assert!(matches!(ui.next_agent_command(), Some(AgentCommand::Prompt { text, .. }) if text == "hello world"));
-}
-
-fn search_failed(query: &str, error: &str) -> CommandResult {
-    CommandResult::PromptSearchResults { query: query.to_string(), result: Err(error.to_string()) }
+    assert_eq!(prompt_text(&sent_prompt(&mut ui)), Some("hello world"));
 }
 
 #[test]
@@ -26,7 +23,7 @@ fn ctrl_r_is_noop_when_prompt_search_capability_is_missing() {
 
 #[test]
 fn ctrl_r_opens_prompt_search_when_capability_is_enabled() {
-    let mut app = TestUiBuilder::new().prompt_search().build();
+    let mut app = TestUiBuilder::new().session(SessionCoreConfigBuilder::prompt_search).build();
     app.type_text("draft");
     app.key(ctrl('r'));
     assert!(app.app().composer().has_prompt_search());
@@ -35,7 +32,7 @@ fn ctrl_r_opens_prompt_search_when_capability_is_enabled() {
 
 #[test]
 fn prompt_search_shows_loading_state_after_query() {
-    let mut ui = TestUiBuilder::new().prompt_search().build();
+    let mut ui = TestUiBuilder::new().session(SessionCoreConfigBuilder::prompt_search).build();
     start_search(&mut ui, "h");
 
     ui.assert_viewport_contains("history search: h");
@@ -44,7 +41,7 @@ fn prompt_search_shows_loading_state_after_query() {
 
 #[test]
 fn prompt_search_empty_query_renders_instruction() {
-    let mut ui = TestUiBuilder::new().prompt_search().build();
+    let mut ui = TestUiBuilder::new().session(SessionCoreConfigBuilder::prompt_search).build();
     ui.key(ctrl('r'));
 
     ui.assert_viewport_contains("history search:");
@@ -53,15 +50,15 @@ fn prompt_search_empty_query_renders_instruction() {
 
 #[test]
 fn prompt_search_shows_results_after_response() {
-    let mut ui = TestUiBuilder::new().prompt_search().build();
-    search(&mut ui, "h", vec![hit("hello world", 0, 1)]);
+    let mut ui = TestUiBuilder::new().session(SessionCoreConfigBuilder::prompt_search).build();
+    search(&mut ui, "h", vec![prompt_search_hit("hello world", 0, 1)]);
 
     ui.assert_viewport_contains("hello world");
 }
 
 #[test]
 fn prompt_search_no_results_shows_no_matches() {
-    let mut ui = TestUiBuilder::new().prompt_search().build();
+    let mut ui = TestUiBuilder::new().session(SessionCoreConfigBuilder::prompt_search).build();
     search(&mut ui, "zzz", vec![]);
 
     ui.assert_viewport_contains("no matching prompts");
@@ -69,20 +66,20 @@ fn prompt_search_no_results_shows_no_matches() {
 
 #[test]
 fn prompt_search_failure_is_shown_in_the_open_picker() {
-    let mut ui = TestUiBuilder::new().prompt_search().build();
+    let mut ui = TestUiBuilder::new().session(SessionCoreConfigBuilder::prompt_search).dimensions(80, 15).build();
     start_search(&mut ui, "h");
-    ui.deliver_result(search_failed("h", "connection refused"));
+    answer_search(&mut ui, "h", Err(agent_error("connection refused")));
 
-    ui.assert_viewport_contains("error: connection refused");
+    ui.assert_viewport_contains("error: ACP protocol error: connection refused");
     assert!(ui.app().composer().has_prompt_search(), "picker must remain open");
     assert!(!ui.app().exit_requested(), "app must remain interactive");
 }
 
 #[test]
 fn prompt_search_enter_confirms_and_inserts_result() {
-    let mut app = TestUiBuilder::new().prompt_search().build();
+    let mut app = TestUiBuilder::new().session(SessionCoreConfigBuilder::prompt_search).build();
     app.type_text("draft");
-    search(&mut app, "h", vec![hit("hello world", 0, 5)]);
+    search(&mut app, "h", vec![prompt_search_hit("hello world", 0, 5)]);
 
     app.key(key(KeyCode::Enter));
 
@@ -92,7 +89,7 @@ fn prompt_search_enter_confirms_and_inserts_result() {
 
 #[test]
 fn prompt_search_enter_without_selection_restores_draft() {
-    let mut app = TestUiBuilder::new().prompt_search().build();
+    let mut app = TestUiBuilder::new().session(SessionCoreConfigBuilder::prompt_search).build();
     app.type_text("draft");
     search(&mut app, "zzz", vec![]);
 
@@ -104,9 +101,9 @@ fn prompt_search_enter_without_selection_restores_draft() {
 
 #[test]
 fn prompt_search_escape_restores_draft() {
-    let mut app = TestUiBuilder::new().prompt_search().build();
+    let mut app = TestUiBuilder::new().session(SessionCoreConfigBuilder::prompt_search).build();
     app.type_text("original draft");
-    search(&mut app, "h", vec![hit("hello world", 0, 5)]);
+    search(&mut app, "h", vec![prompt_search_hit("hello world", 0, 5)]);
 
     app.key(key(KeyCode::Esc));
 
@@ -116,7 +113,7 @@ fn prompt_search_escape_restores_draft() {
 
 #[test]
 fn prompt_search_escape_restores_multiline_draft() {
-    let mut app = TestUiBuilder::new().prompt_search().build();
+    let mut app = TestUiBuilder::new().session(SessionCoreConfigBuilder::prompt_search).build();
     app.type_text("line1");
     app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT));
     app.type_text("line2");
@@ -130,8 +127,8 @@ fn prompt_search_escape_restores_multiline_draft() {
 
 #[test]
 fn prompt_search_up_and_down_preview_the_selected_result() {
-    let mut ui = TestUiBuilder::new().prompt_search().build();
-    search(&mut ui, "h", vec![hit("hello", 0, 1), hit("hey", 0, 1)]);
+    let mut ui = TestUiBuilder::new().session(SessionCoreConfigBuilder::prompt_search).build();
+    search(&mut ui, "h", vec![prompt_search_hit("hello", 0, 1), prompt_search_hit("hey", 0, 1)]);
     assert_eq!(ui.app().composer().text(), "hello");
 
     ui.key(key(KeyCode::Down));
@@ -143,30 +140,29 @@ fn prompt_search_up_and_down_preview_the_selected_result() {
 
 #[test]
 fn prompt_search_result_replacement_resets_selection_to_first() {
-    let mut app = TestUiBuilder::new().prompt_search().build();
-    search(&mut app, "h", vec![hit("first result", 0, 1), hit("second result", 0, 1)]);
+    let mut app = TestUiBuilder::new().session(SessionCoreConfigBuilder::prompt_search).build();
+    search(&mut app, "h", vec![prompt_search_hit("first result", 0, 1), prompt_search_hit("second result", 0, 1)]);
     app.key(key(KeyCode::Down));
+    app.key(key(KeyCode::Backspace));
+    app.type_text("h");
 
-    app.deliver_result(search_results("h", vec![hit("replacement first", 0, 1), hit("replacement second", 0, 1)]));
+    answer_search(
+        &mut app,
+        "h",
+        Ok(prompt_search_response(
+            "h",
+            vec![prompt_search_hit("replacement first", 0, 1), prompt_search_hit("replacement second", 0, 1)],
+        )),
+    );
     app.key(key(KeyCode::Enter));
 
     assert_eq!(app.app().composer().text(), "replacement first");
 }
 
 #[test]
-fn prompt_search_stale_response_is_ignored() {
-    let mut ui = TestUiBuilder::new().prompt_search().build();
-    search(&mut ui, "he", vec![hit("hello", 0, 2)]);
-    ui.deliver_result(search_results("h", vec![hit("STALE", 0, 1)]));
-
-    ui.assert_viewport_contains("hello");
-    ui.assert_viewport_not_contains("STALE");
-}
-
-#[test]
 fn prompt_search_prefills_selected_result_with_cursor_at_match() {
-    let mut ui = TestUiBuilder::new().prompt_search().build();
-    search(&mut ui, "q", vec![hit("the quick brown fox", 4, 9)]);
+    let mut ui = TestUiBuilder::new().session(SessionCoreConfigBuilder::prompt_search).build();
+    search(&mut ui, "q", vec![prompt_search_hit("the quick brown fox", 4, 9)]);
 
     ui.assert_viewport_contains("the quick brown fox");
 
@@ -176,23 +172,19 @@ fn prompt_search_prefills_selected_result_with_cursor_at_match() {
 
 #[test]
 fn prompt_search_paste_sanitizes_query() {
-    let mut app = TestUiBuilder::new().prompt_search().build();
+    let mut app = TestUiBuilder::new().session(SessionCoreConfigBuilder::prompt_search).build();
     app.key(ctrl('r'));
 
     app.paste("hello\nworld");
 
-    let cmd = app.next_agent_command().unwrap();
-    assert!(
-        matches!(&cmd, AgentCommand::SearchPrompts(params) if params.query == "helloworld"),
-        "expected sanitized query 'helloworld', got {cmd:?}"
-    );
+    assert_eq!(app.agent().search.try_recv().unwrap().query, "helloworld");
 }
 
 #[test]
 fn prompt_search_backspace_to_empty_restores_draft_but_keeps_picker_open() {
-    let mut ui = TestUiBuilder::new().prompt_search().build();
+    let mut ui = TestUiBuilder::new().session(SessionCoreConfigBuilder::prompt_search).build();
     ui.type_text("draft");
-    search(&mut ui, "h", vec![hit("hello", 0, 1)]);
+    search(&mut ui, "h", vec![prompt_search_hit("hello", 0, 1)]);
 
     ui.key(key(KeyCode::Backspace));
 
@@ -204,11 +196,9 @@ fn prompt_search_backspace_to_empty_restores_draft_but_keeps_picker_open() {
 
 #[test]
 fn prompt_search_ctrl_r_does_not_steal_from_modal() {
-    let mut app = TestUiBuilder::new().prompt_search().build();
+    let mut app = TestUiBuilder::new().session(SessionCoreConfigBuilder::prompt_search).build();
 
-    block_on_local(async {
-        with_elicitation(&mut app, form_elicitation("test", "", ElicitationSchema::new())).await;
-    });
+    app.elicit(form_elicitation("test", "", ElicitationSchema::new()));
 
     assert!(app.app().has_modal());
     app.key(ctrl('r'));
@@ -217,7 +207,7 @@ fn prompt_search_ctrl_r_does_not_steal_from_modal() {
 
 #[test]
 fn prompt_search_ctrl_r_does_not_open_during_composer_overlay() {
-    let mut app = TestUiBuilder::new().prompt_search().build();
+    let mut app = TestUiBuilder::new().session(SessionCoreConfigBuilder::prompt_search).build();
     app.key(key(KeyCode::Char('/')));
     assert!(app.app().composer().has_completion());
 
@@ -228,7 +218,7 @@ fn prompt_search_ctrl_r_does_not_open_during_composer_overlay() {
 
 #[test]
 fn prompt_search_unicode_query_is_accepted() {
-    let mut ui = TestUiBuilder::new().prompt_search().build();
+    let mut ui = TestUiBuilder::new().session(SessionCoreConfigBuilder::prompt_search).build();
     start_search(&mut ui, "ñ");
 
     ui.assert_viewport_contains("history search: ñ");
@@ -236,13 +226,13 @@ fn prompt_search_unicode_query_is_accepted() {
 
 #[test]
 fn prompt_search_rows_truncate_prompt_and_show_cwd_basename() {
-    let mut ui = TestUiBuilder::new().prompt_search().build();
+    let mut ui = TestUiBuilder::new().session(SessionCoreConfigBuilder::prompt_search).build();
     search(
         &mut ui,
         "quick",
         vec![PromptSearchResult {
             cwd: "/some/deeply/nested/project/repo-name".into(),
-            ..hit("the quick brown fox jumps over the lazy dog", 4, 9)
+            ..prompt_search_hit("the quick brown fox jumps over the lazy dog", 4, 9)
         }],
     );
 
@@ -252,27 +242,20 @@ fn prompt_search_rows_truncate_prompt_and_show_cwd_basename() {
 
 #[test]
 fn prompt_search_query_editing_triggers_multiple_searches() {
-    let mut app = TestUiBuilder::new().prompt_search().build();
+    let mut app = TestUiBuilder::new().session(SessionCoreConfigBuilder::prompt_search).build();
     app.key(ctrl('r'));
     app.type_text("ab");
 
-    let cmd1 = app.next_agent_command().unwrap();
-    let cmd2 = app.next_agent_command().unwrap();
-    assert!(
-        matches!(&cmd1, AgentCommand::SearchPrompts(params) if params.query == "a"),
-        "first search should be for 'a', got {cmd1:?}"
-    );
-    assert!(
-        matches!(&cmd2, AgentCommand::SearchPrompts(params) if params.query == "ab"),
-        "second search should be for 'ab', got {cmd2:?}"
-    );
+    let queries: Vec<_> =
+        std::iter::from_fn(|| app.agent().search.try_recv().ok()).map(|params| params.query).collect();
+    assert_eq!(queries, ["a", "ab"]);
 }
 
 #[test]
 fn prompt_search_enter_preserves_cursor_at_match_end() {
-    let mut app = TestUiBuilder::new().prompt_search().build();
+    let mut app = TestUiBuilder::new().session(SessionCoreConfigBuilder::prompt_search).build();
     app.type_text("draft");
-    search(&mut app, "q", vec![hit("the quick brown fox", 4, 9)]);
+    search(&mut app, "q", vec![prompt_search_hit("the quick brown fox", 4, 9)]);
 
     app.key(key(KeyCode::Enter));
 
@@ -284,8 +267,8 @@ fn prompt_search_enter_preserves_cursor_at_match_end() {
 
 #[test]
 fn prompt_search_enter_preserves_cursor_after_manual_navigation() {
-    let mut app = TestUiBuilder::new().prompt_search().build();
-    search(&mut app, "h", vec![hit("hello", 0, 1), hit("hi there", 0, 1)]);
+    let mut app = TestUiBuilder::new().session(SessionCoreConfigBuilder::prompt_search).build();
+    search(&mut app, "h", vec![prompt_search_hit("hello", 0, 1), prompt_search_hit("hi there", 0, 1)]);
 
     app.key(key(KeyCode::Down));
     app.key(key(KeyCode::Enter));
@@ -298,7 +281,7 @@ fn prompt_search_enter_preserves_cursor_after_manual_navigation() {
 
 #[test]
 fn prompt_search_identical_repeated_query_accepts_any_matching_response() {
-    let mut ui = TestUiBuilder::new().prompt_search().build();
+    let mut ui = TestUiBuilder::new().session(SessionCoreConfigBuilder::prompt_search).build();
     ui.key(ctrl('r'));
 
     // Search for "xy", clear it, and type the identical query again. A response
@@ -309,17 +292,7 @@ fn prompt_search_identical_repeated_query_accepts_any_matching_response() {
     ui.key(key(KeyCode::Backspace));
     ui.type_text("xy");
 
-    ui.deliver_result(search_results("xy", vec![hit("xy history hit", 0, 2)]));
+    answer_search(&mut ui, "xy", Ok(prompt_search_response("xy", vec![prompt_search_hit("xy history hit", 0, 2)])));
 
     ui.assert_viewport_contains("xy history hit");
-}
-
-#[test]
-fn prompt_search_stale_failure_must_not_overwrite_newer_success() {
-    let mut ui = TestUiBuilder::new().prompt_search().build();
-    search(&mut ui, "xy", vec![hit("fresh result for xy", 0, 2)]);
-    ui.deliver_result(search_failed("x", "stale error"));
-
-    ui.assert_viewport_contains("fresh result for xy");
-    ui.assert_viewport_not_contains("stale error");
 }

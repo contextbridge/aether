@@ -34,8 +34,6 @@ enum MainError {
     #[error("{0}")]
     Mcp(#[from] McpCommandError),
     #[error("{0}")]
-    Lspd(#[from] aether_lspd::LspdRunError),
-    #[error("{0}")]
     Tui(#[from] wisp::error::AppError),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
@@ -71,12 +69,12 @@ enum Command {
     /// Manage Aether settings
     #[command(subcommand)]
     Settings(SettingsCommand),
-    /// Start the LSP daemon (used internally)
-    #[command(hide = true)]
-    Lspd(aether_lspd::LspdArgs),
 }
 
 fn main() -> ExitCode {
+    if let Some(code) = clankerdiff_lspd::run_if_requested() {
+        return code;
+    }
     aws_lc_rs::default_provider().install_default().expect("failed to install the Rustls AWS-LC crypto provider");
 
     let cli = Cli::parse();
@@ -100,8 +98,6 @@ fn main() -> ExitCode {
         Some(Command::Settings(SettingsCommand::Init(args))) => {
             success(rt.block_on(run_init(args.into())).map(|outcome| print_next_steps(&outcome)))
         }
-
-        Some(Command::Lspd(args)) => success(aether_lspd::run_lspd(args)),
 
         None => rt.block_on(run_default_command()),
     };

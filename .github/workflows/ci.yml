@@ -41,18 +41,19 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev mold
+      - uses: $/.github/actions/setup-workspace
+        with:
+          extra-packages: mold
       - uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # Six jobs each saving a cache per push put the repo permanently over
           # GitHub's 10 GiB limit, so every run raced eviction. PRs restore only.
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Build aether-lspd
-        run: cargo build -p aether-lspd
       - name: Clippy check
         run: just lint
+      - name: Desktop style check
+        run: just desktop-style-check
 
   test:
     name: Test
@@ -65,14 +66,13 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev mold
+      - uses: $/.github/actions/setup-workspace
+        with:
+          extra-packages: mold
       - uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Build aether-lspd
-        run: cargo build -p aether-lspd
       - name: Run tests
         run: just test
 
@@ -87,8 +87,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev mold
+      - uses: $/.github/actions/setup-workspace
+        with:
+          extra-packages: mold
       - uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
@@ -146,14 +147,13 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev mold
+      - uses: $/.github/actions/setup-workspace
+        with:
+          extra-packages: mold
       - uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Build aether-lspd
-        run: cargo build -p aether-lspd
       - name: Check documentation
         run: just doc-check
 

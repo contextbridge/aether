@@ -43,8 +43,7 @@ fn find_nested_symbol_line(symbols: &[DocumentSymbol], symbol: &str) -> Option<u
     })
 }
 
-/// Re-export from `aether_lspd` for convenience.
-pub use aether_lspd::uri_to_path;
+pub use clankerdiff_lspd::uri_to_path;
 
 /// Find the first word-boundary match and return its byte offset.
 ///
@@ -103,8 +102,7 @@ pub fn find_symbol_column(content: &str, symbol: &str, line: u32) -> Result<u32,
         .ok_or_else(|| LspError::SymbolNotFound(format!("Symbol '{symbol}' not found on line {line}")))
 }
 
-/// Re-export from `aether_lspd` for convenience.
-pub use aether_lspd::path_to_uri;
+pub use clankerdiff_lspd::path_to_uri;
 
 #[cfg(test)]
 mod tests {

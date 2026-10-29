@@ -4,8 +4,10 @@ mod tool_calls;
 mod turn;
 
 pub use activity::Activity;
-pub use items::{ConversationContent, ConversationId, ConversationItem, ConversationItemId, ItemState, Revision};
-pub use tool_calls::{SubAgent, ToolCall, ToolStatus};
+pub use items::{
+    ConversationContent, ConversationId, ConversationItem, ConversationItemId, ItemState, Notice, NoticeLevel, Revision,
+};
+pub use tool_calls::{SubAgent, ToolCall, ToolStatus, diff_change_label};
 pub use turn::{TurnFinished, TurnPhase};
 
 use crate::client::AcpEvent;
@@ -30,6 +32,10 @@ pub struct Conversation {
     compactions: HashSet<acp::CompactionId>,
     context_usage: Option<acp::UsageUpdate>,
     plan: Option<acp::PlanItems>,
+}
+
+pub fn is_plan_entry_finished(status: &acp::PlanEntryStatus) -> bool {
+    matches!(status, acp::PlanEntryStatus::Completed | acp::PlanEntryStatus::Cancelled)
 }
 
 impl Conversation {
@@ -86,8 +92,8 @@ impl Conversation {
         }
     }
 
-    pub fn append_notice(&mut self, text: impl Into<String>) -> ConversationItemId {
-        self.push(ItemState::Sealed, ConversationContent::Notice(text.into()))
+    pub fn append_notice(&mut self, level: NoticeLevel, text: impl Into<String>) -> ConversationItemId {
+        self.push(ItemState::Sealed, ConversationContent::Notice(Notice { level, text: text.into() }))
     }
 
     pub fn session_id(&self) -> &acp::SessionId {
@@ -115,7 +121,7 @@ impl Conversation {
     }
 
     pub fn activity(&self) -> Activity {
-        self.activity
+        if self.compactions.is_empty() { self.activity } else { Activity::Compacting }
     }
 
     pub fn plan(&self) -> Option<&acp::PlanItems> {
@@ -124,10 +130,6 @@ impl Conversation {
 
     pub fn context_usage(&self) -> Option<&acp::UsageUpdate> {
         self.context_usage.as_ref()
-    }
-
-    pub fn is_compacting(&self) -> bool {
-        !self.compactions.is_empty()
     }
 
     pub fn any_running(&self) -> bool {

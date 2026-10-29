@@ -14,6 +14,14 @@ pub enum JsonFileError {
     Json { path: PathBuf, source: serde_json::Error },
 }
 
+impl JsonFileError {
+    pub fn path(&self) -> &Path {
+        match self {
+            Self::Io { path, .. } | Self::Json { path, .. } => path,
+        }
+    }
+}
+
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let parent = create_parent_dir(path)?;
     let mut temp = NamedTempFile::new_in(parent)?;

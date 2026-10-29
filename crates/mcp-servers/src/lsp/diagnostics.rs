@@ -64,7 +64,7 @@ impl FormattedDiagnostic {
         });
 
         Self {
-            file: uri_to_path(uri),
+            file: uri_to_path(uri).display().to_string(),
             line: diagnostic.range.start.line + 1,
             column: diagnostic.range.start.character + 1,
             severity: diagnostic.severity.into(),

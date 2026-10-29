@@ -1,25 +1,31 @@
-use crate::attachment::PromptAttachment;
+use crate::theme::Theme;
 use crate::view::filterable_list::FilterableList;
-use crate::request::RequestId;
 use crate::view::list_view::ListView;
 use crate::view::selection::SelectionState;
-use crate::theme::Theme;
+use acp_utils::notifications::AetherCapabilities;
+use client_core::composer::attachment::PromptAttachment;
+use client_core::session_core::CommandEntry;
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CommandEntry {
-    pub name: String,
-    pub description: String,
-    pub has_input: bool,
-    pub hint: Option<String>,
-    pub builtin: bool,
+pub enum CompletionEntry {
+    Command(SlashCommand),
+    File(PromptAttachment),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CompletionEntry {
-    Command(CommandEntry),
-    File(PromptAttachment),
+pub enum SlashCommand {
+    Builtin(Builtin),
+    Agent(CommandEntry),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Builtin {
+    Clear,
+    Resume,
+    Settings,
+    Move,
 }
 
 /// The inline completion list the composer shows after a `/` or `@` trigger.
@@ -28,30 +34,26 @@ pub struct CompletionOverlay {
     trigger: char,
     entries: FilterableList<CompletionEntry>,
     empty_message: &'static str,
-    /// The file-index request this overlay is waiting on, if any.
-    pending_index: Option<RequestId>,
+    indexing: bool,
 }
 
 impl CompletionOverlay {
-    pub fn command(entries: Vec<CommandEntry>) -> Self {
+    pub fn command(entries: Vec<SlashCommand>) -> Self {
         Self::new('/', entries.into_iter().map(CompletionEntry::Command).collect(), "no matching commands")
     }
 
     /// An empty file list, waiting on the walk of the working tree. Entries
     /// arrive later via [`CompletionOverlay::set_files`].
-    pub fn file(request_id: RequestId) -> Self {
-        let mut overlay = Self::new('@', Vec::new(), "indexing files…");
-        overlay.pending_index = Some(request_id);
-        overlay
+    pub fn file() -> Self {
+        Self { indexing: true, ..Self::new('@', Vec::new(), "indexing files…") }
     }
 
     /// Fills in the results of the walk this overlay is waiting on, ignoring
-    /// anything that arrives for a request it did not make.
-    pub fn set_files(&mut self, request_id: RequestId, files: Vec<PromptAttachment>) {
-        if self.pending_index != Some(request_id) {
+    pub fn set_files(&mut self, files: Vec<PromptAttachment>) {
+        if !self.indexing {
             return;
         }
-        self.pending_index = None;
+        self.indexing = false;
         self.empty_message = "no matching files";
         let query = self.entries.query().to_string();
         self.entries =
@@ -77,7 +79,7 @@ impl CompletionOverlay {
         &mut self.entries
     }
 
-    pub fn selected_command(&self) -> Option<CommandEntry> {
+    pub fn selected_command(&self) -> Option<SlashCommand> {
         match self.entries.selected_entry()? {
             CompletionEntry::Command(command) => Some(command.clone()),
             CompletionEntry::File(_) => None,
@@ -99,12 +101,10 @@ impl CompletionOverlay {
 
     pub fn view<'a>(&'a mut self, theme: &'a Theme) -> (ListView<'a>, &'a mut SelectionState) {
         let empty_message = self.empty_message;
-        let (view, selection) = self
-            .entries
-            .view(theme, |entry| Line::styled(format!("  {}", entry.label()), theme.text_secondary));
-        let view = view
-            .empty_message(empty_message)
-            .block(Block::new().borders(Borders::TOP).border_style(theme.muted));
+        let (view, selection) =
+            self.entries.view(theme, |entry| Line::styled(format!("  {}", entry.label()), theme.text_secondary));
+        let view =
+            view.empty_message(empty_message).block(Block::new().borders(Borders::TOP).border_style(theme.muted));
         (view, selection)
     }
 
@@ -113,7 +113,58 @@ impl CompletionOverlay {
             trigger,
             entries: FilterableList::new(entries, CompletionEntry::match_key),
             empty_message,
-            pending_index: None,
+            indexing: false,
+        }
+    }
+}
+
+impl SlashCommand {
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Builtin(builtin) => builtin.name(),
+            Self::Agent(command) => &command.name,
+        }
+    }
+
+    fn description(&self) -> &str {
+        match self {
+            Self::Builtin(builtin) => builtin.description(),
+            Self::Agent(command) => &command.description,
+        }
+    }
+
+    fn hint(&self) -> Option<&str> {
+        match self {
+            Self::Builtin(_) => None,
+            Self::Agent(command) => command.hint.as_deref(),
+        }
+    }
+}
+
+impl Builtin {
+    pub fn offered(capabilities: &AetherCapabilities) -> Vec<Self> {
+        let mut builtins = vec![Self::Clear, Self::Resume, Self::Settings];
+        if capabilities.workspace_move {
+            builtins.push(Self::Move);
+        }
+        builtins
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Clear => "clear",
+            Self::Resume => "resume",
+            Self::Settings => "settings",
+            Self::Move => "move",
+        }
+    }
+
+    fn description(self) -> &'static str {
+        match self {
+            Self::Clear => "Start a new session",
+            Self::Resume => "Resume a previous session",
+            Self::Settings => "Configure agent options",
+            Self::Move => "Move session to another workspace",
         }
     }
 }
@@ -122,8 +173,8 @@ impl CompletionEntry {
     fn label(&self) -> String {
         match self {
             Self::Command(command) => {
-                let hint = command.hint.as_deref().map_or_else(String::new, |hint| format!("  [{hint}]"));
-                format!("/{:<16}  {}{hint}", command.name, command.description)
+                let hint = command.hint().map_or_else(String::new, |hint| format!("  [{hint}]"));
+                format!("/{:<16}  {}{hint}", command.name(), command.description())
             }
             Self::File(file) => file.display_name.clone(),
         }
@@ -131,7 +182,7 @@ impl CompletionEntry {
 
     fn match_key(&self) -> String {
         match self {
-            Self::Command(command) => format!("{} {}", command.name, command.description),
+            Self::Command(command) => format!("{} {}", command.name(), command.description()),
             Self::File(file) => file.display_name.clone(),
         }
     }

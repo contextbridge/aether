@@ -227,7 +227,7 @@ fn streamed_thought_preserves_content_without_rendering_it() {
         ui.draw();
 
         assert_eq!(
-            ui.app().conversation_items().last().and_then(ConversationItem::text).as_deref(),
+            ui.app().core().conversation().items().last().and_then(ConversationItem::text).as_deref(),
             Some(seen.as_str())
         );
         ui.assert_history_not_contains("Considering step");

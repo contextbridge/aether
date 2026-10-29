@@ -7,6 +7,9 @@ use unicode_width::UnicodeWidthStr;
 
 use super::tool_view::tool_lines;
 use acp_utils::conversation::{ConversationContent, ConversationItem};
+use std::borrow::Cow;
+
+const NOTICE_PREFIX: &str = "[wisp]";
 
 /// Which of the four transcript content kinds an item holds, driving the blank
 /// line inserted between runs of different kinds.
@@ -33,6 +36,7 @@ pub(crate) fn item_lines(
             return tool_lines(tool, content_width, padding, spinner_tick, theme, highlighter);
         }
         ConversationContent::Thought(_) => return Vec::new(),
+        ConversationContent::Notice(notice) => Cow::Owned(format!("{NOTICE_PREFIX} {}", notice.text)),
         _ => item.text().unwrap_or_default(),
     };
     if text.is_empty() {

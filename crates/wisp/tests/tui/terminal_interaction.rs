@@ -6,39 +6,43 @@ const MODELS: &[(&str, &str)] = &[("a", "Alpha"), ("b", "Beta")];
 
 #[test]
 fn remote_checkout_actions_are_blocked_without_losing_text() {
-    let mut ui = TestUiBuilder::new().remote_workspace().dimensions(120, 24).build();
+    let mut ui = TestUiBuilder::new().session(SessionCoreConfigBuilder::remote_workspace).dimensions(120, 24).build();
     ui.type_text("draft");
     ui.key(key(KeyCode::Char('@')));
     assert!(!ui.app().full_screen_active());
     assert!(!ui.app().composer().has_completion());
-    assert!(ui.take_commands().is_empty());
     ui.assert_conversation_contains("unavailable for remote workspaces");
     assert!(ui.app().composer().text().starts_with("draft"));
 }
 
 #[test]
 fn remote_git_review_opens() {
-    use wisp::command::GitReviewCommand;
-    let mut ui = TestUiBuilder::new().remote_workspace().dimensions(120, 24).build();
+    let git = FakeGit::new("/workspace").with_untracked("remote.rs", "fn remote() {}\n");
+    let mut ui =
+        TestUiBuilder::new().session(SessionCoreConfigBuilder::remote_workspace).git(git).dimensions(120, 24).build();
     ui.key(ctrl('g'));
-    assert_eq!(ui.count_commands(|command| matches!(command, Command::GitReview(GitReviewCommand::Open { .. }))), 1);
-    ui.settle_tasks();
-    ui.assert_viewport_contains("Git Diff");
+
+    assert!(ui.app().core().git_review().is_some_and(|review| review.snapshot.is_some()));
+    ui.assert_viewport_contains("remote.rs");
 }
 
 #[test]
 fn remote_pasted_paths_remain_text_and_settings_remain_local() {
-    let mut ui = TestUiBuilder::new().remote_workspace().dimensions(120, 24).build();
+    let mut ui = TestUiBuilder::new()
+        .session(SessionCoreConfigBuilder::remote_workspace)
+        .themes(&["local-theme.json"])
+        .dimensions(120, 24)
+        .build();
     ui.terminal_event(crossterm::event::Event::Paste("/server/screenshot.png".into()));
     assert_eq!(ui.app().composer().text(), "/server/screenshot.png");
     ui.key(key(KeyCode::Enter));
-    assert!(
-        matches!(ui.next_agent_command(), Some(AgentCommand::Prompt { text, .. }) if text == "/server/screenshot.png")
-    );
+    assert_eq!(sent_prompts(&mut ui), ["/server/screenshot.png"]);
     ui.complete_prompt(acp::StopReason::EndTurn);
     ui.run_command("/settings");
     assert!(ui.app().has_modal());
-    assert_eq!(ui.count_commands(|command| matches!(command, Command::Filesystem(FilesystemCommand::ListThemes))), 1);
+    ui.key(key(KeyCode::Enter));
+    ui.type_text("local-theme");
+    ui.assert_viewport_contains("local-theme");
 }
 
 mod picker_click {
@@ -68,22 +72,33 @@ mod picker_click {
     }
 
     #[test]
+    fn session_picker_hover_leaves_the_selection_alone() {
+        let mut ui = TestUi::with_dimensions(80, 24);
+        ui.open_session_picker(vec![
+            session_info("aaa", "/tmp", "Alpha Project", ""),
+            session_info("bbb", "/tmp", "Beta Project", ""),
+        ]);
+        ui.draw();
+        ui.terminal_event(hover(2, 2));
+
+        ui.key(key(KeyCode::Enter));
+        assert_eq!(resumed_session(&mut ui).as_deref(), Some("aaa"));
+    }
+
+    #[test]
     fn session_picker_click_requests_the_clicked_session_preview() {
-        let mut ui = TestUiBuilder::new().session_preview().dimensions(120, 24).build();
+        let mut ui =
+            TestUiBuilder::new().session(SessionCoreConfigBuilder::session_preview).dimensions(120, 24).build();
         ui.open_session_picker(vec![
             session_info("sess-1", "/tmp/one", "Session One", ""),
             session_info("sess-2", "/tmp/two", "Session Two", ""),
         ]);
-        assert!(matches!(ui.next_agent_command(), Some(AgentCommand::SessionPreview { .. })));
+        assert_eq!(ui.held::<Preview>().0.session_id, "sess-1");
 
         let row = ui.viewport_row("Session Two").expect("second session row");
         ui.terminal_event(click(2, row));
 
-        let command = ui.next_agent_command();
-        assert!(
-            matches!(&command, Some(AgentCommand::SessionPreview { session_id }) if session_id == "sess-2"),
-            "expected a preview of the clicked session, got {command:?}"
-        );
+        assert_eq!(ui.held::<Preview>().0.session_id, "sess-2", "the clicked session is previewed");
     }
 
     #[test]
@@ -97,10 +112,12 @@ mod picker_click {
         );
         let chat = model_choice("deepseek:chat", "DeepSeek / Chat", levels(&[ReasoningEffort::Low]));
         let mut ui = TestUiBuilder::new()
-            .config_options(vec![
-                model_picker("anthropic:opus", vec![opus, chat]),
-                reasoning_option("high", &["low", "medium", "high"]),
-            ])
+            .session(|session| {
+                session.config_options(vec![
+                    model_picker("anthropic:opus", vec![opus, chat]),
+                    reasoning_option("high", &["low", "medium", "high"]),
+                ])
+            })
             .dimensions(80, 24)
             .build();
         open_settings_row(&mut ui, "Model");
@@ -115,7 +132,8 @@ mod picker_click {
     #[test]
     fn workspace_picker_click_moves_to_the_visible_row_under_the_pointer() {
         for (filter, row, moved) in [("", 2, Some("/tmp/beta")), ("other", 1, Some("/tmp/other")), ("", 0, None)] {
-            let mut ui = TestUiBuilder::new().workspace_move().dimensions(80, 24).build();
+            let mut ui =
+                TestUiBuilder::new().session(SessionCoreConfigBuilder::workspace_move).dimensions(80, 24).build();
             let paths = ["/tmp/alpha", "/tmp/beta", "/tmp/other"];
             open_workspace_picker(&mut ui, paths.map(|path| workspace_entry(path, false)).to_vec());
             ui.type_text(filter);
@@ -162,20 +180,20 @@ fn mouse_owning_surfaces_scroll_their_own_selection() {
             |ui| ui.type_text("/"),
             |ui| {
                 ui.key(key(KeyCode::Tab));
-                assert!(matches!(ui.next_agent_command(), Some(AgentCommand::ListSessions)));
+                assert!(ui.try_held::<ListSessions>().is_some());
             },
         ),
         (
             "prompt search",
-            |ui| search(ui, "h", vec![hit("hello", 0, 1), hit("hey", 0, 1)]),
+            |ui| search(ui, "h", vec![prompt_search_hit("hello", 0, 1), prompt_search_hit("hey", 0, 1)]),
             |ui| assert_eq!(ui.app().composer().text(), "hey"),
         ),
     ];
     let build = || {
         TestUiBuilder::new()
-            .config_options(vec![select("model", "Model", "a", MODELS)])
-            .workspace_move()
-            .prompt_search()
+            .session(|session| {
+                session.config_options(vec![select("model", "Model", "a", MODELS)]).workspace_move().prompt_search()
+            })
             .dimensions(80, 24)
             .build()
     };
@@ -193,7 +211,7 @@ fn mouse_owning_surfaces_scroll_their_own_selection() {
         for scroll in [scroll_down(2, 2), scroll_down(2, 2), scroll_up(2, 2)] {
             ui.terminal_event(scroll);
         }
-        assert_eq!(bells(&mut ui), 0, "{surface}");
+        assert_eq!(ui.bells(), 0, "{surface}");
         assert!(ui.app().needs_mouse_capture(), "{surface} should stay open");
         assert_second_selected(&mut ui);
     }
@@ -224,7 +242,7 @@ fn bell_rings_once_when_a_submitted_turn_ends_normally() {
         (
             "prompt error",
             |ui| {
-                ui.reject_prompts(PromptRejection::Failed("internal error".to_string()));
+                ui.refuse_prompts(agent_error("internal error"));
                 ui.submit("hello");
             },
             0,
@@ -242,8 +260,7 @@ fn bell_rings_once_when_a_submitted_turn_ends_normally() {
     for (scenario, run, expected) in scenarios {
         let mut ui = TestUi::new();
         run(&mut ui);
-        assert_eq!(bells(&mut ui), expected, "{scenario}");
-        assert_eq!(bells(&mut ui), 0, "{scenario} must not ring again");
+        assert_eq!(ui.bells(), expected, "{scenario}");
     }
 }
 
@@ -287,7 +304,10 @@ mod event_routing {
             servers: Vec<McpServerStatusEntry>,
             methods: Vec<AuthMethod>,
         ) -> TestUi {
-            let mut ui = TestUiBuilder::new().config_options(options).auth_methods(methods).dimensions(80, 24).build();
+            let mut ui = TestUiBuilder::new()
+                .session(|session| session.config_options(options).auth_methods(methods))
+                .dimensions(80, 24)
+                .build();
             ui.acp_event(mcp_notification(servers));
             ui
         }
@@ -308,90 +328,80 @@ mod event_routing {
         let mut ui = settings_app(vec![], vec![], methods);
         open_settings_row(&mut ui, "Provider Logins");
         ui.click_text("Codex");
-        assert!(matches!(
-            ui.next_agent_command(),
-            Some(AgentCommand::Authenticate { method_id }) if method_id == "codex"
-        ));
+        assert_eq!(ui.held::<Login>().0.method_id.0.as_ref(), "codex");
     }
 
     #[test]
     fn form_modal_scroll_answers_the_choice_in_focus() {
-        block_on_local(async {
-            let mut ui = TestUi::with_dimensions(80, 24);
-            let choices =
-                StringPropertySchema::new().enum_values(vec!["first".into(), "second".into(), "third".into()]);
-            let schema = ElicitationSchema::new().property("choice", choices, false);
-            let response_rx = with_elicitation(&mut ui, form_elicitation("test", "Pick one", schema)).await;
-            assert!(ui.app().needs_mouse_capture());
+        let mut ui = TestUi::with_dimensions(80, 24);
+        let choices = StringPropertySchema::new().enum_values(vec!["first".into(), "second".into(), "third".into()]);
+        let schema = ElicitationSchema::new().property("choice", choices, false);
+        let response_rx = ui.elicit(form_elicitation("test", "Pick one", schema));
+        assert!(ui.app().needs_mouse_capture());
 
-            ui.draw();
-            for scroll in [scroll_down(2, 3), scroll_down(2, 3), scroll_up(2, 3)] {
-                ui.terminal_event(scroll);
-            }
-            ui.key(key(KeyCode::Enter));
+        ui.draw();
+        for scroll in [scroll_down(2, 3), scroll_down(2, 3), scroll_up(2, 3)] {
+            ui.terminal_event(scroll);
+        }
+        ui.key(key(KeyCode::Enter));
 
-            let response = response_rx.await.unwrap();
-            assert_eq!(accepted_content(&response), serde_json::json!({ "choice": "second" }));
-        });
+        let response = ui.answer_to(response_rx);
+        assert_eq!(accepted_content(&response), serde_json::json!({ "choice": "second" }));
     }
 
     /// A survey of many questions walks one page at a time; every question
     /// must be reachable, not just the ones that fit the first screen.
     #[test]
     fn form_modal_walks_to_the_last_question() {
-        block_on_local(async {
-            const QUESTIONS: usize = 40;
+        const QUESTIONS: usize = 40;
 
-            let mut ui = TestUi::with_dimensions(80, 24);
-            let mut schema = ElicitationSchema::new();
-            for index in 0..QUESTIONS {
-                schema = schema.property(format!("question_{index:02}"), BooleanPropertySchema::new(), false);
-            }
+        let mut ui = TestUi::with_dimensions(80, 24);
+        let mut schema = ElicitationSchema::new();
+        for index in 0..QUESTIONS {
+            schema = schema.property(format!("question_{index:02}"), BooleanPropertySchema::new(), false);
+        }
 
-            with_elicitation(&mut ui, form_elicitation("test", "Pick some", schema)).await;
+        ui.elicit(form_elicitation("test", "Pick some", schema));
 
-            ui.draw();
-            let shows = |ui: &mut TestUi, needle: &str| buffer_text(ui.backend().buffer()).contains(needle);
-            assert!(shows(&mut ui, "question_00"), "the first question starts on screen");
-            assert!(!shows(&mut ui, "question_39"), "the last question starts on a later page");
+        ui.draw();
+        let shows = |ui: &mut TestUi, needle: &str| buffer_text(ui.backend().buffer()).contains(needle);
+        assert!(shows(&mut ui, "question_00"), "the first question starts on screen");
+        assert!(!shows(&mut ui, "question_39"), "the last question starts on a later page");
 
-            for _ in 1..QUESTIONS {
-                ui.key(key(KeyCode::Tab));
-            }
-            ui.draw();
+        for _ in 1..QUESTIONS {
+            ui.key(key(KeyCode::Tab));
+        }
+        ui.draw();
 
-            assert!(shows(&mut ui, "question_39"), "Tab reaches the last question");
-            assert!(shows(&mut ui, "✓"), "the review tab is reachable at the end of the strip");
-        });
+        assert!(shows(&mut ui, "question_39"), "Tab reaches the last question");
+        assert!(shows(&mut ui, "✓"), "the review tab is reachable at the end of the strip");
     }
 
     /// A page with more options than the modal is tall has to scroll, or the
     /// options below the fold can never be reached.
     #[test]
     fn form_modal_scrolls_the_focused_option_into_view() {
-        block_on_local(async {
-            const OPTIONS: usize = 40;
+        const OPTIONS: usize = 40;
 
-            let values = (0..OPTIONS).map(|index| format!("option_{index:02}")).collect::<Vec<_>>();
-            let schema =
-                ElicitationSchema::new().property("choice", StringPropertySchema::new().enum_values(values), false);
+        let values = (0..OPTIONS).map(|index| format!("option_{index:02}")).collect::<Vec<_>>();
+        let schema =
+            ElicitationSchema::new().property("choice", StringPropertySchema::new().enum_values(values), false);
 
-            let mut ui = TestUi::with_dimensions(80, 24);
-            with_elicitation(&mut ui, form_elicitation("test", "Pick one", schema)).await;
+        let mut ui = TestUi::with_dimensions(80, 24);
+        ui.elicit(form_elicitation("test", "Pick one", schema));
 
-            ui.draw();
-            let shows = |ui: &mut TestUi, needle: &str| buffer_text(ui.backend().buffer()).contains(needle);
-            assert!(shows(&mut ui, "option_00"), "the first option starts on screen");
-            assert!(!shows(&mut ui, "option_39"), "the last option starts below the fold");
+        ui.draw();
+        let shows = |ui: &mut TestUi, needle: &str| buffer_text(ui.backend().buffer()).contains(needle);
+        assert!(shows(&mut ui, "option_00"), "the first option starts on screen");
+        assert!(!shows(&mut ui, "option_39"), "the last option starts below the fold");
 
-            for _ in 1..OPTIONS {
-                ui.key(key(KeyCode::Down));
-            }
-            ui.draw();
+        for _ in 1..OPTIONS {
+            ui.key(key(KeyCode::Down));
+        }
+        ui.draw();
 
-            assert!(shows(&mut ui, "option_39"), "the focused option scrolled into view");
-            assert!(!shows(&mut ui, "option_00"), "the options above it scrolled away");
-        });
+        assert!(shows(&mut ui, "option_39"), "the focused option scrolled into view");
+        assert!(!shows(&mut ui, "option_00"), "the options above it scrolled away");
     }
 
     /// The modal is drawn centred inside the viewport, so its options sit an
@@ -399,78 +409,71 @@ mod event_routing {
     /// pointer rather than one counted from the top of the screen.
     #[test]
     fn form_modal_click_answers_the_option_under_the_pointer() {
-        block_on_local(async {
-            let mut ui = TestUi::with_dimensions(80, 24);
-            let schema = ElicitationSchema::new()
-                .property("alpha", BooleanPropertySchema::new().default_value(false), false)
-                .property("bravo", BooleanPropertySchema::new().default_value(false), false);
+        let mut ui = TestUi::with_dimensions(80, 24);
+        let schema = ElicitationSchema::new()
+            .property("alpha", BooleanPropertySchema::new().default_value(false), false)
+            .property("bravo", BooleanPropertySchema::new().default_value(false), false);
 
-            let response_rx = with_elicitation(&mut ui, form_elicitation("test", "Pick one", schema)).await;
+        let response_rx = ui.elicit(form_elicitation("test", "Pick one", schema));
 
-            ui.draw();
+        ui.draw();
 
-            let screen = buffer_text(ui.backend().buffer());
-            let yes =
-                screen.lines().position(|row| row.contains("1  Yes")).expect("the first option should be on screen");
-            ui.terminal_event(click(20, u16::try_from(yes).unwrap()));
+        let screen = buffer_text(ui.backend().buffer());
+        let yes = screen.lines().position(|row| row.contains("1  Yes")).expect("the first option should be on screen");
+        ui.terminal_event(click(20, u16::try_from(yes).unwrap()));
 
-            // Two questions make this a wizard: Enter walks alpha → bravo →
-            // review, and only on the review page does it submit.
-            ui.key(key(KeyCode::Enter));
-            ui.key(key(KeyCode::Enter));
-            ui.key(key(KeyCode::Enter));
+        ui.key(key(KeyCode::Enter));
+        ui.key(key(KeyCode::Enter));
+        ui.key(key(KeyCode::Enter));
 
-            let response = response_rx.await.unwrap();
-            assert_eq!(accepted_content(&response), serde_json::json!({ "alpha": true, "bravo": false }));
-        });
+        let response = ui.answer_to(response_rx);
+        assert_eq!(accepted_content(&response), serde_json::json!({ "alpha": true, "bravo": false }));
     }
 
     /// An option is as many rows as it was drawn on, so clicking a wrapped
     /// continuation row hits the option rather than falling between two.
     #[test]
     fn form_modal_click_hits_every_row_an_option_occupies() {
-        block_on_local(async {
-            let mut ui = TestUi::with_dimensions(80, 24);
-            let schema = ElicitationSchema::new().property(
-                "choice",
-                StringPropertySchema::new().enum_values(vec![
-                    "a-very-long-option-title-that-certainly-wraps-onto-a-second-row".to_string(),
-                    "short".to_string(),
-                ]),
-                false,
-            );
+        let mut ui = TestUi::with_dimensions(80, 24);
+        let schema = ElicitationSchema::new().property(
+            "choice",
+            StringPropertySchema::new().enum_values(vec![
+                "a-very-long-option-title-that-certainly-wraps-onto-a-second-row".to_string(),
+                "short".to_string(),
+            ]),
+            false,
+        );
 
-            let response_rx = with_elicitation(&mut ui, form_elicitation("test", "Pick one", schema)).await;
+        let response_rx = ui.elicit(form_elicitation("test", "Pick one", schema));
 
-            ui.draw();
+        ui.draw();
 
-            let needle = "certainly-wraps";
-            for row in buffer_text(ui.backend().buffer())
-                .lines()
-                .enumerate()
-                .filter(|(_, row)| row.contains(needle) || row.contains("onto-a-second-row"))
-                .map(|(row, _)| row)
-                .collect::<Vec<_>>()
-            {
-                ui.terminal_event(click(20, u16::try_from(row).unwrap()));
-            }
-            ui.key(key(KeyCode::Enter));
+        let needle = "certainly-wraps";
+        for row in buffer_text(ui.backend().buffer())
+            .lines()
+            .enumerate()
+            .filter(|(_, row)| row.contains(needle) || row.contains("onto-a-second-row"))
+            .map(|(row, _)| row)
+            .collect::<Vec<_>>()
+        {
+            ui.terminal_event(click(20, u16::try_from(row).unwrap()));
+        }
+        ui.key(key(KeyCode::Enter));
 
-            let response = response_rx.await.unwrap();
-            assert_eq!(
-                accepted_content(&response),
-                serde_json::json!({
-                    "choice": "a-very-long-option-title-that-certainly-wraps-onto-a-second-row"
-                })
-            );
-        });
+        let response = ui.answer_to(response_rx);
+        assert_eq!(
+            accepted_content(&response),
+            serde_json::json!({
+                "choice": "a-very-long-option-title-that-certainly-wraps-onto-a-second-row"
+            })
+        );
     }
 }
 
 mod screen_mouse {
     use super::*;
+    use clankerdiff_ratatui::diff::FileDiff;
     use ratatui::layout::Rect;
-    use wisp::git_review::FileDiff;
     use wisp::screens::git_diff::GitDiffScreen;
     use wisp::view::input::MouseAction;
 
@@ -486,6 +489,13 @@ mod screen_mouse {
             FileDiff::from_texts("src/lib.rs", "", "pub fn library() {}\n").unwrap(),
             FileDiff::from_texts("Cargo.toml", "old\n", "new\n").unwrap(),
         ])
+    }
+
+    fn position_of(buffer: &Buffer, needle: &str) -> Option<(u16, u16)> {
+        let row = row_containing(buffer, needle)?;
+        let text = row_text(buffer, row);
+        let column = u16::try_from(text[..text.find(needle)?].chars().count()).ok()?;
+        Some((column, row))
     }
 
     fn assert_drawer_focus(buffer: &Buffer, focused: bool) {
@@ -510,7 +520,7 @@ mod screen_mouse {
         let before = render_git_diff(&mut screen, 120, 40);
         assert_drawer_focus(&before, false);
 
-        assert!(screen.on_ui_event(&UiEvent::Mouse(MouseAction::Click, (20, 3))).is_empty());
+        assert!(screen.on_ui_event(&UiEvent::Mouse(MouseAction::Click, (20, 3), KeyModifiers::NONE)).is_empty());
 
         let buffer = render_git_diff(&mut screen, 120, 40);
         assert_drawer_focus(&buffer, true);
@@ -523,7 +533,7 @@ mod screen_mouse {
         let before = render_git_diff(&mut screen, 120, 40);
         assert_drawer_focus(&before, true);
 
-        assert!(screen.on_ui_event(&UiEvent::Mouse(MouseAction::Click, (60, 3))).is_empty());
+        assert!(screen.on_ui_event(&UiEvent::Mouse(MouseAction::Click, (60, 3), KeyModifiers::NONE)).is_empty());
 
         let buffer = render_git_diff(&mut screen, 120, 40);
         assert_drawer_focus(&buffer, false);
@@ -533,13 +543,18 @@ mod screen_mouse {
     fn git_diff_click_narrow_layout_always_patch() {
         let mut screen = open_screen();
 
-        render_git_diff(&mut screen, 60, 40);
+        let before = render_git_diff(&mut screen, 60, 40);
+        let (column, code_row) = position_of(&before, "pub fn library").expect("diff line");
 
-        assert!(screen.on_ui_event(&UiEvent::Mouse(MouseAction::Click, (2, 3))).is_empty());
+        assert!(
+            screen.on_ui_event(&UiEvent::Mouse(MouseAction::Click, (column, code_row), KeyModifiers::NONE)).is_empty()
+        );
+        let selected = render_git_diff(&mut screen, 60, 40);
+        assert!(!buffer_text(&selected).contains("save"), "a click on a line selects it without drafting");
 
-        screen.on_ui_event(&UiEvent::Key(key(KeyCode::Char('c'))));
+        assert!(screen.on_ui_event(&UiEvent::Mouse(MouseAction::Click, (2, code_row), KeyModifiers::NONE)).is_empty());
         let buffer = render_git_diff(&mut screen, 60, 40);
-        assert!(buffer_text(&buffer).contains("save"), "patch focus must allow drafting a comment");
+        assert!(buffer_text(&buffer).contains("save"), "a click in a line's gutter drafts a comment");
     }
 
     #[test]
@@ -549,10 +564,36 @@ mod screen_mouse {
         let before = render_git_diff(&mut screen, 120, 40);
 
         // Click at y=0 (top border) — should be ignored
-        assert!(screen.on_ui_event(&UiEvent::Mouse(MouseAction::Click, (40, 0))).is_empty());
+        assert!(screen.on_ui_event(&UiEvent::Mouse(MouseAction::Click, (40, 0), KeyModifiers::NONE)).is_empty());
 
         let buffer = render_git_diff(&mut screen, 120, 40);
         assert_eq!(buffer, before, "border clicks must not alter selection or focus");
+    }
+
+    #[test]
+    fn git_diff_ctrl_hover_over_a_name_opens_its_definition_card() {
+        let mut screen = git_diff_screen(vec![
+            FileDiff::from_texts("src/main.rs", "", "fn main() {\n    double(1);\n}\n").unwrap(),
+            FileDiff::from_texts("src/lib.rs", "", "pub fn double(value: u32) -> u32 {\n    value * 2\n}\n").unwrap(),
+        ]);
+        let before = render_git_diff(&mut screen, 120, 40);
+        let (column, row) = position_of(&before, "double(1)").expect("call site is visible");
+
+        screen.on_ui_event(&UiEvent::Mouse(MouseAction::Moved, (column, row), KeyModifiers::NONE));
+        let plain = render_git_diff(&mut screen, 120, 40);
+        assert!(
+            !buffer_text(&plain).contains("1 use in this diff"),
+            "a plain hover opens nothing:\n{}",
+            buffer_text(&plain)
+        );
+
+        screen.on_ui_event(&UiEvent::Mouse(MouseAction::Moved, (column + 1, row), KeyModifiers::CONTROL));
+        let held = render_git_diff(&mut screen, 120, 40);
+        assert!(
+            buffer_text(&held).contains("1 use in this diff"),
+            "a ctrl hover opens the card:\n{}",
+            buffer_text(&held)
+        );
     }
 
     #[test]
@@ -560,7 +601,7 @@ mod screen_mouse {
         let mut screen = open_screen();
 
         render_git_diff(&mut screen, 60, 40);
-        assert!(screen.on_ui_event(&UiEvent::Mouse(MouseAction::Click, (20, 3))).is_empty());
+        assert!(screen.on_ui_event(&UiEvent::Mouse(MouseAction::Click, (20, 3), KeyModifiers::NONE)).is_empty());
         screen.on_ui_event(&UiEvent::Key(key(KeyCode::Char('c'))));
         let draft = render_git_diff(&mut screen, 60, 40);
         assert!(buffer_text(&draft).contains("save"));
@@ -568,7 +609,7 @@ mod screen_mouse {
 
         let before = render_git_diff(&mut screen, 120, 40);
         assert_drawer_focus(&before, false);
-        assert!(screen.on_ui_event(&UiEvent::Mouse(MouseAction::Click, (20, 3))).is_empty());
+        assert!(screen.on_ui_event(&UiEvent::Mouse(MouseAction::Click, (20, 3), KeyModifiers::NONE)).is_empty());
         let after = render_git_diff(&mut screen, 120, 40);
         assert_drawer_focus(&after, true);
     }
@@ -582,17 +623,13 @@ mod refocus_click {
 
     fn codex_logged_in_via_browser() -> TestUi {
         let methods = vec![AuthMethod::Agent(AuthMethodAgent::new("codex", "Codex"))];
-        let mut ui = TestUiBuilder::new().auth_methods(methods).dimensions(80, 24).build();
+        let mut ui = TestUiBuilder::new().session(|session| session.auth_methods(methods)).dimensions(80, 24).build();
         open_settings_row(&mut ui, "Provider Logins");
 
         ui.click_text("Codex");
         ui.terminal_event(Event::FocusLost);
-        ui.deliver_result(CommandResult::AuthenticationCompleted {
-            method_id: "codex".into(),
-            result: Ok(acp::LoginAuthResponse::new()),
-        });
+        ui.answer::<Login>(Ok(acp::LoginAuthResponse::new()));
         ui.draw();
-        ui.take_commands();
         ui
     }
 
@@ -602,8 +639,7 @@ mod refocus_click {
         ui.terminal_event(Event::FocusGained);
         ui.click_text("Codex");
         ui.click_text("Codex");
-        let logins = ui.count_commands(|command| matches!(command, Command::Agent(AgentCommand::Authenticate { .. })));
-        assert_eq!(logins, 1);
+        assert_eq!(std::iter::from_fn(|| ui.try_held::<Login>()).count(), 1);
     }
 
     #[test]
@@ -612,8 +648,7 @@ mod refocus_click {
         ui.terminal_event(Event::FocusGained);
         ui.key(key(KeyCode::Up));
         ui.click_text("Codex");
-        let logins = ui.count_commands(|command| matches!(command, Command::Agent(AgentCommand::Authenticate { .. })));
-        assert_eq!(logins, 1);
+        assert_eq!(std::iter::from_fn(|| ui.try_held::<Login>()).count(), 1);
     }
 }
 
@@ -629,22 +664,21 @@ fn scroll_up(column: u16, row: u16) -> crossterm::event::Event {
     mouse_event(MouseEventKind::ScrollUp, column, row)
 }
 
+fn hover(column: u16, row: u16) -> crossterm::event::Event {
+    mouse_event(MouseEventKind::Moved, column, row)
+}
+
 fn click(column: u16, row: u16) -> crossterm::event::Event {
     mouse_event(MouseEventKind::Down(MouseButton::Left), column, row)
 }
 
 fn resumed_session(ui: &mut TestUi) -> Option<String> {
-    ui.take_command_where(|command| match command {
-        Command::Agent(AgentCommand::ResumeSession { session_id, .. }) => Some(session_id.0.to_string()),
-        _ => None,
-    })
+    ui.try_held::<Resume>().map(|(request, _)| request.session_id.0.to_string())
 }
 
 fn moved_workspace(ui: &mut TestUi) -> Option<PathBuf> {
-    ui.take_command_where(|command| match command {
-        Command::Agent(AgentCommand::MoveWorkspace { target: WorkspaceMoveTarget::Existing { path }, .. }) => {
-            Some(path)
-        }
-        _ => None,
-    })
+    match ui.try_held::<MoveWorkspace>()?.0.target {
+        WorkspaceMoveTarget::Existing { path } => Some(path),
+        WorkspaceMoveTarget::New { .. } => None,
+    }
 }

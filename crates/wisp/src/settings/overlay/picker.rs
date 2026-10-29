@@ -1,11 +1,11 @@
 use super::{SettingsChange, SettingsMenuEntry, value_match_key};
-use crate::session::session_config_view::LocalConfigValue;
 use crate::surfaces::input::UiOutput;
 use crate::surfaces::modal::frame::MODAL_HORIZONTAL_PADDING;
 use crate::theme::Theme;
 use crate::view::filterable_list::FilterableList;
 use crate::view::input::{Nav, UiEvent};
 use crate::view::wrap::truncate_to_width;
+use client_core::session_config_view::LocalConfigValue;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
@@ -22,11 +22,12 @@ pub(super) struct SettingsPicker {
 
 impl SettingsPicker {
     pub(super) fn from_entry(entry: &SettingsMenuEntry) -> Option<Self> {
+        let select = &entry.select;
         let current_value_index =
-            entry.values.iter().position(|value| value.value == entry.current_raw_value).unwrap_or(0);
-        let current_value = entry.values.get(current_value_index)?.value.clone();
+            select.values.iter().position(|value| value.value == select.current_value).unwrap_or(0);
+        let current_value = select.values.get(current_value_index)?.value.clone();
         let mut values =
-            FilterableList::new(entry.values.clone(), value_match_key).selectable(|value| !value.is_disabled);
+            FilterableList::new(select.values.clone(), value_match_key).selectable(|value| !value.is_disabled);
         values.select_index(current_value_index);
 
         Some(Self { config_id: entry.config_id.clone(), title: entry.title.clone(), current_value, values })

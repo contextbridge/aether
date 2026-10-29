@@ -22,7 +22,8 @@ async fn cancel_reaches_the_agent_while_a_config_response_is_outstanding() {
         .run_until(async {
             let (agent, mut requests) = FakeAgent::default()
                 .new_session_response(NewSessionResponse::new("sess-1"))
-                .hold_config(true)
+                .hold::<SetSessionConfigOptionRequest>()
+                .hold::<PromptRequest>()
                 .capture();
             let client = agent.build().await.expect("initialization succeeds");
 
@@ -40,14 +41,14 @@ async fn cancel_reaches_the_agent_while_a_config_response_is_outstanding() {
                     .request(PromptRequest::new(prompt_session_id, vec![ContentBlock::Text(TextContent::new("hi"))]))
                     .await;
             });
-            let (_, prompt_responder) = requests.prompt.recv().await.unwrap();
+            let (_, prompt_responder) = requests.held::<PromptRequest>().recv().await.unwrap();
             let config_handle = client.handle.clone();
             let config_session_id = session_id.clone();
             spawn_local(async move {
                 let _ =
                     config_handle.request(SetSessionConfigOptionRequest::new(config_session_id, "mode", "Plan")).await;
             });
-            let config_responder = requests.pending_config.recv().await.unwrap();
+            let (_, config_responder) = requests.held::<SetSessionConfigOptionRequest>().recv().await.unwrap();
             client.handle.notify(CancelSessionNotification::new(session_id)).expect("cancel queues");
 
             assert_eq!(requests.cancel.recv().await.unwrap().session_id, SessionId::new("sess-1"));
@@ -61,11 +62,11 @@ async fn cancel_reaches_the_agent_while_a_config_response_is_outstanding() {
 async fn prompt_completion_follows_session_updates_on_the_event_stream() {
     LocalSet::new()
         .run_until(async {
-            let (agent, mut requests) = FakeAgent::default().capture();
+            let (agent, mut requests) = FakeAgent::default().hold::<PromptRequest>().capture();
             let mut client = agent.build().await.expect("initialization succeeds");
             let cx = requests.connection.recv().await.unwrap();
             let prompt = client.handle.request(PromptRequest::new("session", vec![ContentBlock::from("hello")]));
-            let (request, responder) = requests.prompt.recv().await.unwrap();
+            let (request, responder) = requests.held::<PromptRequest>().recv().await.unwrap();
             cx.send_notification(UpdateSessionNotification::new(
                 request.session_id.clone(),
                 SessionUpdate::AgentMessageChunk(ContentChunk::new(ContentBlock::from("final answer"), "answer")),
@@ -291,11 +292,11 @@ async fn permission_with_no_options_is_cancelled() {
 
     LocalSet::new()
         .run_until(async {
-            let (agent, mut requests) = acp_utils::testing::FakeAgent::default().capture();
+            let (agent, mut requests) = FakeAgent::default().hold::<PromptRequest>().capture();
             let client = agent.build().await.unwrap();
             let connection = requests.connection.recv().await.unwrap();
             let prompt = client.handle.request(PromptRequest::new("session", vec![]));
-            let (_, responder) = requests.prompt.recv().await.unwrap();
+            let (_, responder) = requests.held::<PromptRequest>().recv().await.unwrap();
             let response = connection
                 .send_request(RequestPermissionRequest::new("session", "Continue?", vec![]))
                 .block_task()
@@ -315,12 +316,13 @@ async fn requests_are_sent_in_call_order_without_polling_their_responses() {
 
     LocalSet::new()
         .run_until(async {
-            let (agent, mut requests) = FakeAgent::default().sessions(vec![]).hold_config(true).capture();
+            let (agent, mut requests) =
+                FakeAgent::default().sessions(vec![]).hold::<SetSessionConfigOptionRequest>().capture();
             let client = agent.build().await.unwrap();
             let config = client.handle.request(SetSessionConfigOptionRequest::new("session", "mode", "Plan"));
             client.handle.request(ListSessionsRequest::new()).await.unwrap();
-            let responder = requests
-                .pending_config
+            let (_, responder) = requests
+                .held::<SetSessionConfigOptionRequest>()
                 .recv()
                 .now_or_never()
                 .expect("config must already have been sent before the list request")

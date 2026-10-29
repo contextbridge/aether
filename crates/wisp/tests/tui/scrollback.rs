@@ -74,46 +74,39 @@ fn session_changes_never_purge_native_scrollback() {
         ("a context clear", |ui| ui.acp_event(context_cleared())),
         ("/clear", |ui| {
             ui.run_command("/clear");
-            assert_command(ui, |c| matches!(c, AgentCommand::NewSession { .. }), "/clear");
-            ui.deliver_result(new_session_created("fresh-session", Vec::new()));
+            new_session_created(ui, "fresh-session", Vec::new());
         }),
         ("a failed /clear", |ui| {
             ui.run_command("/clear");
-            ui.deliver_result(CommandResult::NewSession(Err("refused".to_string())));
+            ui.answer::<NewSession>(Err(agent_error("refused")));
         }),
         ("a session switch", |ui| {
             ui.begin_resume("other", "/tmp/elsewhere");
-            ui.deliver_result(session_loaded("other", Vec::new()));
+            session_loaded(ui, Vec::new());
         }),
         ("a workspace move", |ui| {
             move_to_other_workspace(ui);
-            ui.deliver_result(workspace_moved("/home/user/code/other"));
+            workspace_moved(ui, "/home/user/code/other");
         }),
         ("a failed workspace listing", |ui| {
             ui.run_command("/move");
-            ui.deliver_result(workspace_list_failed("network error"));
+            ui.answer::<ListWorkspaces>(Err(agent_error("network error")));
         }),
         ("a failed workspace move", |ui| {
             move_to_other_workspace(ui);
-            ui.deliver_result(workspace_move_failed("permission denied"));
+            ui.answer::<MoveWorkspace>(Err(agent_error("permission denied")));
         }),
     ];
     for (change, apply) in changes {
-        let mut ui = TestUiBuilder::new().workspace_move().build();
+        let mut ui = TestUiBuilder::new().session(SessionCoreConfigBuilder::workspace_move).build();
         commit_overflowing_reply(&mut ui);
         apply(&mut ui);
         assert!(ui.history_text().contains("overflow-line-0"), "{change} purged native scrollback");
     }
 }
 
-fn assert_command(ui: &mut TestUi, expected: impl Fn(&AgentCommand) -> bool, label: &str) {
-    let command = ui.next_agent_command().unwrap_or_else(|| panic!("{label} should have sent a command"));
-    assert!(expected(&command), "{label} sent {command:?}");
-}
-
 fn commit_overflowing_reply(ui: &mut TestUi) {
     ui.submit("talk at length");
-    assert_command(ui, |c| matches!(c, AgentCommand::Prompt { .. }), "the overflowing reply");
     let reply = format!("{}finished reply", numbered_lines("overflow-line", 30));
     ui.acp_event(text_chunk_with_id("overflow-reply", &reply));
     ui.complete_prompt(acp::StopReason::EndTurn);

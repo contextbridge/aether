@@ -1,11 +1,12 @@
-use crate::session::session_config_view::{LocalConfigOption, LocalConfigView};
-use crate::session::workspace_status::WorkspaceStatus;
 use crate::settings::{ResolvedStatusLineSettings, StatusLineSegmentConfig, StatusLineStyle};
-use crate::view::reasoning_bar::{reasoning_bar, reasoning_color, slot_bar};
 use crate::theme::Theme;
+use crate::view::reasoning_bar::{reasoning_bar, reasoning_color, slot_bar};
 use crate::view::wrap::{truncate_spans, truncate_to_width};
 use acp_utils::config_option_id::ConfigOptionId;
 use agent_client_protocol::schema::v2 as acp;
+use client_core::format::token_count;
+use client_core::session_config_view::{LocalConfigOption, LocalConfigView};
+use client_core::session_model::WorkspaceStatus;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
@@ -219,8 +220,8 @@ fn context_bar(usage: ContextUsageDisplay) -> String {
     format!(
         "ctx {} {} / {}",
         slot_bar((filled as usize).min(TOTAL as usize), TOTAL as usize),
-        format_tokens(usage.used_tokens),
-        format_tokens(usage.limit_tokens)
+        token_count(u64::from(usage.used_tokens)),
+        token_count(u64::from(usage.limit_tokens))
     )
 }
 
@@ -232,22 +233,5 @@ fn context_color(usage: ContextUsageDisplay, theme: &Theme) -> Color {
         theme.warning
     } else {
         theme.text_secondary
-    }
-}
-
-fn format_tokens(count: u32) -> String {
-    match count {
-        count if count < 1_000 => count.to_string(),
-        count if count < 1_000_000 => format_with_unit(f64::from(count) / 1_000.0, "k"),
-        count => format_with_unit(f64::from(count) / 1_000_000.0, "M"),
-    }
-}
-
-fn format_with_unit(value: f64, unit: &str) -> String {
-    let rounded = (value * 10.0).round() / 10.0;
-    if (rounded - rounded.trunc()).abs() < f64::EPSILON {
-        format!("{rounded:.0}{unit}")
-    } else {
-        format!("{rounded:.1}{unit}")
     }
 }

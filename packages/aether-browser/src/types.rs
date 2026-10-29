@@ -52,7 +52,6 @@ pub struct ConversationSnapshot<'a> {
     pub activity: Activity,
     pub plan: Option<&'a PlanItems>,
     pub context_usage: Option<&'a UsageUpdate>,
-    pub compacting: bool,
 }
 
 /// Options for `AetherClient.connect`.

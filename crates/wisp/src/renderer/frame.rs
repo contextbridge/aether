@@ -25,7 +25,7 @@ pub(super) fn draw_frame(
     let buf = frame.buffer_mut();
 
     PlanView::new(&layout.plan_entries, theme).render(layout.indent(plan_area), buf);
-    QueuedPromptsView::new(app.queued_prompts(), theme).render(layout.indent(queued_area), buf);
+    QueuedPromptsView::new(app.core().queued_prompts(), theme).render(layout.indent(queued_area), buf);
     draw_transcript(layout, live, transcript_area, buf, app.progress_indicator(), theme, app.spinner_tick());
 
     let cursor = render_composer(layout, app, composer_area, buf, theme);
@@ -86,10 +86,8 @@ fn render_composer(
     ])
     .areas(area);
 
-    if search_area.height > 0
-        && let Some(picker) = app.composer_mut().prompt_search_mut()
-    {
-        picker.render(search_area, buf, theme);
+    if search_area.height > 0 {
+        app.render_prompt_search(search_area, buf, theme);
     }
     if completion_area.height > 0
         && let Some(overlay) = app.composer_mut().completion_mut()

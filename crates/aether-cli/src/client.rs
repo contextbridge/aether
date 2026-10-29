@@ -1,11 +1,9 @@
-use acp_utils::websocket::WebSocketTransport;
+use acp_utils::websocket::{self, ConnectError};
 use agent_client_protocol::schema::v2::SessionId;
 use std::path::PathBuf;
 use thiserror::Error;
-use tokio_tungstenite::connect_async;
-use tokio_tungstenite::tungstenite;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue, Request, StatusCode, Uri};
+use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue, Request, Uri};
 use wisp::run_remote_tui;
 use wisp::settings::load_or_create_settings;
 
@@ -64,21 +62,13 @@ impl ClientArgs {
 
 pub async fn run_client(args: ClientArgs) -> Result<(), ClientRunError> {
     let request = args.connection_request()?;
-    let (socket, _) = connect_async(request).await.map_err(|error| match error {
-        tungstenite::Error::Http(response) if response.status() == StatusCode::CONFLICT => {
-            ClientRunError::ServerOccupied
-        }
-        _ => ClientRunError::Handshake,
+    let transport = websocket::connect(request).await.map_err(|error| match error {
+        ConnectError::Occupied => ClientRunError::ServerOccupied,
+        ConnectError::Handshake(_) => ClientRunError::Handshake,
     })?;
 
     let settings = load_or_create_settings();
-    run_remote_tui(
-        WebSocketTransport::new(socket),
-        args.session.map(SessionId::new),
-        settings,
-        args.log_dir.as_deref(),
-    )
-    .await?;
+    run_remote_tui(transport, args.session.map(SessionId::new), settings, args.log_dir.as_deref()).await?;
 
     Ok(())
 }

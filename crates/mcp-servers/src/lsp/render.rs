@@ -18,7 +18,7 @@ impl SourceLine {
     }
 
     pub fn from_location(location: &Location) -> Self {
-        Self::from_range(uri_to_path(&location.uri), &location.range)
+        Self::from_range(uri_to_path(&location.uri).display().to_string(), &location.range)
     }
 }
 

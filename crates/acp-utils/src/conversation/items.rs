@@ -42,7 +42,20 @@ pub enum ConversationContent {
     Thought(Vec<acp::ContentBlock>),
     Tool(ToolCall),
     /// Information from the host rather than the agent.
-    Notice(String),
+    Notice(Notice),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+pub struct Notice {
+    pub level: NoticeLevel,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum NoticeLevel {
+    Info,
+    Error,
 }
 
 /// An item keeps its `id` for the life of the conversation; `revision` advances whenever it changes.
@@ -91,7 +104,7 @@ impl ConversationItem {
                 blocks => Cow::Owned(map_content_blocks_to_text(&display_content_blocks(blocks))),
             }),
             ConversationContent::Assistant(blocks) | ConversationContent::Thought(blocks) => Some(plain_text(blocks)),
-            ConversationContent::Notice(text) => Some(Cow::Borrowed(text)),
+            ConversationContent::Notice(notice) => Some(Cow::Borrowed(&notice.text)),
             ConversationContent::Tool(_) => None,
         }
     }
