@@ -4,13 +4,10 @@ mod common;
 mod diagnostics;
 mod symbols;
 
-use aether_lspd::LanguageId;
-use aether_lspd::testing::{TestDaemon, TestDaemonBuilder, TestWorkspace, configure_fake_server};
+use clankerdiff_lspd::LanguageId;
+use clankerdiff_lspd::testing::{TestDaemon, TestDaemonBuilder};
 use common::CodingWorkspace;
-use std::sync::Once;
-use std::time::Duration;
-
-static FAKE_SERVERS: Once = Once::new();
+use mcp_servers::testing::TestWorkspace;
 
 async fn fake_lsp(workspace: TestWorkspace, language: LanguageId) -> CodingWorkspace {
     let daemon = fake_daemon(&workspace, language);
@@ -18,10 +15,10 @@ async fn fake_lsp(workspace: TestWorkspace, language: LanguageId) -> CodingWorks
 }
 
 fn fake_daemon(workspace: &TestWorkspace, language: LanguageId) -> TestDaemonBuilder {
-    FAKE_SERVERS.call_once(|| unsafe {
-        configure_fake_server(LanguageId::Rust, &[]);
-        configure_fake_server(LanguageId::Go, &["--fail-on", "textDocument/definition"]);
-        configure_fake_server(LanguageId::Python, &["--wedge-on", "textDocument/definition"]);
-    });
-    TestDaemon::builder(workspace.root(), language).diagnostics_settle(Duration::ZERO)
+    let args: &[&str] = match language {
+        LanguageId::Go => &["--fail-on", "textDocument/definition"],
+        LanguageId::Python => &["--wedge-on", "textDocument/definition"],
+        _ => &[],
+    };
+    TestDaemon::builder(workspace.root(), language).fake_server(args)
 }

@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use utils::display_meta::{ToolDisplayMeta, basename};
 
 use crate::Displayed;
-use crate::lsp::common::uri_to_path;
+use crate::lsp::common::uri_display;
 use crate::lsp::error::LspError;
 use crate::lsp::registry::LspRegistry;
 use crate::lsp::render::{SourceLine, render_locations};
@@ -125,7 +125,7 @@ fn collect_workspace_text_edits(edit: &WorkspaceEdit) -> Result<Vec<LspFileEdit>
         changes
             .iter()
             .filter(|&(_uri, text_edits)| !text_edits.is_empty())
-            .map(|(uri, text_edits)| LspFileEdit { file_path: uri_to_path(uri), edits: text_edits.clone() })
+            .map(|(uri, text_edits)| LspFileEdit { file_path: uri_display(uri), edits: text_edits.clone() })
             .collect()
     } else {
         Vec::new()
@@ -168,7 +168,7 @@ fn collect_text_document_edit(
     edits: &[OneOf<lsp_types::TextEdit, lsp_types::AnnotatedTextEdit>],
 ) -> Option<LspFileEdit> {
     let edits = edits.iter().map(extract_one_of_text_edit).collect::<Vec<_>>();
-    (!edits.is_empty()).then(|| LspFileEdit { file_path: uri_to_path(uri), edits })
+    (!edits.is_empty()).then(|| LspFileEdit { file_path: uri_display(uri), edits })
 }
 
 fn extract_one_of_text_edit(edit: &OneOf<lsp_types::TextEdit, lsp_types::AnnotatedTextEdit>) -> lsp_types::TextEdit {

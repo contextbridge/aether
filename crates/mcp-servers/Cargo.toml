@@ -31,7 +31,7 @@ file-ops = []
 coding = [
     "file-ops",
     "dep:aether-project",
-    "dep:aether-lspd",
+    "dep:clankerdiff-lspd",
     "dep:futures",
     "dep:tracing",
     "dep:lsp-types",
@@ -71,7 +71,7 @@ clap = { workspace = true, features = ["env"] }
 thiserror = { workspace = true }
 mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", default-features = false, version = "0.7.16" }
 utils = { package = "aether-utils", path = "../utils", version = "0.3.0" }
-aether-lspd = { path = "../aether-lspd", optional = true, version = "0.3.6" }
+clankerdiff-lspd = { workspace = true, features = ["daemon"], optional = true }
 futures = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
 lsp-types = { workspace = true, optional = true }
@@ -102,7 +102,7 @@ tempfile = { workspace = true }
 axum = { workspace = true }
 reqwest = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
-aether-lspd = { path = "../aether-lspd", features = ["testing"], version = "0.3.6" }
+clankerdiff-lspd = { workspace = true, features = ["test-support"] }
 mcp-servers = { package = "aether-mcp-servers", path = ".", features = ["test-helpers"] }
 mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", features = ["testing"], version = "0.7.16" }
 aether-core = { package = "aether-agent-core", path = "../aether-core", features = ["testing"], version = "0.9.9" }

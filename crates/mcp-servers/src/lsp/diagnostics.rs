@@ -2,7 +2,7 @@
 //!
 //! This module provides helpers for formatting and counting diagnostics.
 
-use super::common::uri_to_path;
+use super::common::uri_display;
 use super::render::single_line;
 use lsp_types::{Diagnostic, DiagnosticSeverity, Uri};
 use schemars::JsonSchema;
@@ -64,7 +64,7 @@ impl FormattedDiagnostic {
         });
 
         Self {
-            file: uri_to_path(uri),
+            file: uri_display(uri),
             line: diagnostic.range.start.line + 1,
             column: diagnostic.range.start.character + 1,
             severity: diagnostic.severity.into(),

@@ -4,7 +4,7 @@
 //! 1. Create an `LspRegistry` for multi-language LSP integration
 //! 2. Query diagnostics through the `LspRegistry`
 //!
-//! The LSP daemon (`aether-lspd`) automatically handles `didOpen` when it
+//! The LSP daemon (`clankerdiff-lspd`) automatically handles `didOpen` when it
 //! receives a request for a file that hasn't been opened yet.
 //!
 //! Usage:
@@ -21,14 +21,22 @@
 
 use std::env;
 use std::path::PathBuf;
+use std::process::ExitCode;
 use std::time::Duration;
 
 use mcp_servers::lsp::diagnostics::{FormattedDiagnostic, count_by_severity};
 use mcp_servers::lsp::registry::LspRegistry;
 use tokio::time::sleep;
 
+fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
+    if let Some(code) = clankerdiff_lspd::run_if_requested() {
+        return Ok(code);
+    }
+    report().map(|()| ExitCode::SUCCESS)
+}
+
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn report() -> Result<(), Box<dyn std::error::Error>> {
     let project_path =
         env::args().nth(1).map_or_else(|| env::current_dir().expect("Failed to get current directory"), PathBuf::from);
 

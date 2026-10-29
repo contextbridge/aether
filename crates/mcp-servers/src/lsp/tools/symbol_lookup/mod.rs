@@ -7,14 +7,13 @@
 
 use std::path::Path;
 
-use lsp_types::GotoDefinitionResponse;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use utils::display_meta::{ToolDisplayMeta, basename};
 
 use crate::Displayed;
-use crate::lsp::common::{DEFAULT_RESULT_LIMIT, truncate_results, uri_to_path};
+use crate::lsp::common::{DEFAULT_RESULT_LIMIT, truncate_results};
 use crate::lsp::error::LspError;
 use crate::lsp::registry::LspRegistry;
 use crate::lsp::render::{SourceLine, render_locations};
@@ -112,8 +111,9 @@ pub async fn execute_lsp_symbol(
     let root = registry.root_path();
     let output = match input.operation {
         SymbolLookupOperation::Definition => {
-            let response = resolved.client.goto_definition(resolved.uri, resolved.line, resolved.column).await?;
-            LspSymbolOutput::locations("definition", definition_response_to_lines(response), &input, root).await
+            let locations = resolved.client.definition_locations(resolved.uri, resolved.line, resolved.column).await?;
+            let lines = locations.iter().map(SourceLine::from_location).collect();
+            LspSymbolOutput::locations("definition", lines, &input, root).await
         }
         SymbolLookupOperation::References => {
             let lsp_locations = resolved
@@ -135,18 +135,6 @@ pub async fn execute_lsp_symbol(
 
     let meta = symbol_display_meta(&input, &output);
     Ok(Displayed::new(output, meta))
-}
-
-/// Convert `GotoDefinitionResponse` to a list of `SourceLine`s
-fn definition_response_to_lines(response: GotoDefinitionResponse) -> Vec<SourceLine> {
-    match response {
-        GotoDefinitionResponse::Scalar(loc) => vec![SourceLine::from_location(&loc)],
-        GotoDefinitionResponse::Array(locs) => locs.iter().map(SourceLine::from_location).collect(),
-        GotoDefinitionResponse::Link(links) => links
-            .iter()
-            .map(|link| SourceLine::from_range(uri_to_path(&link.target_uri), &link.target_selection_range))
-            .collect(),
-    }
 }
 
 /// Format hover contents to a readable string

@@ -1,6 +1,7 @@
 //! Common types and utilities shared across LSP tools
 
-use lsp_types::{DocumentSymbol, DocumentSymbolResponse};
+use clankerdiff_lspd::uri_to_path;
+use lsp_types::{DocumentSymbol, DocumentSymbolResponse, Uri};
 
 use super::error::LspError;
 
@@ -23,6 +24,11 @@ pub fn truncate_results<T>(items: &mut Vec<T>, max: usize) -> Truncation {
     Truncation { total_count, truncated: (total_count > max).then_some(true) }
 }
 
+/// The filesystem path of a `file://` URI, formatted for tool output.
+pub(crate) fn uri_display(uri: &Uri) -> String {
+    uri_to_path(uri).display().to_string()
+}
+
 /// Find an exact symbol in an LSP document-symbol response and return its 1-indexed line.
 pub fn find_document_symbol_line(response: &DocumentSymbolResponse, symbol: &str) -> Option<u32> {
     match response {
@@ -42,9 +48,6 @@ fn find_nested_symbol_line(symbols: &[DocumentSymbol], symbol: &str) -> Option<u
         }
     })
 }
-
-/// Re-export from `aether_lspd` for convenience.
-pub use aether_lspd::uri_to_path;
 
 /// Find the first word-boundary match and return its byte offset.
 ///
@@ -102,9 +105,6 @@ pub fn find_symbol_column(content: &str, symbol: &str, line: u32) -> Result<u32,
         .map(|col| u32::try_from(col).unwrap_or(u32::MAX))
         .ok_or_else(|| LspError::SymbolNotFound(format!("Symbol '{symbol}' not found on line {line}")))
 }
-
-/// Re-export from `aether_lspd` for convenience.
-pub use aether_lspd::path_to_uri;
 
 #[cfg(test)]
 mod tests {

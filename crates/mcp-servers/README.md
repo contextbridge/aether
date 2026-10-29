@@ -72,7 +72,7 @@ Each server key must match a factory registered with `McpBuilder::register_in_me
 | `coding` | `--root-dir <path>` | workspace root | Workspace root for LSP and file operations |
 | `coding` | `--rules-dir <path>` (repeatable) | none | Explicit prompt directories for automatic read-triggered rules |
 | `coding` | `--permission-mode <mode>` | `always-allow` | `always-allow`, `auto`, or `always-ask` |
-| `coding` | `--disable-lsp` | enabled | Disable LSP-backed tools and `aether-lspd` daemon connections |
+| `coding` | `--disable-lsp` | enabled | Disable LSP-backed tools and `clankerdiff-lspd` daemon connections |
 | `skills` | `--dir <path>` (repeatable) | required | Prompt directories to scan |
 | `tasks` | `--dir <path>` | session-scoped temp dir | Base directory for persistent task storage (creates `.aether-tasks/` inside) |
 | `subagents` | `--project-root <path>` (alias: `--dir`) | workspace root | Project root containing optional `.aether/settings.json` authored agents |

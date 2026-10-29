@@ -48,7 +48,7 @@ agent-client-protocol = { workspace = true, features = ["stdio"] }
 clankerdiff-core = { workspace = true }
 clankerdiff-protocol = { workspace = true }
 clankerdiff-server = { workspace = true }
-aether-lspd = { path = "../aether-lspd", version = "0.3.6" }
+clankerdiff-lspd = { workspace = true, features = ["daemon"] }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "io-util", "net", "fs", "time", "signal", "process"] }
 tokio-tungstenite = { workspace = true }
@@ -59,7 +59,8 @@ serde_json = { workspace = true }
 async-trait = { workspace = true }
 clap = { workspace = true }
 schemars = { workspace = true }
-tracing = { workspace = true }
+log = { workspace = true, features = ["release_max_level_info"] }
+tracing = { workspace = true, features = ["release_max_level_info"] }
 tracing-subscriber = { workspace = true }
 futures = { workspace = true }
 uuid = { workspace = true }
