@@ -184,6 +184,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "aether-client-core"
+version = "0.1.0"
+dependencies = [
+ "aether-acp-utils",
+ "aether-client-core",
+ "aether-utils",
+ "agent-client-protocol",
+ "base64 0.23.1",
+ "clankerdiff-client",
+ "clankerdiff-core",
+ "clankerdiff-git",
+ "clankerdiff-server",
+ "ignore",
+ "mime_guess",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "aether-doctest"
 version = "0.1.0"
 dependencies = [
@@ -2439,10 +2462,14 @@ dependencies = [
  "clankerdiff-core",
  "clankerdiff-protocol",
  "futures-util",
+ "gloo-net",
  "gloo-timers",
  "http",
+ "js-sys",
+ "rand 0.10.3",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-tungstenite 0.30.0",
  "wasm-bindgen-futures",
 ]
 
