@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.19](https://github.com/contextbridge/aether/compare/aether-llm-v0.9.18...aether-llm-v0.9.19) - 2026-10-29
+
+### Added
+
+- ACP native subagents ([#627](https://github.com/contextbridge/aether/pull/627))
+
+### Other
+
+- Update models ([#628](https://github.com/contextbridge/aether/pull/628))
+
 ## [0.9.18](https://github.com/contextbridge/aether/compare/aether-llm-v0.9.17...aether-llm-v0.9.18) - 2026-10-20
 
 ### Fixed

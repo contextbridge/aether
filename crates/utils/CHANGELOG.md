@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.1](https://github.com/contextbridge/aether/compare/aether-utils-v0.3.0...aether-utils-v0.3.1) - 2026-10-29
+
+### Added
+
+- add aether-desktop gpui client ([#635](https://github.com/contextbridge/aether/pull/635))
+
 ## [0.3.0](https://github.com/contextbridge/aether/compare/aether-utils-v0.2.20...aether-utils-v0.3.0) - 2026-10-19
 
 ### Added
