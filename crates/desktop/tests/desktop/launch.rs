@@ -1,5 +1,4 @@
 use crate::support::choose;
-use crate::thread_menu::row_order;
 use acp_utils::testing::FakeAgent;
 use aether_desktop::registry::{Registry, STATE_FILE};
 use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder};
@@ -17,7 +16,6 @@ fn the_next_launch_restores_what_the_user_changed(first: &mut TestAppContext, se
     harness.click(first, "add-project-browse").unwrap();
     first.simulate_path_prompt_response(|_| Some(vec![PathBuf::from("/picked")]));
     harness.click(first, "project-beta").unwrap();
-    choose(&harness, first, "history-row-pinned", "menu-pin");
     choose(&harness, first, "history-row-gone", "menu-archive");
     choose(&harness, first, "history-row-renamed", "menu-rename");
     harness.simulate_input(first, "Renamed");
@@ -40,7 +38,6 @@ fn the_next_launch_restores_what_the_user_changed(first: &mut TestAppContext, se
     assert_eq!(thread.read_with(second, |thread, _| thread.session_id().cloned()), Some(SessionId::new("saved")));
     assert!(relaunched.bounds(second, "project-picked").is_some(), "an added project is listed");
     assert!(relaunched.bounds(second, "history-row-hidden").is_none(), "a collapsed project stays collapsed");
-    assert_eq!(row_order(&relaunched, second, &["history-row-pinned", "thread-row-0"]), [0, 1], "pins are kept");
     assert!(relaunched.bounds(second, "history-row-gone").is_none(), "archived rows stay archived");
     assert!(relaunched.shows(second, "history-row-renamed-title", "Renamed"));
     assert_eq!(relaunched.rem_size(second), px(DEFAULT_INTERFACE_SIZE + 2.0));
@@ -68,7 +65,6 @@ fn launch(cx: &mut TestAppContext, state: &Path) -> DesktopHarness {
         .agent("/alpha", FakeAgent::default().replay_message("saved", "an earlier answer"))
         .project("/beta")
         .session("saved", "/alpha", "2026-01-01T00:00:00Z", "saved prompt")
-        .session("pinned", "/alpha", "2026-01-02T00:00:00Z", "pinned prompt")
         .session("gone", "/alpha", "2026-01-03T00:00:00Z", "gone prompt")
         .session("renamed", "/alpha", "2026-01-04T00:00:00Z", "renamed prompt")
         .session("hidden", "/beta", "2026-01-01T00:00:00Z", "beta prompt")

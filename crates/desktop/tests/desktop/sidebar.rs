@@ -1,9 +1,7 @@
 use crate::support::replying;
 use acp_utils::testing::FakeAgent;
-use aether_desktop::registry::Registry;
 use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder};
 use aether_desktop::threads::ThreadStatus;
-use agent_client_protocol::schema::v2::SessionId;
 use gpui::TestAppContext;
 use std::path::{Path, PathBuf};
 
@@ -31,11 +29,10 @@ fn added_projects_list_their_saved_sessions_and_projects_only_history_knows_abou
 }
 
 #[gpui::test]
-fn saved_sessions_older_than_a_week_are_hidden_unless_pinned(cx: &mut TestAppContext) {
+fn saved_sessions_older_than_a_week_are_hidden(cx: &mut TestAppContext) {
     let harness = DesktopHarnessBuilder::default()
         .session("recent", "/alpha", "2026-03-05T00:00:00Z", "recent prompt")
         .session("stale", "/alpha", "2026-02-20T00:00:00Z", "stale prompt")
-        .session("stale-pinned", "/alpha", "2026-02-19T00:00:00Z", "pinned prompt")
         .project("/alpha")
         .now("2026-03-07T00:00:00Z")
         .build(cx);
@@ -43,12 +40,6 @@ fn saved_sessions_older_than_a_week_are_hidden_unless_pinned(cx: &mut TestAppCon
     assert!(harness.bounds(cx, "history-row-recent").is_some());
     assert!(harness.bounds(cx, "history-row-stale").is_none(), "a session older than a week is not listed");
     assert!(harness.bounds(cx, "project-alpha-show-more").is_none(), "nor is it behind Show more");
-
-    Registry::update(&harness.registry(cx), cx, |state| {
-        state.pinned.insert(SessionId::new("stale-pinned"));
-    });
-
-    assert!(harness.bounds(cx, "history-row-stale-pinned").is_some(), "a pinned session is listed however old");
 }
 
 #[gpui::test]
@@ -86,16 +77,12 @@ fn removing_a_project_hides_it_and_keeps_its_sessions_in_the_switcher(cx: &mut T
 }
 
 #[gpui::test]
-fn archiving_inactive_threads_archives_every_saved_thread_but_pinned_and_live_ones(cx: &mut TestAppContext) {
+fn archiving_inactive_threads_archives_every_saved_thread_but_live_ones(cx: &mut TestAppContext) {
     let (harness, thread) = DesktopHarnessBuilder::default()
         .session("first", "/alpha", "2026-01-01T00:00:00Z", "first prompt")
         .session("second", "/alpha", "2026-01-02T00:00:00Z", "second prompt")
-        .session("kept", "/alpha", "2026-01-03T00:00:00Z", "kept prompt")
         .agent("/alpha", replying("live-session", "hello"))
         .start(cx, "/alpha");
-    Registry::update(&harness.registry(cx), cx, |state| {
-        state.pinned.insert(SessionId::new("kept"));
-    });
 
     harness.click(cx, "project-alpha-actions").unwrap();
     harness.click(cx, "menu-archive-inactive").unwrap();
@@ -103,7 +90,6 @@ fn archiving_inactive_threads_archives_every_saved_thread_but_pinned_and_live_on
     for row in ["history-row-first", "history-row-second"] {
         assert!(harness.bounds(cx, row).is_none(), "`{row}` is archived");
     }
-    assert!(harness.bounds(cx, "history-row-kept").is_some(), "a pinned thread stays");
     assert!(harness.bounds(cx, "thread-row-0").is_some(), "a live thread stays");
     assert_eq!(thread.read_with(cx, |thread, _| thread.status()), ThreadStatus::Idle);
 }
@@ -259,21 +245,14 @@ fn each_row_shows_how_long_ago_its_thread_started_in_a_compact_form(cx: &mut Tes
         .session("minutes", "/alpha", "2026-01-07T11:55:00Z", "b")
         .session("hours", "/alpha", "2026-01-07T09:00:00Z", "c")
         .session("days", "/alpha", "2026-01-05T12:00:00Z", "d")
-        .session("weeks", "/alpha", "2025-12-23T12:00:00Z", "e")
-        .session("years", "/alpha", "2023-10-30T12:00:00Z", "f")
         .project("/alpha")
         .build(cx);
-    Registry::update(&harness.registry(cx), cx, |state| {
-        state.pinned.extend([SessionId::new("weeks"), SessionId::new("years")]);
-    });
 
     for age in [
         "history-row-seconds-age-now",
         "history-row-minutes-age-5m",
         "history-row-hours-age-3h",
         "history-row-days-age-2d",
-        "history-row-weeks-age-2w",
-        "history-row-years-age-2y",
     ] {
         assert!(harness.bounds(cx, age).is_some(), "{age} is shown");
     }
