@@ -30,13 +30,13 @@ fn the_switcher_finds_a_live_thread_by_its_title_and_selects_it(cx: &mut TestApp
     harness.start_thread(cx, "/beta");
 
     harness.simulate_keystrokes(cx, "secondary-k");
-    assert!(harness.bounds(cx, "thread-switcher").is_some(), "the switcher opens");
+    assert!(harness.bounds(cx, "switcher").is_some(), "the switcher opens");
     harness.simulate_input(cx, "fix");
     assert!(harness.bounds(cx, "switcher-thread-row-1").is_none(), "beta does not match");
     harness.simulate_keystrokes(cx, "enter");
 
     assert_eq!(harness.selected_thread(cx), Some(alpha));
-    assert!(harness.bounds(cx, "thread-switcher").is_none(), "choosing a thread closes the switcher");
+    assert!(harness.bounds(cx, "switcher").is_none(), "choosing a thread closes the switcher");
 }
 
 #[gpui::test]
@@ -60,7 +60,7 @@ fn the_arrow_keys_move_the_switchers_highlight_and_escape_keeps_the_selection(cx
     let [_, beta, gamma] = ["/alpha", "/beta", "/gamma"].map(|cwd| harness.start_thread(cx, cwd));
 
     harness.simulate_keystrokes(cx, "secondary-k down escape");
-    assert!(harness.bounds(cx, "thread-switcher").is_none());
+    assert!(harness.bounds(cx, "switcher").is_none());
     assert_eq!(harness.selected_thread(cx), Some(gamma));
 
     harness.simulate_keystrokes(cx, "secondary-k down down up enter");
