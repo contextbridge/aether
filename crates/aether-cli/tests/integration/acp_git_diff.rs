@@ -28,6 +28,10 @@ async fn git_diff_open_publishes_snapshot_over_duplex() {
             "unexpected files: {:?}",
             changed_paths(&update)
         );
+        let Event::Files(files) = next_event(&mut harness).await else {
+            panic!("open must list the worktree's files");
+        };
+        assert!(files.iter().any(|path| path.as_str() == "changed.txt"), "unexpected listing: {files:?}");
         close(&harness, "s1");
     })
     .await;
@@ -44,6 +48,7 @@ async fn git_diff_refresh_tracks_scope_and_reports_status_ref() {
         live(&harness, "s1", &repo).await;
 
         initialize(&harness, "s1", DiffScope::Both);
+        let _ = next_event(&mut harness).await;
         let _ = next_event(&mut harness).await;
         let _ = next_event(&mut harness).await;
 
@@ -76,6 +81,7 @@ async fn git_diff_apply_stage_commit_reaches_clean_tree() {
         live(&harness, "s1", &repo).await;
 
         initialize(&harness, "s1", DiffScope::Both);
+        let _ = next_event(&mut harness).await;
         let _ = next_event(&mut harness).await;
         let _ = next_event(&mut harness).await;
 

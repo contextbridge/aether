@@ -1,4 +1,4 @@
-use crate::changes::Dismissed;
+use crate::files::Dismissed;
 use crate::theme::DesktopTheme;
 use crate::threads::Thread;
 use clankerdiff_core::ReviewCapabilities;

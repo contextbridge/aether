@@ -16,7 +16,8 @@ pub(crate) use agent_client_protocol::schema::v2::{
     ElicitationFormMode, ElicitationSchema, ElicitationSessionScope, ElicitationUrlMode, SessionId,
     StringPropertySchema,
 };
-pub(crate) use client_core::composer::attachment::PromptAttachment;
+use clankerdiff_core::RepoPath;
+use client_core::composer::file_listing::{FileListing, RepoFiles};
 pub(crate) use client_core::session_core::CommandEntry;
 
 pub(crate) use client_core::session_core::{ForegroundOperation, SessionCore};
@@ -172,11 +173,10 @@ pub(crate) fn grouped_mode_option(current: &str, groups: &[(&str, &[&str])]) -> 
 }
 
 pub(crate) fn open_file_picker(composer: &mut Composer, files: &[&str]) {
-    let root = Path::new("/workspace");
     composer.open_file_picker();
-    let mut entries: Vec<_> = files.iter().map(|file| PromptAttachment::new(root.join(file), root)).collect();
-    entries.sort_by(|left, right| left.display_name.cmp(&right.display_name));
-    composer.on_files_indexed(entries);
+    let mut paths: Vec<_> = files.iter().map(|file| RepoPath::new(*file).expect("a repository path")).collect();
+    paths.sort();
+    composer.on_files_listed(FileListing::Listed(RepoFiles { root: "/workspace".into(), paths: paths.into() }));
 }
 
 pub(crate) fn assert_shell_command_highlighted(ui: &mut TestUi, tool: &str, command: &str) {

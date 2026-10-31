@@ -8,6 +8,7 @@ mod cli;
 mod composer;
 mod connector;
 mod elicitation;
+mod files;
 mod history;
 mod launch;
 mod layout;

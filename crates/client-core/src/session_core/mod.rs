@@ -5,6 +5,7 @@ mod transitions;
 pub use prompts::QueuedPrompt;
 
 use crate::command::{AgentCommand, Command, CommandResult, GitReviewCommand, Reply, ReviewSource};
+use crate::composer::file_listing::FileListing;
 use crate::composer::prompt_search::PromptSearchState;
 use crate::composer::submission::Submission;
 use crate::elicitation::{Elicitation, ElicitationAnswer, ElicitationId, PendingElicitation};
@@ -133,6 +134,10 @@ impl SessionCore {
         }
     }
 
+    pub fn files(&self) -> FileListing {
+        FileListing::of(self.git_review().map(Arc::as_ref))
+    }
+
     pub fn prompt_search(&self) -> &PromptSearchState {
         &self.prompt_search
     }
@@ -209,6 +214,12 @@ impl SessionCore {
     pub fn close_git_review(&mut self) {
         if std::mem::replace(&mut self.git_review, GitReview::Closed) != GitReview::Closed {
             self.effects.push(Effect::Dispatch(Command::GitReview(GitReviewCommand::Close)));
+        }
+    }
+
+    pub fn ensure_git_review(&mut self) {
+        if self.git_review == GitReview::Closed {
+            self.open_git_review();
         }
     }
 

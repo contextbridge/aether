@@ -44,7 +44,7 @@ use tools::read_file::{ReadFileArgs, ReadFileResult, read_file_contents};
 use tools::web_fetch::{WebFetchInput, WebFetchOutput, WebFetcher};
 use tools::web_search::{WebSearchInput, WebSearchOutput, WebSearcher};
 use tools::write_file::{WriteFileArgs, WriteFileResponse, write_file_contents};
-use utils::display_meta::{ToolDisplayMeta, ToolResultMeta, basename, truncate};
+use utils::display_meta::{ToolDisplayMeta, ToolLocation, ToolResultMeta, basename, truncate};
 use utils::temp_dir::TempDir;
 use utils::tool_result_truncator::ToolResultTruncator;
 
@@ -240,7 +240,7 @@ impl CodingMcp {
         context: RequestContext<RoleServer>,
     ) -> Result<Displayed<ReadFileResult>, CodingError> {
         args.file_path = self.resolve_file_arg(&args.file_path)?;
-        notify_preview(&context, ToolDisplayMeta::new("Read file", basename(&args.file_path))).await;
+        notify_preview(&context, file_preview("Read file", read_location(&args))).await;
         self.read_and_track(args).await
     }
 
@@ -255,7 +255,7 @@ impl CodingMcp {
         context: RequestContext<RoleServer>,
     ) -> Result<Displayed<WriteFileResponse>, CodingError> {
         args.file_path = self.resolve_file_arg(&args.file_path)?;
-        notify_preview(&context, ToolDisplayMeta::new("Write file", basename(&args.file_path))).await;
+        notify_preview(&context, file_preview("Write file", ToolLocation::new(&args.file_path, None))).await;
 
         self.ensure_read_before_overwrite(&args.file_path).await?;
 
@@ -277,7 +277,7 @@ impl CodingMcp {
         context: RequestContext<RoleServer>,
     ) -> Result<Displayed<EditFileResponse>, CodingError> {
         args.file_path = self.resolve_file_arg(&args.file_path)?;
-        notify_preview(&context, ToolDisplayMeta::new("Edit file", basename(&args.file_path))).await;
+        notify_preview(&context, file_preview("Edit file", ToolLocation::new(&args.file_path, None))).await;
 
         self.ensure_read_before_edit(&args.file_path)?;
 
@@ -500,6 +500,7 @@ When using tools that take file paths, always use absolute paths from:
     /// records it in the read set, and appends any matching read-rule reminders.
     async fn read_and_track(&self, args: ReadFileArgs) -> Result<Displayed<ReadFileResult>, CodingError> {
         let file_path = args.file_path.clone();
+        let location = read_location(&args);
         let mut result = read_file_contents(args).await?;
         let matched = {
             let mut state = self.read_state.lock().expect("read state lock poisoned");
@@ -517,7 +518,7 @@ When using tools that take file paths, always use absolute paths from:
             write!(summary, " +rules: {}", rule_names.join(", ")).unwrap();
         }
 
-        Ok(Displayed::new(result, ToolDisplayMeta::new("Read file", summary)))
+        Ok(Displayed::new(result, ToolResultMeta::new(ToolDisplayMeta::new("Read file", summary)).located(location)))
     }
 
     /// Read-before-overwrite safety check: an existing file must have been read
@@ -575,8 +576,16 @@ struct ReadState {
     rule_matcher: PromptRuleMatcher,
 }
 
-async fn notify_preview(context: &RequestContext<RoleServer>, meta: ToolDisplayMeta) {
-    notify(context, serde_json::to_string(&ToolResultMeta::from(meta)).unwrap_or_default()).await;
+async fn notify_preview(context: &RequestContext<RoleServer>, meta: impl Into<ToolResultMeta>) {
+    notify(context, serde_json::to_string(&meta.into()).unwrap_or_default()).await;
+}
+
+fn file_preview(title: &str, location: ToolLocation) -> ToolResultMeta {
+    ToolResultMeta::new(ToolDisplayMeta::new(title, basename(&location.path))).located(location)
+}
+
+fn read_location(args: &ReadFileArgs) -> ToolLocation {
+    ToolLocation::new(&args.file_path, args.offset.and_then(|offset| u32::try_from(offset).ok()))
 }
 
 async fn notify(context: &RequestContext<RoleServer>, message: String) {

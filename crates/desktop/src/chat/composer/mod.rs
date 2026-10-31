@@ -3,7 +3,6 @@ mod pasted;
 mod queued;
 
 use super::attachment::{chip, preview};
-use crate::file_index::FileIndex;
 use crate::theme::DesktopTheme;
 use crate::threads::{Thread, ThreadEvent, ThreadStatus, observe_thread};
 use crate::ui::tokens::{COMPOSER_POPUP_HEIGHT, ICON_SIZE, ROW_HEIGHT, rem};
@@ -11,7 +10,9 @@ use crate::ui::{
     Icon, IconButton, IconName, PickerItem, SearchPicker, SearchPickerEvent, SurfaceExt, Tooltip, Typography,
     TypographyExt, UiTheme, picker_closed, text_selector,
 };
-use client_core::composer::attachment::{AttachedFile, PromptAttachment, attach_missing, classify_paths};
+use client_core::composer::attachment::{
+    AttachedFile, AttachmentOrigin, PromptAttachment, attach_missing, classify_paths,
+};
 use client_core::composer::completion_token::Trigger;
 use client_core::composer::prompt_history::PromptHistory;
 use client_core::composer::prompt_search::PromptSearchStatus;
@@ -82,7 +83,7 @@ impl Composer {
                     cx.notify();
                 }
             }),
-            cx.observe_global::<FileIndex>(|this, cx| {
+            observe_thread(&thread, cx, Thread::listed_files, |this, cx| {
                 if this.completion().is_some_and(|menu| menu.token().trigger == Trigger::File) {
                     this.refresh_completion(cx);
                 }
@@ -231,26 +232,21 @@ impl Composer {
         if matches!(self.popup, Some(Popup::Dismissed { token_start }) if token_start == token.range.start) {
             return;
         }
-        let was_open = self.completion().map(|menu| (menu.token().trigger, menu.token().range.start));
         let menu = match token.trigger {
             Trigger::Command => {
                 let thread = self.thread.read(cx);
                 let commands = thread.core().map(SessionCore::available_commands).unwrap_or_default();
                 (!commands.is_empty()).then(|| CompletionMenu::commands(token, &text, commands))
             }
-            Trigger::File => self.root(cx).map(|root| {
-                if was_open != Some((Trigger::File, token.range.start)) {
-                    FileIndex::refresh(&root, cx);
-                }
-                CompletionMenu::files(token, &text, FileIndex::files(&root, cx).as_deref())
-            }),
+            Trigger::File => Some(CompletionMenu::files(token, &text, self.thread.read(cx).listed_files())),
         };
         self.popup = menu.map(Popup::Completion);
         cx.notify();
     }
 
     fn root(&self, cx: &App) -> Option<PathBuf> {
-        self.thread.read(cx).target().cwd().map(Path::to_path_buf)
+        let thread = self.thread.read(cx);
+        thread.listed_files().map(|files| files.root).ok().or_else(|| thread.target().cwd().map(Path::to_path_buf))
     }
 
     fn running(&self, cx: &App) -> bool {
@@ -576,13 +572,19 @@ enum Popup {
 
 const MIN_ROWS: usize = 1;
 const MAX_ROWS: usize = 12;
+const AGENT_TOKEN: &str = "agent:";
 
 fn mention_text(file: &PromptAttachment) -> String {
     format!("@{}", file.display_name)
 }
 
 fn mention_token(file: &PromptAttachment) -> InlineToken {
-    InlineToken::new(file.path.to_string_lossy().into_owned(), mention_text(file))
+    let path = file.path.to_string_lossy();
+    let id = match file.origin {
+        AttachmentOrigin::Client => path.into_owned(),
+        AttachmentOrigin::Agent => format!("{AGENT_TOKEN}{path}"),
+    };
+    InlineToken::new(id, mention_text(file))
 }
 
 fn insert_mention(
@@ -601,10 +603,14 @@ fn mentions(content: &InputContent) -> Vec<PromptAttachment> {
     let mut mentions: Vec<PromptAttachment> = Vec::new();
     for span in content.tokens() {
         let token = span.token();
-        let path = PathBuf::from(token.id().as_ref());
-        if mentions.iter().all(|mention| mention.path != path) {
-            let display_name = token.text().strip_prefix('@').unwrap_or(token.text()).to_owned();
-            mentions.push(PromptAttachment { path, display_name });
+        let (path, origin) = match token.id().strip_prefix(AGENT_TOKEN) {
+            Some(path) => (path, AttachmentOrigin::Agent),
+            None => (token.id().as_ref(), AttachmentOrigin::Client),
+        };
+        let display_name = token.text().strip_prefix('@').unwrap_or(token.text()).to_owned();
+        let mention = PromptAttachment { path: PathBuf::from(path), display_name, origin };
+        if !mentions.contains(&mention) {
+            mentions.push(mention);
         }
     }
     mentions

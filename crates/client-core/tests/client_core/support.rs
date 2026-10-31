@@ -1,6 +1,6 @@
 use acp_utils::client::{AcpClientError, AcpEvent};
 use acp_utils::conversation::{ConversationContent, Notice, NoticeLevel};
-use acp_utils::testing::FakeAgent;
+use acp_utils::testing::{Channel, FakeAgent};
 use agent_client_protocol::schema::v2::{Implementation, SessionId};
 use clankerdiff_client::ClientState;
 use clankerdiff_core::DiffDocument;
@@ -8,6 +8,7 @@ use client_core::command::CommandResult;
 use client_core::connection::{Connection, ConnectionError, Session};
 use client_core::runtime::{Input, SessionRuntime};
 use client_core::session_core::{Effect, SessionCore};
+use client_core::testing::{FakeGit, git_diff_agent};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::task::LocalSet;
@@ -35,6 +36,13 @@ impl LiveSession {
     ) -> Result<Self, ConnectionError> {
         let connection = Connection::connect_to(client_info(), agent.serve()).await?;
         Ok(Self::start(connection.open(session_id, working_dir.into()).await?))
+    }
+
+    pub(crate) async fn reviewing(git: FakeGit) -> Result<Self, ConnectionError> {
+        let (agent_end, client_end) = Channel::duplex();
+        tokio::task::spawn_local(git_diff_agent(FakeAgent::new("reviewing"), git).connect_to(agent_end));
+        let connection = Connection::connect_to(client_info(), client_end).await?;
+        Ok(Self::start(connection.open(None, "/repo".into()).await?))
     }
 
     pub(crate) fn start(session: Session) -> Self {

@@ -1,5 +1,4 @@
 use super::{App, ExitState, Overlay, Route};
-use crate::command::HostCommand;
 use crate::screens::git_diff::GitDiffScreen;
 use crate::settings::KeyAction;
 use crate::settings::overlay::ProviderLoginStatus;
@@ -12,7 +11,6 @@ use acp_utils::config_option_id::THEME_CONFIG_ID;
 use client_core::composer::attachment::classify_paths;
 use client_core::session_config_view::LocalConfigView;
 use client_core::session_core::SessionCore;
-use client_core::session_model::WorkspaceAccess;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use std::time::{Duration, Instant};
 
@@ -185,11 +183,10 @@ impl App {
                         Builtin::offered(self.core.session().capabilities()).into_iter().map(SlashCommand::Builtin);
                     let advertised = self.core.available_commands().iter().cloned().map(SlashCommand::Agent);
                     self.composer.open_command_picker(builtins.chain(advertised).collect());
-                } else if self.core.session().workspace_access() == WorkspaceAccess::Remote {
-                    self.update_core(|core| core.notify("File picker is unavailable for remote workspaces"));
                 } else {
                     self.composer.open_file_picker();
-                    self.queue(HostCommand::IndexFiles { root: self.core.session().working_dir().to_path_buf() });
+                    self.update_core(SessionCore::ensure_git_review);
+                    self.composer.on_files_listed(self.core.files());
                 }
                 return;
             }

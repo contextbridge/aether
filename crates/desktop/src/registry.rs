@@ -21,7 +21,6 @@ pub struct State {
     pub projects: Vec<PathBuf>,
     pub collapsed: HashSet<Collapsed>,
     pub last_agents: HashMap<PathBuf, String>,
-    pub pinned: HashSet<SessionId>,
     pub archived: HashSet<SessionId>,
     pub titles: HashMap<SessionId, String>,
     pub window_size: Option<Size<Pixels>>,
@@ -82,10 +81,6 @@ impl State {
         if !self.projects.contains(&root) {
             self.projects.push(root);
         }
-    }
-
-    pub fn toggle_pinned(&mut self, session_id: SessionId) {
-        toggle(&mut self.pinned, session_id);
     }
 
     pub fn archive(&mut self, session_id: SessionId) {

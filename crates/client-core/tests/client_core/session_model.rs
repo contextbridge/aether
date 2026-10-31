@@ -8,6 +8,7 @@ use client_core::composer::attachment::{AttachmentOutcome, PromptAttachment};
 use client_core::composer::submission::Submission;
 use client_core::session_core::SessionCore;
 use client_core::testing::SessionCoreConfigBuilder;
+use std::path::Path;
 
 #[test]
 fn media_is_sent_only_when_the_agent_and_every_selected_model_take_it() {
@@ -27,7 +28,7 @@ fn media_is_sent_only_when_the_agent_and_every_selected_model_take_it() {
         (media(), grouped("a,b", &[("a", true, true), ("b", true, true)]), image(), None),
         (acp::PromptCapabilities::new(), models("gpt", &[("gpt", false, false)]), "text".into(), None),
     ];
-    let attachment = PromptAttachment { path: "/workspace/attached".into(), display_name: "attached".into() };
+    let attachment = PromptAttachment::new("/workspace/attached".into(), Path::new("/workspace"));
     for (capabilities, config_options, block, expected) in cases {
         let config = SessionCoreConfigBuilder::new().prompt_capabilities(capabilities).config_options(config_options);
         let mut core = SessionCore::new(config.build());

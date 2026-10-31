@@ -7,8 +7,8 @@ use acp_utils::testing::FakeAgent;
 use agent_client_protocol::{Agent, Client, HandleDispatchFrom, NullRun, V2Builder};
 use clankerdiff_client::{RemoteError, RemoteErrorCode};
 use clankerdiff_core::{
-    DiffDocument, DiffScope, FileDiff, FileStatus, RepositoryAction, ReviewTarget, SourceDocument, SourceResult,
-    SourceUnavailable, StageState,
+    DiffDocument, DiffScope, FileDiff, FileStatus, LookupAnswer, LookupRequest, RepoPath, RepositoryAction, Resolution,
+    ReviewTarget, SourceDocument, SourcePath, SourceResult, SourceUnavailable, StageState,
 };
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -180,7 +180,7 @@ impl FakeGit {
     }
 
     #[must_use]
-    fn with_committed(self, path: &str, contents: impl AsRef<[u8]>) -> Self {
+    pub fn with_committed(self, path: &str, contents: impl AsRef<[u8]>) -> Self {
         self.add_file(path, contents);
         self.stage(path);
         self.commit(format!("add {path}")).expect("a staged file commits");
@@ -224,6 +224,35 @@ impl FakeGit {
         let value = change(&mut self.state.lock().unwrap());
         self.changes.send_replace(());
         value
+    }
+
+    pub(crate) fn lookup(&self, request: LookupRequest) -> Result<LookupAnswer, RemoteError> {
+        let state = self.state.lock().unwrap();
+        if !state.is_repo {
+            return Err(not_repository_error());
+        }
+        match request {
+            LookupRequest::Definition(_) => Ok(LookupAnswer::Definition(Resolution::default())),
+            LookupRequest::Source(SourcePath::Repo(path)) => {
+                let contents = state.files.get(path.as_str()).and_then(|file| file.contents.as_deref());
+                fake_source(contents)
+                    .map(LookupAnswer::Source)
+                    .map_err(|reason| git_error(format!("{path} cannot be shown: {reason}")))
+            }
+            LookupRequest::Source(SourcePath::External { id, .. }) => {
+                Err(RemoteError::new(RemoteErrorCode::Protocol, format!("unknown external source {id}")))
+            }
+        }
+    }
+
+    pub(crate) fn worktree_files(&self) -> Arc<[RepoPath]> {
+        let state = self.state.lock().unwrap();
+        state
+            .files
+            .values()
+            .filter(|file| file.contents.is_some())
+            .filter_map(|file| RepoPath::new(&file.path).ok())
+            .collect()
     }
 
     pub(crate) fn load_diff(&self, target: &ReviewTarget) -> Result<DiffDocument, RemoteError> {

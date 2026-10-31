@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 pub use clankerdiff_remote::{
-    Acp, Action, Instance, InstanceState, Inventory, Lifecycle, RemoteSpec, default_file, short_id,
+    Acp, Action, Channel, Instance, InstanceState, Inventory, Lifecycle, RemoteSpec, default_file, short_id,
 };
 
 pub const EXPIRY_WARNING: Duration = Duration::from_mins(10);

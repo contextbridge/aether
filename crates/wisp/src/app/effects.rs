@@ -40,6 +40,7 @@ impl App {
                 if let (Route::GitReview(screen), Some(state)) = (&mut self.route, self.core.git_review()) {
                     screen.install(state);
                 }
+                self.composer.on_files_listed(self.core.files());
             }
             Effect::WorkspacesListed(workspaces) => {
                 self.open_overlay(Overlay::Workspaces(WorkspacePicker::new(workspaces)));

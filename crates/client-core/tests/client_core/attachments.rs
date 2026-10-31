@@ -92,7 +92,7 @@ fn multi_attachment_preserves_order_with_truncated_text_between_media() {
 fn text_links_to_its_file_only_for_an_agent_that_shares_the_filesystem() {
     let workspace = TestWorkspace::new();
     let path = workspace.write("docs/My Notes.md", "# notes");
-    let attachments = [PromptAttachment { path: path.clone(), display_name: "docs/My Notes.md".into() }];
+    let attachments = [PromptAttachment::new(path.clone(), workspace.root())];
 
     let uris = [WorkspaceAccess::Local, WorkspaceAccess::Remote].map(|access| {
         let outcome = build_attachments(&attachments, access);
@@ -111,11 +111,22 @@ fn text_links_to_its_file_only_for_an_agent_that_shares_the_filesystem() {
     assert_eq!(uris, [local_uri.as_str(), "attachment:///docs/My%20Notes.md"]);
 }
 
+#[test]
+fn a_remote_agents_own_file_is_linked_for_it_to_read_instead_of_read_here() {
+    let attachment = PromptAttachment::in_workspace("/srv/repo/docs/My Notes.md".into(), Path::new("/srv/repo"));
+
+    let outcome = build_attachments(&[attachment], WorkspaceAccess::Remote);
+
+    let link = acp::ResourceLink::new("docs/My Notes.md", "file:///srv/repo/docs/My%20Notes.md");
+    assert_eq!(outcome.blocks, [acp::ContentBlock::ResourceLink(link)]);
+    assert!(outcome.warnings.is_empty(), "nothing is read from this machine");
+}
+
 fn encode(files: &[(&str, impl AsRef<[u8]>)]) -> AttachmentOutcome {
     let workspace = TestWorkspace::new();
     let attachments: Vec<_> = files
         .iter()
-        .map(|(name, bytes)| PromptAttachment { path: workspace.write(name, bytes), display_name: (*name).to_string() })
+        .map(|(name, bytes)| PromptAttachment::new(workspace.write(name, bytes), workspace.root()))
         .collect();
     build_attachments(&attachments, WorkspaceAccess::Local)
 }

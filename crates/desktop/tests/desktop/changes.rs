@@ -8,10 +8,10 @@ use serde_json::json;
 use utils::testing::TestWorkspace;
 
 #[gpui::test]
-fn the_changes_tab_counts_the_files_the_agent_reports_as_they_change(cx: &mut TestAppContext) {
+fn the_files_tab_counts_the_files_the_agent_reports_as_they_change(cx: &mut TestAppContext) {
     let (harness, thread, git) = with_changes(cx, &["src/main.rs", "README.md"]);
     assert!(harness.shows(cx, "changes-count", "2"));
-    harness.click(cx, "tab-changes").unwrap();
+    harness.click(cx, "tab-files").unwrap();
 
     git.add_file("src/lib.rs", "pub fn lib() {}\n");
 
@@ -23,12 +23,12 @@ fn the_changes_tab_counts_the_files_the_agent_reports_as_they_change(cx: &mut Te
 fn the_view_switch_in_the_header_swaps_the_chat_for_the_diff_without_moving(cx: &mut TestAppContext) {
     let (harness, _, _) = with_changes(cx, &["src/main.rs"]);
     assert!(harness.bounds(cx, "tab-chat-icon").is_some());
-    assert!(harness.bounds(cx, "tab-changes-icon").is_some());
+    assert!(harness.bounds(cx, "tab-files-icon").is_some());
     let switch = harness.bounds(cx, "view-switch").expect("a switch while there are changes to see");
     let header = harness.bounds(cx, "thread-header").expect("a header");
     assert!(switch.top() >= header.top() && switch.bottom() <= header.bottom(), "the switch sits in the header");
 
-    harness.click(cx, "tab-changes").unwrap();
+    harness.click(cx, "tab-files").unwrap();
     assert!(harness.bounds(cx, "changes-viewer").is_some(), "the diff is painted");
     assert_eq!(harness.bounds(cx, "view-switch"), Some(switch), "the switch has not moved");
     for chat in ["transcript", "composer", "session-options", "status"] {
@@ -41,7 +41,7 @@ fn the_view_switch_in_the_header_swaps_the_chat_for_the_diff_without_moving(cx: 
 }
 
 #[gpui::test]
-fn shortcuts_switch_between_chat_and_changes_and_escape_returns_to_the_chat(cx: &mut TestAppContext) {
+fn shortcuts_switch_between_chat_and_files_and_escape_returns_to_the_chat(cx: &mut TestAppContext) {
     let (harness, _, _) = with_changes(cx, &["src/main.rs"]);
 
     harness.simulate_keystrokes(cx, "secondary-2");
@@ -54,24 +54,26 @@ fn shortcuts_switch_between_chat_and_changes_and_escape_returns_to_the_chat(cx: 
 }
 
 #[gpui::test]
-fn changes_not_yet_seen_are_marked_until_the_changes_tab_opens(cx: &mut TestAppContext) {
+fn changes_not_yet_seen_are_marked_until_the_files_tab_opens(cx: &mut TestAppContext) {
     let (harness, _, _) = with_changes(cx, &["src/main.rs"]);
     assert!(harness.bounds(cx, "changes-unseen").is_some(), "new changes are marked");
 
-    harness.click(cx, "tab-changes").unwrap();
+    harness.click(cx, "tab-files").unwrap();
     harness.click(cx, "tab-chat").unwrap();
 
     assert!(harness.bounds(cx, "changes-unseen").is_none(), "seen changes are no longer marked");
 }
 
 #[gpui::test]
-fn a_clean_working_tree_shows_no_changes_in_whichever_scope_is_chosen(cx: &mut TestAppContext) {
+fn a_clean_working_tree_is_browsed_and_its_diff_shows_no_changes_in_whichever_scope(cx: &mut TestAppContext) {
     let (harness, thread, _) = with_changes(cx, &[]);
     assert!(harness.bounds(cx, "view-switch").is_some(), "the switch keeps its place");
     assert!(harness.bounds(cx, "changes-unseen").is_none(), "there is nothing new to see");
 
     harness.simulate_keystrokes(cx, "secondary-2");
     assert!(!harness.shows(cx, "changes-count", "0"), "a clean working tree counts nothing");
+    assert!(harness.bounds(cx, "browse-files").is_some(), "with nothing to review, the files are browsed");
+    harness.click(cx, "files-mode-diff").unwrap();
     assert!(harness.bounds(cx, "changes-clean").is_some());
 
     harness.click(cx, "scope-staged").unwrap();
@@ -81,7 +83,7 @@ fn a_clean_working_tree_shows_no_changes_in_whichever_scope_is_chosen(cx: &mut T
 #[gpui::test]
 fn the_review_pill_floats_over_the_diff_counting_its_comments_and_submits_them(cx: &mut TestAppContext) {
     let (harness, thread, _) = with_changes(cx, &["src/main.rs"]);
-    harness.click(cx, "tab-changes").unwrap();
+    harness.click(cx, "tab-files").unwrap();
     assert!(harness.bounds(cx, "review-submit").is_none(), "there is nothing to submit yet");
 
     comment(&harness, cx, "rename this");
@@ -99,7 +101,7 @@ fn the_review_pill_floats_over_the_diff_counting_its_comments_and_submits_them(c
 #[gpui::test]
 fn submitting_a_review_sends_its_comments_as_a_prompt_and_returns_to_the_chat(cx: &mut TestAppContext) {
     let (harness, thread, _) = with_changes(cx, &["src/main.rs"]);
-    harness.click(cx, "tab-changes").unwrap();
+    harness.click(cx, "tab-files").unwrap();
 
     comment(&harness, cx, "rename this");
     harness.simulate_keystrokes(cx, "s");
@@ -110,7 +112,7 @@ fn submitting_a_review_sends_its_comments_as_a_prompt_and_returns_to_the_chat(cx
 #[gpui::test]
 fn copying_the_review_puts_it_on_the_clipboard(cx: &mut TestAppContext) {
     let (harness, _, _) = with_changes(cx, &["src/main.rs"]);
-    harness.click(cx, "tab-changes").unwrap();
+    harness.click(cx, "tab-files").unwrap();
 
     comment(&harness, cx, "rename this");
     harness.simulate_keystrokes(cx, "y");
@@ -122,7 +124,7 @@ fn copying_the_review_puts_it_on_the_clipboard(cx: &mut TestAppContext) {
 #[gpui::test]
 fn staging_everything_from_the_command_list_stages_the_repository(cx: &mut TestAppContext) {
     let (harness, _, git) = with_changes(cx, &["src/main.rs", "README.md"]);
-    harness.click(cx, "tab-changes").unwrap();
+    harness.click(cx, "tab-files").unwrap();
 
     harness.simulate_keystrokes(cx, "tab shift-/");
     harness.simulate_input(cx, "stage all");

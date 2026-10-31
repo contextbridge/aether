@@ -1,6 +1,7 @@
 use crate::agents::Agents;
 use crate::chat::SearchPrompts;
 use crate::clock::Clock;
+use crate::file_picker::FilePicker;
 use crate::history::History;
 use crate::menus::APP_NAME;
 use crate::registry::Registry;
@@ -16,14 +17,15 @@ use crate::ui::tokens::{MODAL_WIDTH, PICKER_LIST_HEIGHT, rem};
 use crate::ui::window_chrome;
 use crate::ui::{
     Backdrop, EmptyState, IndicatorLayer, InterfaceSize, NoticeTone, PickerItem, SearchPicker, SearchPickerEvent,
-    StyledExt, Typography, TypographyExt, UI_FONT, picker_closed, place_window_buttons, spin_when_shown,
+    StyledExt, Typography, TypographyExt, UI_FONT, UiTheme, picker_closed, place_window_buttons, spin_when_shown,
 };
 use aether_sessions::SessionStore;
 use agent_client_protocol::schema::v2::SessionId;
+use clankerdiff_core::RepoPath;
 use clankerdiff_remote::Remotes;
 use gpui::{
-    App, Context, Entity, EntityId, FocusHandle, KeyBinding, StyleRefinement, Subscription, SystemNotification, Window,
-    actions, div, prelude::*,
+    AnyElement, App, Context, Entity, EntityId, FocusHandle, KeyBinding, StyleRefinement, Subscription,
+    SystemNotification, Window, actions, div, prelude::*,
 };
 use gpui_base::TextSelectionLayer;
 use std::collections::{BTreeSet, HashMap};
@@ -32,7 +34,7 @@ use std::sync::Arc;
 
 actions!(
     aether_desktop,
-    [SelectNextThread, SelectPreviousThread, OpenThreadSwitcher, ShowChat, ShowChanges, OpenSettings,]
+    [SelectNextThread, SelectPreviousThread, OpenThreadSwitcher, ShowChat, ShowFiles, OpenFile, OpenSettings,]
 );
 
 pub struct DesktopApp {
@@ -47,8 +49,7 @@ pub struct DesktopApp {
     focused: Option<EntityId>,
     restore: Option<SessionId>,
     launched: BTreeSet<String>,
-    switcher: Option<(Entity<SearchPicker>, Subscription)>,
-    settings: Option<(Entity<Settings>, Subscription)>,
+    modal: Option<(Modal, Subscription)>,
     focus_handle: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
@@ -139,8 +140,7 @@ impl DesktopApp {
             focused: None,
             restore,
             launched: BTreeSet::new(),
-            switcher: None,
-            settings: None,
+            modal: None,
             focus_handle,
             _subscriptions: subscriptions,
         }
@@ -155,7 +155,8 @@ impl DesktopApp {
             KeyBinding::new("secondary-]", SelectNextThread, None),
             KeyBinding::new("secondary-[", SelectPreviousThread, None),
             KeyBinding::new("secondary-1", ShowChat, None),
-            KeyBinding::new("secondary-2", ShowChanges, None),
+            KeyBinding::new("secondary-2", ShowFiles, None),
+            KeyBinding::new("secondary-p", OpenFile, None),
             KeyBinding::new("secondary-,", OpenSettings, None),
             KeyBinding::new("secondary-]", SelectNextThread, Some(INPUT_CONTEXT)),
             KeyBinding::new("secondary-[", SelectPreviousThread, Some(INPUT_CONTEXT)),
@@ -249,7 +250,7 @@ impl DesktopApp {
     }
 
     fn open_switcher(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.switcher.is_some() {
+        if self.modal.is_some() {
             return;
         }
         let entries = self.sidebar.read(cx).switcher_entries(cx);
@@ -271,32 +272,66 @@ impl DesktopApp {
                 this.threads.update(cx, |threads, cx| threads.open(&entries[index].thread, cx));
             });
             if closed {
-                this.close_switcher(window, cx);
+                this.close_modal(window, cx);
             }
         });
-        self.switcher = Some((switcher, subscription));
-        cx.notify();
+        self.present(Modal::Switcher(switcher), subscription, cx);
     }
 
-    fn close_switcher(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.switcher = None;
-        self.focus_selected(window, cx);
-        cx.notify();
+    fn open_file_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.modal.is_some() {
+            return;
+        }
+        let Some(thread) = self.threads.read(cx).selected().cloned() else {
+            return;
+        };
+        let files = cx.new(|cx| FilePicker::new(thread, window, cx));
+        let subscription = cx.subscribe_in(&files, window, |this, _, picked: &Option<RepoPath>, window, cx| {
+            if let Some(path) = picked
+                && let Some(view) = this.selected_view(cx)
+            {
+                view.update(cx, |view, cx| view.open_file(path.clone(), None, window, cx));
+            }
+            this.close_modal(window, cx);
+        });
+        self.present(Modal::Files(files), subscription, cx);
     }
 
     fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.settings.is_some() {
+        if self.modal.is_some() {
             return;
         }
         let settings = cx.new(|cx| Settings::new(self.registry.clone(), cx));
         settings.update(cx, |settings, cx| settings.focus(window, cx));
         let subscription = cx.subscribe_in(&settings, window, |this, _, _: &settings::Closed, window, cx| {
-            this.settings = None;
-            this.focus_selected(window, cx);
-            cx.notify();
+            this.close_modal(window, cx);
         });
-        self.settings = Some((settings, subscription));
+        self.present(Modal::Settings(settings), subscription, cx);
+    }
+
+    fn present(&mut self, modal: Modal, subscription: Subscription, cx: &mut Context<Self>) {
+        self.modal = Some((modal, subscription));
         cx.notify();
+    }
+
+    fn close_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.modal = None;
+        self.focus_selected(window, cx);
+        cx.notify();
+    }
+
+    fn render_modal(&self, theme: &UiTheme, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let backdrop = |id: &'static str| {
+            let app = cx.entity().downgrade();
+            Backdrop::new(id, *theme).align_top().on_dismiss(move |window, cx| {
+                let _ = app.update(cx, |this, cx| this.close_modal(window, cx));
+            })
+        };
+        Some(match &self.modal.as_ref()?.0 {
+            Modal::Switcher(picker) => backdrop("switcher-backdrop").child(picker.clone()).into_any_element(),
+            Modal::Files(files) => backdrop("file-picker-backdrop").child(files.clone()).into_any_element(),
+            Modal::Settings(settings) => settings.clone().into_any_element(),
+        })
     }
 
     fn focus_selected(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -420,7 +455,8 @@ impl Render for DesktopApp {
             .on_action(cx.listener(|this, _: &OpenThreadSwitcher, window, cx| this.open_switcher(window, cx)))
             .on_action(cx.listener(|this, _: &OpenSettings, window, cx| this.open_settings(window, cx)))
             .on_action(cx.listener(|this, _: &ShowChat, window, cx| this.show_tab(ThreadTab::Chat, window, cx)))
-            .on_action(cx.listener(|this, _: &ShowChanges, window, cx| this.show_tab(ThreadTab::Changes, window, cx)))
+            .on_action(cx.listener(|this, _: &ShowFiles, window, cx| this.show_tab(ThreadTab::Files, window, cx)))
+            .on_action(cx.listener(|this, _: &OpenFile, window, cx| this.open_file_picker(window, cx)))
             .relative()
             .size_full()
             .flex()
@@ -432,20 +468,17 @@ impl Render for DesktopApp {
             .children(sidebar_panel)
             .child(main)
             .child(self.indicators.clone())
-            .children(self.switcher.as_ref().map(|(picker, _)| {
-                let app = cx.entity().downgrade();
-                Backdrop::new("thread-switcher", theme)
-                    .align_top()
-                    .on_dismiss(move |window, cx| {
-                        let _ = app.update(cx, |this, cx| this.close_switcher(window, cx));
-                    })
-                    .child(picker.clone())
-            }))
-            .children(self.settings.as_ref().map(|(settings, _)| settings.clone()))
+            .children(self.render_modal(&theme, cx))
             .into_any_element();
 
         window_chrome::decorate(content, APP_NAME, &theme, window, cx)
     }
+}
+
+enum Modal {
+    Switcher(Entity<SearchPicker>),
+    Files(Entity<FilePicker>),
+    Settings(Entity<Settings>),
 }
 
 const INPUT_CONTEXT: &str = "Input";

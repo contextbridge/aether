@@ -9,6 +9,7 @@ use crate::view::edit_buffer::{EditBuffer, apply_edit_key, is_composed_char};
 use crate::view::input::{Nav, UiEvent};
 use client_core::composer::attachment::{AttachedFile, PromptAttachment, attach_missing};
 use client_core::composer::completion_token::{CompletionToken, Trigger};
+use client_core::composer::file_listing::FileListing;
 use client_core::composer::prompt_history::PromptHistory;
 use client_core::composer::prompt_search::PromptSearchState;
 use client_core::composer::submission::Submission;
@@ -235,9 +236,9 @@ impl Composer {
         self.overlay = Some(Overlay::Completion(CompletionOverlay::file()));
     }
 
-    pub fn on_files_indexed(&mut self, files: Vec<PromptAttachment>) {
+    pub fn on_files_listed(&mut self, listing: FileListing) {
         if let Some(overlay) = self.completion_mut() {
-            overlay.set_files(files);
+            overlay.set_files(listing);
         }
     }
 

@@ -7,7 +7,7 @@ use clankerdiff_client::protocol::client::ClientCommand;
 use clankerdiff_client::protocol::server::{SentDocument, ServerEvent};
 use clankerdiff_client::protocol::shared::{Event, LIVE_PROTOCOL_VERSION};
 use clankerdiff_client::{RemoteError, RemoteErrorCode};
-use clankerdiff_core::{DiffDocument, LookupAnswer, Resolution, ReviewTarget};
+use clankerdiff_core::{DiffDocument, RepoPath, ReviewTarget};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use tokio::task::AbortHandle;
 
@@ -25,6 +25,7 @@ struct Served {
 struct ServedSession {
     target: ReviewTarget,
     published: DiffDocument,
+    listed: Arc<[RepoPath]>,
     health: Option<RemoteError>,
 }
 
@@ -72,7 +73,9 @@ impl Served {
             }
             ClientCommand::SetTarget(target) => match self.git.load_diff(&target) {
                 Ok(document) => {
-                    *session = ServedSession { target, published: document.clone(), health: None };
+                    session.target = target;
+                    session.published = document.clone();
+                    session.health = None;
                     vec![Event::Document(Arc::new(document)), Event::RequestResult(Ok(()))]
                 }
                 Err(error) => vec![Event::RequestResult(Err(error))],
@@ -92,9 +95,7 @@ impl Served {
                 Err(error) => vec![Event::RequestResult(Err(error))],
             },
             ClientCommand::Submit(_) | ClientCommand::Cancel => vec![Event::RequestResult(Ok(()))],
-            ClientCommand::Lookup { id, .. } => {
-                vec![Event::Lookup { id, result: Ok(LookupAnswer::Definition(Resolution::default())) }]
-            }
+            ClientCommand::Lookup { id, request } => vec![Event::Lookup { id, result: self.git.lookup(request) }],
         }
     }
 
@@ -108,6 +109,11 @@ impl Served {
                 if document != session.published {
                     session.published = document.clone();
                     events.push(Event::Document(Arc::new(document)));
+                }
+                let listed = self.git.worktree_files();
+                if listed != session.listed {
+                    session.listed = listed.clone();
+                    events.push(Event::Files(listed));
                 }
                 if session.health.take().is_some() {
                     events.push(Event::Health { error: None });
@@ -132,8 +138,10 @@ impl Served {
         };
         match self.git.load_diff(&target) {
             Ok(document) => {
-                self.session = Some(ServedSession { target, published: document.clone(), health: None });
-                vec![initialize, Event::Document(Arc::new(document))]
+                let listed = self.git.worktree_files();
+                self.session =
+                    Some(ServedSession { target, published: document.clone(), listed: listed.clone(), health: None });
+                vec![initialize, Event::Document(Arc::new(document)), Event::Files(listed)]
             }
             Err(error) => vec![initialize, Event::Error(error)],
         }

@@ -56,7 +56,7 @@ pub(super) struct Row {
 
 #[derive(Clone, PartialEq)]
 pub(super) enum RowKind {
-    Local { session_id: Option<SessionId>, pinned: bool, age: Option<String>, editing: Option<Entity<InputState>> },
+    Local { session_id: Option<SessionId>, age: Option<String>, editing: Option<Entity<InputState>> },
     Cloud { remote: Box<RemoteSpec>, instance_id: Option<String>, subtitle: String, expiring: bool },
 }
 
@@ -101,10 +101,7 @@ impl<'a> Listing<'a> {
                     .filter(|session| {
                         !live_sessions.contains(&session.id) && !self.state.archived.contains(&session.id)
                     })
-                    .filter(|session| {
-                        session.created_at.is_some_and(|created_at| created_at >= cutoff)
-                            || self.state.pinned.contains(&session.id)
-                    })
+                    .filter(|session| session.created_at.is_some_and(|created_at| created_at >= cutoff))
                     .map(|session| self.saved_row(session));
                 let limit = limits.get(root).copied().unwrap_or(SAVED_ROWS);
                 (section.rows, section.hidden) = visible(live.chain(saved).collect(), limit);
@@ -141,7 +138,7 @@ impl<'a> Listing<'a> {
         let live_sessions = self.live_sessions();
         self.saved_sessions(root)
             .map(|session| &session.id)
-            .filter(|session_id| !live_sessions.contains(*session_id) && !self.state.pinned.contains(*session_id))
+            .filter(|session_id| !live_sessions.contains(*session_id))
             .cloned()
             .collect()
     }
@@ -274,15 +271,10 @@ impl<'a> Listing<'a> {
         title: String,
         started_at: Option<DateTime<Utc>>,
     ) -> Row {
-        let pinned = session_id.as_ref().is_some_and(|id| self.state.pinned.contains(id));
         let live = thread.live();
         let mut actions = Vec::new();
         if session_id.is_some() {
-            actions.extend([
-                RowAction::Rename,
-                if pinned { RowAction::Unpin } else { RowAction::Pin },
-                RowAction::Archive,
-            ]);
+            actions.extend([RowAction::Rename, RowAction::Archive]);
         }
         actions.extend(live.map(|_| RowAction::Stop));
         let editing = self.rename.filter(|rename| session_id.as_ref() == Some(&rename.session_id));
@@ -296,7 +288,6 @@ impl<'a> Listing<'a> {
             actions,
             kind: RowKind::Local {
                 session_id,
-                pinned,
                 age: started_at.map(|started_at| relative_time(started_at, self.now)),
                 editing: editing.map(|rename| rename.input.clone()),
             },
@@ -343,21 +334,15 @@ pub(super) fn project_name(root: &Path) -> String {
 }
 
 fn visible(rows: Vec<Row>, limit: usize) -> (Vec<Row>, usize) {
-    let (mut visible, unpinned): (Vec<Row>, Vec<Row>) =
-        rows.into_iter().partition(|row| matches!(row.kind, RowKind::Local { pinned: true, .. }));
     let mut saved = 0;
-    let mut hidden = 0;
-    for row in unpinned {
-        if matches!(row.thread, Some(ThreadRef::Saved { .. })) {
-            saved += 1;
-            if saved > limit {
-                hidden += 1;
-                continue;
-            }
+    let (visible, hidden): (Vec<Row>, Vec<Row>) = rows.into_iter().partition(|row| {
+        if !matches!(row.thread, Some(ThreadRef::Saved { .. })) {
+            return true;
         }
-        visible.push(row);
-    }
-    (visible, hidden)
+        saved += 1;
+        saved <= limit
+    });
+    (visible, hidden.len())
 }
 
 fn saved_thread(session: &SavedSession) -> ThreadRef {
