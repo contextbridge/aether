@@ -30,7 +30,7 @@ pub(super) struct GitReviewRuntime {
 enum Review {
     Closed,
     Opening(Pin<Box<dyn Future<Output = Result<ReviewConnection, ClientError>> + Send>>),
-    Open(ReviewConnection),
+    Open(Box<ReviewConnection>),
 }
 
 struct ReviewConnection {
@@ -71,7 +71,7 @@ impl GitReviewRuntime {
             match &mut self.review {
                 Review::Closed => return std::future::pending().await,
                 Review::Opening(opening) => match opening.as_mut().await {
-                    Ok(connection) => self.review = Review::Open(connection),
+                    Ok(connection) => self.review = Review::Open(Box::new(connection)),
                     Err(error) => {
                         self.review = Review::Closed;
                         return Some(failed(error));
@@ -83,16 +83,16 @@ impl GitReviewRuntime {
     }
 
     pub(super) fn close(&mut self) {
-        if let Review::Open(ReviewConnection { server: ReviewServer::Agent { session_id, .. }, .. }) =
-            std::mem::replace(&mut self.review, Review::Closed)
+        if let Review::Open(connection) = std::mem::replace(&mut self.review, Review::Closed)
+            && let ReviewServer::Agent { session_id, .. } = connection.server
         {
             let _ = self.handle.notify(GitDiffClosePayload { session_id: session_id.to_string() });
         }
     }
 
     pub(super) fn forward(&mut self, session_id: &SessionId, message: ServerMessage) {
-        if let Review::Open(ReviewConnection { server: ReviewServer::Agent { session_id: reviewed, messages }, .. }) =
-            &self.review
+        if let Review::Open(connection) = &self.review
+            && let ReviewServer::Agent { session_id: reviewed, messages } = &connection.server
             && reviewed == session_id
         {
             let _ = messages.send(message);
@@ -110,7 +110,7 @@ impl GitReviewRuntime {
                     messages: receiver,
                 };
                 let client = DiffClient::spawn(transport, ClientOptions::default());
-                Review::Open(ReviewConnection::new(client, ReviewServer::Agent { session_id, messages }))
+                Review::Open(Box::new(ReviewConnection::new(client, ReviewServer::Agent { session_id, messages })))
             }
             ReviewSource::Local(path) => Review::Opening(Box::pin(open_local(path))),
             ReviewSource::Stdio(invocation) => Review::Opening(Box::pin(open_process(invocation))),
