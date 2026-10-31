@@ -25,6 +25,29 @@ pub struct FileDiff {
     pub new_text: Option<String>,
 }
 
+impl FileDiff {
+    pub fn first_change(&self) -> ToolLocation {
+        let old = self.old_text.as_deref().unwrap_or_default();
+        let new = self.new_text.as_deref().unwrap_or_default();
+        let unchanged = old.lines().zip(new.lines()).take_while(|(old, new)| old == new).count();
+        let line = (unchanged + 1).min(new.lines().count().max(1));
+        ToolLocation::new(self.path.clone(), Some(u32::try_from(line).unwrap_or(u32::MAX)))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+pub struct ToolLocation {
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<u32>,
+}
+
+impl ToolLocation {
+    pub fn new(path: impl Into<String>, line: Option<u32>) -> Self {
+        Self { path: path.into(), line }
+    }
+}
+
 /// A snapshot of the agent's current task plan.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema)]
 pub struct PlanMeta {
@@ -56,6 +79,8 @@ pub struct ToolResultMeta {
     pub file_diff: Option<FileDiff>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plan: Option<PlanMeta>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub locations: Vec<ToolLocation>,
 }
 
 impl From<ToolDisplayMeta> for ToolResultMeta {
@@ -66,15 +91,22 @@ impl From<ToolDisplayMeta> for ToolResultMeta {
 
 impl ToolResultMeta {
     pub fn new(display: ToolDisplayMeta) -> Self {
-        Self { display, file_diff: None, plan: None }
+        Self { display, file_diff: None, plan: None, locations: Vec::new() }
     }
 
     pub fn with_plan(display: ToolDisplayMeta, plan: PlanMeta) -> Self {
-        Self { display, file_diff: None, plan: Some(plan) }
+        Self { plan: Some(plan), ..Self::new(display) }
     }
 
     pub fn with_file_diff(display: ToolDisplayMeta, file_diff: FileDiff) -> Self {
-        Self { display, file_diff: Some(file_diff), plan: None }
+        let locations = vec![file_diff.first_change()];
+        Self { file_diff: Some(file_diff), locations, ..Self::new(display) }
+    }
+
+    #[must_use]
+    pub fn located(mut self, location: ToolLocation) -> Self {
+        self.locations.push(location);
+        self
     }
 }
 
@@ -158,7 +190,25 @@ mod tests {
     fn test_into_result_meta() {
         let d = display("Write file", "main.rs");
         let meta: ToolResultMeta = d.clone().into();
-        assert_eq!(meta, ToolResultMeta { display: d, file_diff: None, plan: None });
+        assert_eq!(meta, ToolResultMeta { display: d, file_diff: None, plan: None, locations: Vec::new() });
+    }
+
+    #[test]
+    fn a_file_diff_is_located_at_its_first_changed_line() {
+        let diff = |old: Option<&str>, new: &str| FileDiff {
+            path: "/tmp/main.rs".to_string(),
+            old_text: old.map(str::to_string),
+            new_text: Some(new.to_string()),
+        };
+        let line = |diff: FileDiff| ToolResultMeta::with_file_diff(display("Edit file", "main.rs"), diff).locations;
+
+        assert_eq!(line(diff(Some("a\nb\nc\n"), "a\nb\nC\n")), [ToolLocation::new("/tmp/main.rs", Some(3))]);
+        assert_eq!(line(diff(None, "new\n")), [ToolLocation::new("/tmp/main.rs", Some(1))], "a new file starts at 1");
+        assert_eq!(
+            line(diff(Some("a\nb\n"), "a\n")),
+            [ToolLocation::new("/tmp/main.rs", Some(1))],
+            "never past the end"
+        );
     }
 
     #[test]
