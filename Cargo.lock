@@ -292,6 +292,7 @@ dependencies = [
  "clankerdiff-client",
  "clankerdiff-core",
  "clankerdiff-git",
+ "clankerdiff-remote",
  "clankerdiff-server",
  "mime_guess",
  "serde_json",

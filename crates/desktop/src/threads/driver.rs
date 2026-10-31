@@ -124,12 +124,5 @@ async fn forward(
 }
 
 async fn review_source(connector: &AgentConnector, target: &SessionTarget) -> Option<ReviewSource> {
-    let endpoint = match connector.diff_endpoint(target).await {
-        Ok(endpoint) => endpoint?,
-        Err(error) => return Some(ReviewSource::Unavailable(error.to_string())),
-    };
-    Some(match endpoint.connection_headers() {
-        Ok(headers) => ReviewSource::WebSocket { url: endpoint.url, headers },
-        Err(error) => ReviewSource::Unavailable(error.to_string()),
-    })
+    connector.review_source(target).await.unwrap_or_else(|error| Some(ReviewSource::Unavailable(error.to_string())))
 }

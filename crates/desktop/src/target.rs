@@ -4,6 +4,7 @@ use agent_client_protocol::schema::v2::{Implementation, SessionId};
 use agent_client_protocol::{self as acp, Agent, ByteStreams, Client, ConnectTo};
 use clankerdiff_client::ConnectionHeader;
 use clankerdiff_remote::{AcpTarget, Channel, Invocation, RemoteError, RemoteSpec, Remotes};
+use client_core::command::ReviewSource;
 use client_core::connection::{Connection, ConnectionError, Session};
 use client_core::session_model::WorkspaceAccess;
 use serde::de::DeserializeOwned;
@@ -172,9 +173,8 @@ impl AgentConnector {
                         self.transport.stdio(&command_line(&invocation), &invocation.dir).await?
                     }
                     Channel::Websocket(invocation) => {
-                        let endpoint: Endpoint = self.run_for_json(&command_line(&invocation), &invocation.dir).await?;
                         let startup = if remote.is_static() { Duration::ZERO } else { STARTUP_WINDOW };
-                        self.transport.websocket(&endpoint, startup).await?
+                        self.transport.websocket(&self.endpoint(&invocation).await?, startup).await?
                     }
                 };
                 match cwd {
@@ -190,13 +190,17 @@ impl AgentConnector {
         }
     }
 
-    pub async fn diff_endpoint(&self, target: &SessionTarget) -> Result<Option<Endpoint>, ConnectError> {
+    pub async fn review_source(&self, target: &SessionTarget) -> Result<Option<ReviewSource>, ConnectError> {
         match target {
             SessionTarget::Agent { agent, .. } => match &agent.config.diff {
-                Some(source) => Ok(Some(self.resolve(source, agent).await?)),
+                Some(source) => Ok(Some(self.resolve(source, agent).await?.review_source()?)),
                 None => Ok(None),
             },
-            SessionTarget::Remote { .. } => Ok(None),
+            SessionTarget::Remote { remote, instance } => match remote.diff(instance.as_deref())? {
+                Some(Channel::Stdio(invocation)) => Ok(Some(ReviewSource::Stdio(invocation))),
+                Some(Channel::Websocket(invocation)) => Ok(Some(self.endpoint(&invocation).await?.review_source()?)),
+                None => Ok(None),
+            },
         }
     }
 
@@ -205,6 +209,10 @@ impl AgentConnector {
             EndpointSource::Fixed(endpoint) => Ok(endpoint.expand(&agent.vars())?),
             EndpointSource::Command(line) => self.run_for_json(&line.expand(&agent.vars())?, &agent.workspace).await,
         }
+    }
+
+    async fn endpoint(&self, invocation: &Invocation) -> Result<Endpoint, ConnectError> {
+        self.run_for_json(&command_line(invocation), &invocation.dir).await
     }
 
     async fn run_for_json<T: DeserializeOwned>(&self, line: &CommandLine, dir: &Path) -> Result<T, ConnectError> {
@@ -284,7 +292,12 @@ struct AgentProcess {
 }
 
 impl Endpoint {
-    pub(crate) fn connection_headers(&self) -> Result<Vec<ConnectionHeader>, ConnectError> {
+    fn review_source(self) -> Result<ReviewSource, ConnectError> {
+        let headers = self.connection_headers()?;
+        Ok(ReviewSource::WebSocket { url: self.url, headers })
+    }
+
+    fn connection_headers(&self) -> Result<Vec<ConnectionHeader>, ConnectError> {
         self.headers
             .iter()
             .map(|(name, value)| {

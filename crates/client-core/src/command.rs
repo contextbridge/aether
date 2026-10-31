@@ -11,6 +11,7 @@ use agent_client_protocol::schema::v2::{
     SessionConfigOptionValue, SessionId, SessionInfo, SetSessionConfigOptionResponse,
 };
 use clankerdiff_client::{ClientError, ClientState, ConnectionHeader, DiffReviewEvent, LookupReply};
+use clankerdiff_remote::Invocation;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -82,6 +83,7 @@ pub enum GitReviewCommand {
 pub enum ReviewSource {
     Agent { session_id: SessionId },
     Local(PathBuf),
+    Stdio(Invocation),
     WebSocket { url: String, headers: Vec<ConnectionHeader> },
     Unavailable(String),
 }
