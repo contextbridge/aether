@@ -6,7 +6,6 @@ mod chat;
 pub mod cli;
 pub mod clock;
 mod elicitation;
-mod file_index;
 pub mod history;
 mod menus;
 pub mod registry;

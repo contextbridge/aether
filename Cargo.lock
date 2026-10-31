@@ -293,7 +293,6 @@ dependencies = [
  "clankerdiff-core",
  "clankerdiff-git",
  "clankerdiff-server",
- "ignore",
  "mime_guess",
  "serde_json",
  "tempfile",

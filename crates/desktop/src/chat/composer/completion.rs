@@ -4,6 +4,7 @@ use crate::ui::{PickerItem, PickerList, SurfaceExt, UiTheme};
 use clankerdiff_ui_core::{PickerOption, PickerState};
 use client_core::composer::attachment::PromptAttachment;
 use client_core::composer::completion_token::{CompletionToken, Trigger};
+use client_core::composer::file_listing::RepoFiles;
 use client_core::session_core::CommandEntry;
 use gpui::{AnyElement, Context, div, prelude::*};
 use gpui_base::input::InlineTokenSpan;
@@ -11,7 +12,7 @@ use gpui_base::input::InlineTokenSpan;
 pub(crate) struct CompletionMenu {
     token: CompletionToken,
     items: Vec<CompletionItem>,
-    loading: bool,
+    status: Option<String>,
     highlighted: usize,
 }
 
@@ -26,18 +27,18 @@ impl CompletionMenu {
         let query = token.query(text);
         let indices = best_matches(query, commands.iter().map(|command| &command.name));
         let items = indices.into_iter().map(|index| CompletionItem::Command(commands[index].clone())).collect();
-        Self { token, items, loading: false, highlighted: 0 }
+        Self { token, items, status: None, highlighted: 0 }
     }
 
-    pub(crate) fn files(token: CompletionToken, text: &str, files: Option<&[PromptAttachment]>) -> Self {
-        let query = token.query(text);
-        let items = files.map_or_else(Vec::new, |files| {
-            best_matches(query, files.iter().map(|file| &file.display_name))
-                .into_iter()
-                .map(|index| CompletionItem::File(files[index].clone()))
-                .collect()
-        });
-        Self { token, items, loading: files.is_none(), highlighted: 0 }
+    pub(crate) fn files(token: CompletionToken, text: &str, listing: Result<RepoFiles, String>) -> Self {
+        let (items, status) = match listing {
+            Ok(files) => {
+                let matches = best_matches(token.query(text), files.paths.iter()).into_iter();
+                (matches.map(|index| CompletionItem::File(files.attachment(&files.paths[index]))).collect(), None)
+            }
+            Err(status) => (Vec::new(), Some(status)),
+        };
+        Self { token, items, status, highlighted: 0 }
     }
 
     pub(crate) fn token(&self) -> &CompletionToken {
@@ -58,11 +59,10 @@ impl CompletionMenu {
     }
 
     pub(crate) fn render(&self, theme: &UiTheme, cx: &mut Context<Composer>) -> AnyElement {
-        let empty = match (self.token.trigger, self.loading) {
-            (Trigger::File, true) => "Indexing files…",
-            (Trigger::File, false) => "No matching files",
-            (Trigger::Command, _) => "No matching commands",
-        };
+        let empty = self.status.as_deref().unwrap_or(match self.token.trigger {
+            Trigger::File => "No matching files",
+            Trigger::Command => "No matching commands",
+        });
         let items = self.items.iter().enumerate().map(|(position, item)| match item {
             CompletionItem::Command(command) => {
                 PickerItem::new(format!("item-{position}"), format!("/{}", command.name))

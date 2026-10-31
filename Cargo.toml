@@ -100,7 +100,6 @@ libc = "0.2"
 notify = { version = "8.2.0", default-features = false, features = ["macos_fsevent"] }
 glob = "0.3"
 globset = "0.4"
-ignore = "0.4"
 
 # Terminal UI
 clankerdiff-core = { version = "0.8.2" }

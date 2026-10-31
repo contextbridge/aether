@@ -3,7 +3,6 @@ mod pasted;
 mod queued;
 
 use super::attachment::{chip, preview};
-use crate::file_index::FileIndex;
 use crate::theme::DesktopTheme;
 use crate::threads::{Thread, ThreadEvent, ThreadStatus, observe_thread};
 use crate::ui::tokens::{COMPOSER_POPUP_HEIGHT, ICON_SIZE, ROW_HEIGHT, rem};
@@ -82,7 +81,7 @@ impl Composer {
                     cx.notify();
                 }
             }),
-            cx.observe_global::<FileIndex>(|this, cx| {
+            observe_thread(&thread, cx, Thread::listed_files, |this, cx| {
                 if this.completion().is_some_and(|menu| menu.token().trigger == Trigger::File) {
                     this.refresh_completion(cx);
                 }
@@ -231,26 +230,24 @@ impl Composer {
         if matches!(self.popup, Some(Popup::Dismissed { token_start }) if token_start == token.range.start) {
             return;
         }
-        let was_open = self.completion().map(|menu| (menu.token().trigger, menu.token().range.start));
         let menu = match token.trigger {
             Trigger::Command => {
                 let thread = self.thread.read(cx);
                 let commands = thread.core().map(SessionCore::available_commands).unwrap_or_default();
                 (!commands.is_empty()).then(|| CompletionMenu::commands(token, &text, commands))
             }
-            Trigger::File => self.root(cx).map(|root| {
-                if was_open != Some((Trigger::File, token.range.start)) {
-                    FileIndex::refresh(&root, cx);
-                }
-                CompletionMenu::files(token, &text, FileIndex::files(&root, cx).as_deref())
-            }),
+            Trigger::File => {
+                let thread = self.thread.read(cx);
+                thread.target().cwd().is_some().then(|| CompletionMenu::files(token, &text, thread.listed_files()))
+            }
         };
         self.popup = menu.map(Popup::Completion);
         cx.notify();
     }
 
     fn root(&self, cx: &App) -> Option<PathBuf> {
-        self.thread.read(cx).target().cwd().map(Path::to_path_buf)
+        let thread = self.thread.read(cx);
+        thread.listed_files().map(|files| files.root).ok().or_else(|| thread.target().cwd().map(Path::to_path_buf))
     }
 
     fn running(&self, cx: &App) -> bool {
