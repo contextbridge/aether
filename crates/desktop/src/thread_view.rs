@@ -8,6 +8,7 @@ use crate::theme::DesktopTheme;
 use crate::threads::{Thread, ThreadEvent, ThreadStatus, observe_changes, observe_thread};
 use crate::ui::tokens::{GROUP_HEIGHT, ICON_SIZE_SMALL, RADIUS_CONTROL, RADIUS_INNER, ROW_HEIGHT, rem};
 use crate::ui::{Icon, IconName, StyledExt, Typography, TypographyExt, UiTheme, WindowDragExt, tagged, text_selector};
+use clankerdiff_core::RepoPath;
 use gpui::{
     AnyElement, AnyView, App, AppContext, Context, Div, Entity, ExternalPaths, Hsla, Role, Stateful, StyleRefinement,
     Subscription, Window, div, prelude::*,
@@ -111,6 +112,11 @@ impl ThreadView {
         self.see_changes(cx);
         self.focus(window, cx);
         cx.notify();
+    }
+
+    pub(crate) fn open_file(&mut self, path: RepoPath, line: Option<u32>, window: &mut Window, cx: &mut Context<Self>) {
+        self.show(ThreadTab::Files, window, cx);
+        self.files.update(cx, |files, cx| files.open(path, line, window, cx));
     }
 
     pub(crate) fn focus(&self, window: &mut Window, cx: &mut App) {

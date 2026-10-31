@@ -1,7 +1,7 @@
 use crate::theme::DesktopTheme;
 use crate::threads::{Thread, ThreadEvent, observe_thread};
 use crate::ui::{EmptyState, NoticeTone};
-use clankerdiff_core::{DiffReviewCommand, DiffReviewEvent};
+use clankerdiff_core::{DiffReviewCommand, DiffReviewEvent, DiffSide, FilesMode, RepoPath, SourcePath, TargetLocation};
 use clankerdiff_gpui::{DiffClientEvent, DiffClientView, DiffViewerOptions};
 use gpui::{App, Context, Entity, EventEmitter, Subscription, Window, div, prelude::*};
 use std::sync::Arc;
@@ -50,6 +50,13 @@ impl Files {
 
     pub(crate) fn copy(&self, window: &mut Window, cx: &mut App) {
         self.run(DiffReviewCommand::CopyReview, window, cx);
+    }
+
+    pub(crate) fn open(&self, path: RepoPath, line: Option<u32>, window: &mut Window, cx: &mut App) {
+        self.run(DiffReviewCommand::SetFilesMode(FilesMode::Diff), window, cx);
+        let line_number = line.map_or(1, |line| line.max(1) as usize);
+        let target = TargetLocation { path: SourcePath::Repo(path), side: DiffSide::New, line_number };
+        self.run(DiffReviewCommand::JumpTo(target), window, cx);
     }
 
     fn run(&self, command: DiffReviewCommand, window: &mut Window, cx: &mut App) {

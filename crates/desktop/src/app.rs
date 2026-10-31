@@ -1,6 +1,7 @@
 use crate::agents::Agents;
 use crate::chat::SearchPrompts;
 use crate::clock::Clock;
+use crate::file_picker::FilePicker;
 use crate::history::History;
 use crate::menus::APP_NAME;
 use crate::registry::Registry;
@@ -20,6 +21,7 @@ use crate::ui::{
 };
 use aether_sessions::SessionStore;
 use agent_client_protocol::schema::v2::SessionId;
+use clankerdiff_core::RepoPath;
 use clankerdiff_remote::Remotes;
 use gpui::{
     AnyElement, App, Context, Entity, EntityId, FocusHandle, KeyBinding, StyleRefinement, Subscription,
@@ -32,7 +34,7 @@ use std::sync::Arc;
 
 actions!(
     aether_desktop,
-    [SelectNextThread, SelectPreviousThread, OpenThreadSwitcher, ShowChat, ShowFiles, OpenSettings,]
+    [SelectNextThread, SelectPreviousThread, OpenThreadSwitcher, ShowChat, ShowFiles, OpenFile, OpenSettings,]
 );
 
 pub struct DesktopApp {
@@ -154,6 +156,7 @@ impl DesktopApp {
             KeyBinding::new("secondary-[", SelectPreviousThread, None),
             KeyBinding::new("secondary-1", ShowChat, None),
             KeyBinding::new("secondary-2", ShowFiles, None),
+            KeyBinding::new("secondary-p", OpenFile, None),
             KeyBinding::new("secondary-,", OpenSettings, None),
             KeyBinding::new("secondary-]", SelectNextThread, Some(INPUT_CONTEXT)),
             KeyBinding::new("secondary-[", SelectPreviousThread, Some(INPUT_CONTEXT)),
@@ -275,6 +278,25 @@ impl DesktopApp {
         self.present(Modal::Switcher(switcher), subscription, cx);
     }
 
+    fn open_file_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.modal.is_some() {
+            return;
+        }
+        let Some(thread) = self.threads.read(cx).selected().cloned() else {
+            return;
+        };
+        let files = cx.new(|cx| FilePicker::new(thread, window, cx));
+        let subscription = cx.subscribe_in(&files, window, |this, _, picked: &Option<RepoPath>, window, cx| {
+            if let Some(path) = picked
+                && let Some(view) = this.selected_view(cx)
+            {
+                view.update(cx, |view, cx| view.open_file(path.clone(), None, window, cx));
+            }
+            this.close_modal(window, cx);
+        });
+        self.present(Modal::Files(files), subscription, cx);
+    }
+
     fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.modal.is_some() {
             return;
@@ -307,6 +329,7 @@ impl DesktopApp {
         };
         Some(match &self.modal.as_ref()?.0 {
             Modal::Switcher(picker) => backdrop("switcher-backdrop").child(picker.clone()).into_any_element(),
+            Modal::Files(files) => backdrop("file-picker-backdrop").child(files.clone()).into_any_element(),
             Modal::Settings(settings) => settings.clone().into_any_element(),
         })
     }
@@ -433,6 +456,7 @@ impl Render for DesktopApp {
             .on_action(cx.listener(|this, _: &OpenSettings, window, cx| this.open_settings(window, cx)))
             .on_action(cx.listener(|this, _: &ShowChat, window, cx| this.show_tab(ThreadTab::Chat, window, cx)))
             .on_action(cx.listener(|this, _: &ShowFiles, window, cx| this.show_tab(ThreadTab::Files, window, cx)))
+            .on_action(cx.listener(|this, _: &OpenFile, window, cx| this.open_file_picker(window, cx)))
             .relative()
             .size_full()
             .flex()
@@ -453,6 +477,7 @@ impl Render for DesktopApp {
 
 enum Modal {
     Switcher(Entity<SearchPicker>),
+    Files(Entity<FilePicker>),
     Settings(Entity<Settings>),
 }
 

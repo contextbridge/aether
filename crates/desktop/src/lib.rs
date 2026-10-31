@@ -5,6 +5,7 @@ mod chat;
 pub mod cli;
 pub mod clock;
 mod elicitation;
+mod file_picker;
 mod files;
 pub mod history;
 mod menus;
@@ -21,8 +22,8 @@ pub mod threads;
 pub mod ui;
 
 pub use app::{
-    DesktopApp, DesktopConfig, OpenSettings, OpenThreadSwitcher, SelectNextThread, SelectPreviousThread, ShowChat,
-    ShowFiles,
+    DesktopApp, DesktopConfig, OpenFile, OpenSettings, OpenThreadSwitcher, SelectNextThread, SelectPreviousThread,
+    ShowChat, ShowFiles,
 };
 pub use clankerdiff_ui_core::{AppearanceMode, ThemePreference};
 pub use theme::DesktopTheme;

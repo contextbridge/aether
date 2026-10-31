@@ -1,4 +1,6 @@
-use crate::app::{OpenSettings, OpenThreadSwitcher, SelectNextThread, SelectPreviousThread, ShowChat, ShowFiles};
+use crate::app::{
+    OpenFile, OpenSettings, OpenThreadSwitcher, SelectNextThread, SelectPreviousThread, ShowChat, ShowFiles,
+};
 use crate::sidebar::{NewCloudThread, NewThread, ToggleSidebar};
 use crate::ui::interface_size::{DecreaseInterfaceSize, IncreaseInterfaceSize, ResetInterfaceSize};
 use gpui::{App, Menu, MenuItem};
@@ -30,6 +32,7 @@ pub(crate) fn install(cx: &mut App) {
             MenuItem::separator(),
             MenuItem::action("Show Chat", ShowChat),
             MenuItem::action("Show Files", ShowFiles),
+            MenuItem::action("Open File…", OpenFile),
         ],
     };
     let app = vec![MenuItem::action("Settings…", OpenSettings)];
