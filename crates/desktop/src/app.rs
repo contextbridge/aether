@@ -32,7 +32,7 @@ use std::sync::Arc;
 
 actions!(
     aether_desktop,
-    [SelectNextThread, SelectPreviousThread, OpenThreadSwitcher, ShowChat, ShowChanges, OpenSettings,]
+    [SelectNextThread, SelectPreviousThread, OpenThreadSwitcher, ShowChat, ShowFiles, OpenSettings,]
 );
 
 pub struct DesktopApp {
@@ -155,7 +155,7 @@ impl DesktopApp {
             KeyBinding::new("secondary-]", SelectNextThread, None),
             KeyBinding::new("secondary-[", SelectPreviousThread, None),
             KeyBinding::new("secondary-1", ShowChat, None),
-            KeyBinding::new("secondary-2", ShowChanges, None),
+            KeyBinding::new("secondary-2", ShowFiles, None),
             KeyBinding::new("secondary-,", OpenSettings, None),
             KeyBinding::new("secondary-]", SelectNextThread, Some(INPUT_CONTEXT)),
             KeyBinding::new("secondary-[", SelectPreviousThread, Some(INPUT_CONTEXT)),
@@ -420,7 +420,7 @@ impl Render for DesktopApp {
             .on_action(cx.listener(|this, _: &OpenThreadSwitcher, window, cx| this.open_switcher(window, cx)))
             .on_action(cx.listener(|this, _: &OpenSettings, window, cx| this.open_settings(window, cx)))
             .on_action(cx.listener(|this, _: &ShowChat, window, cx| this.show_tab(ThreadTab::Chat, window, cx)))
-            .on_action(cx.listener(|this, _: &ShowChanges, window, cx| this.show_tab(ThreadTab::Changes, window, cx)))
+            .on_action(cx.listener(|this, _: &ShowFiles, window, cx| this.show_tab(ThreadTab::Files, window, cx)))
             .relative()
             .size_full()
             .flex()

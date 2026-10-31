@@ -1,12 +1,12 @@
 use crate::theme::DesktopTheme;
-use crate::threads::{Thread, ThreadEvent, ThreadStatus, observe_thread};
+use crate::threads::{Thread, ThreadEvent, observe_thread};
 use crate::ui::{EmptyState, NoticeTone};
 use clankerdiff_core::{DiffReviewCommand, DiffReviewEvent};
 use clankerdiff_gpui::{DiffClientEvent, DiffClientView, DiffViewerOptions};
-use gpui::{AnyElement, App, Context, Entity, EventEmitter, Subscription, Window, div, prelude::*};
+use gpui::{App, Context, Entity, EventEmitter, Subscription, Window, div, prelude::*};
 use std::sync::Arc;
 
-pub(crate) struct Changes {
+pub(crate) struct Files {
     thread: Entity<Thread>,
     view: Option<(Entity<DiffClientView>, Subscription)>,
     comments: usize,
@@ -15,7 +15,7 @@ pub(crate) struct Changes {
 
 pub(crate) struct Dismissed;
 
-impl Changes {
+impl Files {
     pub(crate) fn new(thread: Entity<Thread>, cx: &mut Context<Self>) -> Self {
         let subscriptions = [
             observe_thread(
@@ -35,9 +35,9 @@ impl Changes {
                 }
             }),
         ];
-        let mut changes = Self { thread, view: None, comments: 0, _subscriptions: subscriptions };
-        changes.sync(cx);
-        changes
+        let mut files = Self { thread, view: None, comments: 0, _subscriptions: subscriptions };
+        files.sync(cx);
+        files
     }
 
     pub(crate) fn comments(&self) -> usize {
@@ -106,26 +106,20 @@ impl Changes {
     }
 }
 
-impl EventEmitter<Dismissed> for Changes {}
+impl EventEmitter<Dismissed> for Files {}
 
-impl Render for Changes {
+impl Render for Files {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some((view, _)) = &self.view {
             return view.clone().into_any_element();
         }
-        let status = self.thread.read(cx).status();
-        if matches!(status, ThreadStatus::Errored | ThreadStatus::Disconnected | ThreadStatus::Dormant) {
-            render_status("Agent not running", "Start the thread again to review its changes", cx)
-        } else {
-            render_status("Loading changes…", "Waiting for the agent", cx)
-        }
+        let thread = self.thread.read(cx);
+        let title = if thread.status().is_stopped() { "Agent not running" } else { "Waiting for the agent" };
+        let detail = thread.listed_files().err().unwrap_or_default();
+        div()
+            .debug_selector(|| "files-status".to_owned())
+            .size_full()
+            .child(EmptyState::new(title, detail, NoticeTone::Neutral, DesktopTheme::global(cx).ui()))
+            .into_any_element()
     }
-}
-
-fn render_status(title: &'static str, detail: &'static str, cx: &App) -> AnyElement {
-    div()
-        .debug_selector(|| "changes-status".to_owned())
-        .size_full()
-        .child(EmptyState::new(title, detail, NoticeTone::Neutral, DesktopTheme::global(cx).ui()))
-        .into_any_element()
 }

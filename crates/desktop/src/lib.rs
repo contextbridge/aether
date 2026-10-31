@@ -1,11 +1,11 @@
 pub mod agents;
 mod app;
 mod artifact_review;
-mod changes;
 mod chat;
 pub mod cli;
 pub mod clock;
 mod elicitation;
+mod files;
 pub mod history;
 mod menus;
 pub mod registry;
@@ -21,8 +21,8 @@ pub mod threads;
 pub mod ui;
 
 pub use app::{
-    DesktopApp, DesktopConfig, OpenSettings, OpenThreadSwitcher, SelectNextThread, SelectPreviousThread, ShowChanges,
-    ShowChat,
+    DesktopApp, DesktopConfig, OpenSettings, OpenThreadSwitcher, SelectNextThread, SelectPreviousThread, ShowChat,
+    ShowFiles,
 };
 pub use clankerdiff_ui_core::{AppearanceMode, ThemePreference};
 pub use theme::DesktopTheme;
