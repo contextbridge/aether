@@ -13,15 +13,17 @@ use agent_client_protocol::schema::v2::{
     ElicitationFormMode, ElicitationSchema, ElicitationSessionScope, ImageContent, NewSessionResponse,
     SessionConfigOption, SessionId, SessionUpdate, StopReason,
 };
+use clankerdiff_core::RepoPath;
 use client_core::command::RequestId;
 use client_core::command::{AgentCommand, Command, CommandResult, GitReviewCommand, PromptRejection, ReviewSource};
 use client_core::composer::attachment::{AttachmentOutcome, PromptAttachment};
+use client_core::composer::file_listing::FileListing;
 use client_core::composer::submission::Submission;
 use client_core::elicitation::ElicitationAnswer;
 use client_core::session_config_view::LocalConfigOption;
 use client_core::session_core::{Effect, ForegroundOperation, SessionCore};
 use client_core::session_model::{SessionSetting, WorkspaceAccess};
-use client_core::testing::SessionCoreConfigBuilder;
+use client_core::testing::{FakeGit, SessionCoreConfigBuilder};
 use std::path::{Path, PathBuf};
 use tokio::sync::oneshot;
 
@@ -202,6 +204,48 @@ fn a_git_review_reads_the_diff_the_agent_serves_or_else_the_working_tree_it_shar
     assert!(matches!(served, Some(ReviewSource::Agent { session_id }) if session_id == SessionId::new("test-session")));
     assert!(matches!(shared, Some(ReviewSource::Local(path)) if path == Path::new("/repo")));
     assert!(matches!(remote, Some(ReviewSource::Unavailable(_))));
+}
+
+#[test]
+fn a_git_review_lists_the_files_of_the_repository_it_reads_as_they_change() {
+    run_local(async {
+        let git = FakeGit::new("/repo").with_committed("src/lib.rs", "pub fn a() {}\n").with_untracked("notes.md", "n");
+        let mut live = LiveSession::reviewing(git.clone()).await.unwrap();
+        assert_eq!(live.core.files(), FileListing::Pending);
+
+        live.core.ensure_git_review();
+        live.run_until(|core| core.files() != FileListing::Pending).await;
+
+        let FileListing::Listed(files) = live.core.files() else { panic!("listed: {:?}", live.core.files()) };
+        assert_eq!(files.root, Path::new("/repo"));
+        assert_eq!(files.paths.iter().map(RepoPath::as_str).collect::<Vec<_>>(), ["notes.md", "src/lib.rs"]);
+        let mention = files.attachment(&files.paths[1]);
+        assert_eq!(
+            (mention.path.as_path(), mention.display_name.as_str()),
+            (Path::new("/repo/src/lib.rs"), "src/lib.rs")
+        );
+
+        git.add_file("src/new.rs", "pub fn b() {}\n");
+        live.run_until(|core| matches!(core.files(), FileListing::Listed(files) if files.paths.len() == 3)).await;
+        live.shutdown().await;
+    });
+}
+
+#[test]
+fn files_outside_a_repository_fail_with_the_reason() {
+    run_local(async {
+        let mut live = LiveSession::reviewing(FakeGit::not_a_repository("/repo")).await.unwrap();
+
+        live.core.ensure_git_review();
+        live.run_until(|core| core.files() != FileListing::Pending).await;
+
+        assert!(
+            matches!(live.core.files(), FileListing::Failed(reason) if reason.contains("not inside a Git worktree")),
+            "{:?}",
+            live.core.files()
+        );
+        live.shutdown().await;
+    });
 }
 
 #[test]

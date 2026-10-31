@@ -20,7 +20,7 @@ name = "client_core"
 path = "tests/client_core/main.rs"
 
 [features]
-testing = ["dep:clankerdiff-core", "acp_utils/testing"]
+testing = ["acp_utils/testing"]
 
 [package.metadata.docs.rs]
 all-features = true
@@ -34,7 +34,7 @@ acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["
 agent-client-protocol = { workspace = true, features = ["process"] }
 clankerdiff-client = { workspace = true, features = ["websocket"] }
 clankerdiff-server = { workspace = true }
-clankerdiff-core = { workspace = true, optional = true }
+clankerdiff-core = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros", "sync"] }
 tracing = { workspace = true }
 thiserror = { workspace = true }
