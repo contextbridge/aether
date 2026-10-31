@@ -1,9 +1,11 @@
-use crate::support::replying;
+use crate::support::{replying, texts};
 use acp_utils::testing::FakeAgent;
 use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder, static_remote};
 use aether_desktop::threads::Thread;
+use agent_client_protocol::schema::v2 as acp;
 use client_core::testing::FakeGit;
 use gpui::{Entity, TestAppContext};
+use serde_json::json;
 use std::path::Path;
 
 #[gpui::test]
@@ -59,8 +61,52 @@ fn only_one_modal_shows_at_a_time_and_escape_returns_to_the_chat(cx: &mut TestAp
     assert!(harness.bounds(cx, "transcript").is_some());
 }
 
+#[gpui::test]
+fn clicking_where_a_tool_worked_opens_that_line_without_unfolding_the_tool(cx: &mut TestAppContext) {
+    let agent = working_at("/alpha/src/util.rs");
+    let (harness, thread) = start_with(cx, agent, FakeGit::new("/alpha").with_committed("src/util.rs", UTIL));
+    harness.send(cx, &thread, "go");
+
+    harness.click(cx, "tool-location-1").unwrap();
+
+    harness.run_until_painted(cx, "code:src/util.rs:new:2");
+    harness.click(cx, "tab-chat").unwrap();
+    assert!(harness.bounds(cx, "tool-details-1").is_none(), "the tool stays folded");
+}
+
+#[gpui::test]
+fn clicking_where_a_tool_edited_opens_the_diff_at_that_line(cx: &mut TestAppContext) {
+    let git = FakeGit::new("/alpha").with_modified("src/util.rs", UTIL, UTIL_EDITED);
+    let (harness, thread) = start_with(cx, editing_at("/alpha/src/util.rs", 2), git);
+    harness.send(cx, &thread, "go");
+    harness.click(cx, "tab-files").unwrap();
+    harness.click(cx, "files-mode-browse").unwrap();
+    harness.run_until_painted(cx, "browse-files");
+    harness.click(cx, "tab-chat").unwrap();
+
+    harness.click(cx, "tool-location-1").unwrap();
+
+    harness.run_until_painted(cx, "code:src/util.rs:new:2");
+    assert!(harness.bounds(cx, "diff-files").is_some(), "an edit opens in the diff, even from browsing");
+    assert!(harness.bounds(cx, "source-mode-header").is_none());
+}
+
+#[gpui::test]
+fn a_tool_location_outside_the_repository_says_why_it_cannot_be_opened(cx: &mut TestAppContext) {
+    let agent = working_at("/elsewhere/notes.md");
+    let (harness, thread) = start_with(cx, agent, FakeGit::new("/alpha").with_committed("src/util.rs", UTIL));
+    harness.send(cx, &thread, "go");
+
+    harness.click(cx, "tool-location-1").unwrap();
+
+    let error = "Can't open /elsewhere/notes.md: it isn't in this thread's repository";
+    harness.run_until(cx, |cx| texts(thread.read(cx)).iter().any(|text| text == error));
+    assert!(harness.bounds(cx, "transcript").is_some(), "the chat stays put");
+}
+
 const UTIL: &str = "pub fn helper() -> u32 {\n    1\n}\n";
 const MAIN: &str = "fn main() {}\n";
+const UTIL_EDITED: &str = "pub fn helper() -> u32 {\n    2\n}\n";
 
 fn start(cx: &mut TestAppContext, git: FakeGit) -> (DesktopHarness, Entity<Thread>) {
     start_with(cx, replying("alpha-session", "reply"), git)
@@ -71,6 +117,26 @@ fn start_with(cx: &mut TestAppContext, agent: FakeAgent, git: FakeGit) -> (Deskt
         DesktopHarnessBuilder::default().agent("/alpha", agent).git("/alpha", git).start(cx, "/alpha");
     wait_for_review(&harness, cx, &thread);
     (harness, thread)
+}
+
+fn working_at(path: &str) -> FakeAgent {
+    let read = acp::ToolCallUpdate::new("call-1")
+        .title("Read file")
+        .status(acp::ToolCallStatus::Completed)
+        .locations(vec![acp::ToolCallLocation::new(path).line(2)])
+        .meta(serde_json::Map::from_iter([("display_value".to_owned(), json!("util.rs, 3 lines"))]));
+    FakeAgent::new("alpha-session").prompt_updates(vec![acp::SessionUpdate::ToolCallUpdate(read)])
+}
+
+fn editing_at(path: &str, line: u32) -> FakeAgent {
+    let unified = "--- a/src/util.rs\n+++ b/src/util.rs\n@@ -2 +2 @@\n-    1\n+    2\n";
+    let diff = acp::Diff::patch(unified, vec![acp::DiffChange::modify(path)]);
+    let edit = acp::ToolCallUpdate::new("call-1")
+        .title("Edit file")
+        .status(acp::ToolCallStatus::Completed)
+        .content(vec![acp::ToolCallContent::from(diff)])
+        .locations(vec![acp::ToolCallLocation::new(path).line(line)]);
+    FakeAgent::new("alpha-session").prompt_updates(vec![acp::SessionUpdate::ToolCallUpdate(edit)])
 }
 
 fn wait_for_review(harness: &DesktopHarness, cx: &mut TestAppContext, thread: &Entity<Thread>) {

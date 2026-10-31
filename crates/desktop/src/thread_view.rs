@@ -8,6 +8,7 @@ use crate::theme::DesktopTheme;
 use crate::threads::{Thread, ThreadEvent, ThreadStatus, observe_changes, observe_thread};
 use crate::ui::tokens::{GROUP_HEIGHT, ICON_SIZE_SMALL, RADIUS_CONTROL, RADIUS_INNER, ROW_HEIGHT, rem};
 use crate::ui::{Icon, IconName, StyledExt, Typography, TypographyExt, UiTheme, WindowDragExt, tagged, text_selector};
+use agent_client_protocol::schema::v2 as acp;
 use clankerdiff_core::RepoPath;
 use gpui::{
     AnyElement, AnyView, App, AppContext, Context, Div, Entity, ExternalPaths, Hsla, Role, Stateful, StyleRefinement,
@@ -71,6 +72,9 @@ impl ThreadView {
             observe_changes(&registry, cx, header(&thread), |_, cx| cx.notify()),
             cx.observe(&files, |_, _, cx| cx.notify()),
             cx.subscribe_in(&options, window, |this, _, _: &PickerClosed, window, cx| this.focus(window, cx)),
+            cx.subscribe_in(&transcript, window, |this, _, location: &acp::ToolCallLocation, window, cx| {
+                this.open_location(location, window, cx);
+            }),
             cx.subscribe_in(&elicitation, window, |this, _, _: &OpenReview, window, cx| {
                 this.show(ThreadTab::Review, window, cx);
             }),
@@ -117,6 +121,15 @@ impl ThreadView {
     pub(crate) fn open_file(&mut self, path: RepoPath, line: Option<u32>, window: &mut Window, cx: &mut Context<Self>) {
         self.show(ThreadTab::Files, window, cx);
         self.files.update(cx, |files, cx| files.open(path, line, window, cx));
+    }
+
+    fn open_location(&mut self, location: &acp::ToolCallLocation, window: &mut Window, cx: &mut Context<Self>) {
+        let path = location.path.0.as_path();
+        let Some(file) = self.thread.read(cx).listed_files().ok().and_then(|files| files.repo_path(path)) else {
+            let message = format!("Can't open {}: it isn't in this thread's repository", path.display());
+            return self.thread.update(cx, |thread, cx| thread.report_error(&message, cx));
+        };
+        self.open_file(file, location.line, window, cx);
     }
 
     pub(crate) fn focus(&self, window: &mut Window, cx: &mut App) {

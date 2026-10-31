@@ -1,7 +1,7 @@
 use super::attachment::PromptAttachment;
 use clankerdiff_client::{ClientState, ConnectionState};
 use clankerdiff_core::RepoPath;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -45,5 +45,9 @@ impl FileListing {
 impl RepoFiles {
     pub fn attachment(&self, path: &RepoPath) -> PromptAttachment {
         PromptAttachment::new(self.root.join(path.as_str()), &self.root)
+    }
+
+    pub fn repo_path(&self, path: &Path) -> Option<RepoPath> {
+        RepoPath::new(path.strip_prefix(&self.root).ok()?.to_str()?).ok()
     }
 }
