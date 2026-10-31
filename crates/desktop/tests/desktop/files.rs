@@ -1,4 +1,5 @@
 use crate::support::{replying, texts};
+use acp_utils::notifications::RemoteServerInfo;
 use acp_utils::testing::FakeAgent;
 use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder, static_remote};
 use aether_desktop::threads::Thread;
@@ -27,9 +28,11 @@ fn secondary_p_finds_a_file_by_name_and_opens_it_read_only_in_the_files_tab(cx: 
 }
 
 #[gpui::test]
-fn a_cloud_thread_browses_the_files_of_its_remote_checkout(cx: &mut TestAppContext) {
+fn a_cloud_thread_browses_and_mentions_the_files_of_its_remote_checkout(cx: &mut TestAppContext) {
+    let remote = RemoteServerInfo { cwd: "/devbox".into(), session_id: None };
+    let (agent, mut requests) = FakeAgent::new("cloud-session-0").remote_server(&remote).capture();
     let harness = DesktopHarnessBuilder::default()
-        .script("/devbox", replying("cloud-session-0", "hi"))
+        .script("/devbox", agent)
         .git("/devbox", FakeGit::new("/devbox").with_committed("src/util.rs", UTIL))
         .remote(static_remote("devbox", "/devbox"))
         .build(cx);
@@ -41,8 +44,15 @@ fn a_cloud_thread_browses_the_files_of_its_remote_checkout(cx: &mut TestAppConte
 
     open_picker(&harness, cx, &thread);
     harness.simulate_keystrokes(cx, "enter");
-
     harness.run_until_painted(cx, "code:src/util.rs:new:1");
+
+    harness.click(cx, "tab-chat").unwrap();
+    harness.simulate_input(cx, "explain @util");
+    harness.run_until_painted(cx, "completion-item-0");
+    harness.simulate_keystrokes(cx, "enter enter");
+    let prompt = harness.next(cx, &mut requests.prompt).prompt;
+    let link = acp::ResourceLink::new("src/util.rs", "file:///devbox/src/util.rs");
+    assert!(prompt.contains(&acp::ContentBlock::ResourceLink(link)), "the agent reads the file itself: {prompt:?}");
 }
 
 #[gpui::test]

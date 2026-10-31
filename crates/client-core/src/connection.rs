@@ -38,10 +38,19 @@ impl Connection {
     }
 
     pub async fn open(self, session_id: Option<SessionId>, working_dir: PathBuf) -> Result<Session, ConnectionError> {
+        self.open_with_access(session_id, working_dir, WorkspaceAccess::Local).await
+    }
+
+    pub async fn open_with_access(
+        self,
+        session_id: Option<SessionId>,
+        working_dir: PathBuf,
+        workspace_access: WorkspaceAccess,
+    ) -> Result<Session, ConnectionError> {
         if self.remote_server().is_some() {
             return self.open_remote(session_id).await;
         }
-        self.start(session_id, working_dir, WorkspaceAccess::Local).await
+        self.start(session_id, working_dir, workspace_access).await
     }
 
     pub async fn open_remote(self, requested_session: Option<SessionId>) -> Result<Session, ConnectionError> {

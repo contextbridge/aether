@@ -30,7 +30,7 @@ use tokio::sync::oneshot;
 #[test]
 fn media_the_agent_cannot_take_gives_the_submission_back() {
     let mut core = core();
-    let photo = PromptAttachment { path: "/workspace/photo.png".into(), display_name: "photo.png".into() };
+    let photo = PromptAttachment::new("/workspace/photo.png".into(), Path::new("/workspace"));
     let with_photo = Submission { media: vec![photo], ..Submission::from("what is this?") };
     core.submit(with_photo.clone());
 
@@ -53,7 +53,7 @@ fn attachments_are_prepared_for_where_the_agent_runs() {
         (SessionCoreConfigBuilder::new().remote_workspace(), WorkspaceAccess::Remote),
     ] {
         let mut core = SessionCore::new(config.build());
-        let notes = PromptAttachment { path: "/workspace/notes.md".into(), display_name: "notes.md".into() };
+        let notes = PromptAttachment::new("/workspace/notes.md".into(), Path::new("/workspace"));
 
         core.submit(Submission { mentions: vec![notes.clone()], ..Submission::from("read @notes.md") });
 
@@ -67,7 +67,7 @@ fn attachments_are_prepared_for_where_the_agent_runs() {
 
 #[test]
 fn a_prompt_sends_its_text_before_its_attachments_and_leaves_blank_text_out() {
-    let photo = PromptAttachment { path: "/workspace/photo.png".into(), display_name: "photo.png".into() };
+    let photo = PromptAttachment::new("/workspace/photo.png".into(), Path::new("/workspace"));
     for (text, expected) in
         [("describe this", vec![ContentBlock::from("describe this"), image()]), (" \n ", vec![image()])]
     {

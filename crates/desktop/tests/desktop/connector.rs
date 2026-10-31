@@ -86,6 +86,7 @@ async fn a_thread_on_a_remote_launches_an_instance_and_reaches_its_agent_where_t
     assert_eq!(remotes.state_of("patchwave", "instance-0"), Some(InstanceState::Running));
     assert_eq!(session.session_response.session_id, SessionId::new("vm-session"));
     assert_eq!(session.working_dir, PathBuf::from("/vm/patchwave"), "the agent works in the remote's `acp.cwd`");
+    assert_eq!(session.workspace_access, WorkspaceAccess::Remote, "`acp.cwd` is not a path on this machine");
     assert_eq!(connector.launch(&target).await.unwrap(), None, "a launched instance is reused");
     assert_eq!(connector.diff_endpoint(&target).await.unwrap(), None, "the agent diffs its own working tree");
 }
@@ -112,6 +113,7 @@ async fn a_static_remotes_agent_runs_over_stdio_in_the_remotes_directory_without
     assert_eq!(target.instance(), Some("devbox"));
     assert_eq!(remotes.launches(), 0);
     assert_eq!(session.session_response.session_id, SessionId::new("local-session"));
+    assert_eq!(session.workspace_access, WorkspaceAccess::Remote, "`acp.cwd` is not a path on this machine");
     assert!(dir.path().join(FAKE_AGENT_LOCK_FILE).exists(), "the agent started in the remote's directory");
 }
 

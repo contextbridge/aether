@@ -10,6 +10,13 @@ use url::Url;
 pub struct PromptAttachment {
     pub path: PathBuf,
     pub display_name: String,
+    pub origin: AttachmentOrigin,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttachmentOrigin {
+    Client,
+    Agent,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,7 +44,11 @@ impl PromptAttachment {
     pub fn new(path: PathBuf, root: &Path) -> Self {
         let name = path.strip_prefix(root).ok().or_else(|| path.file_name().map(Path::new)).unwrap_or(&path);
         let display_name = name.to_string_lossy().replace('\\', "/");
-        Self { path, display_name }
+        Self { path, display_name, origin: AttachmentOrigin::Client }
+    }
+
+    pub fn in_workspace(path: PathBuf, root: &Path) -> Self {
+        Self { origin: AttachmentOrigin::Agent, ..Self::new(path, root) }
     }
 }
 
@@ -80,6 +91,10 @@ pub fn classify_attachment(path: &Path) -> AttachmentKind {
 pub fn build_attachments(attachments: &[PromptAttachment], access: WorkspaceAccess) -> AttachmentOutcome {
     let mut outcome = AttachmentOutcome::default();
     for attachment in attachments {
+        if access == WorkspaceAccess::Remote && attachment.origin == AttachmentOrigin::Agent {
+            outcome.blocks.push(workspace_link(attachment));
+            continue;
+        }
         let encoded = read_capped(&attachment.path, &attachment.display_name)
             .and_then(|bytes| encode_attachment(attachment, access, bytes));
         match encoded {
@@ -116,7 +131,7 @@ fn encode_attachment(
     access: WorkspaceAccess,
     bytes: Vec<u8>,
 ) -> Result<(acp::ContentBlock, Option<String>), String> {
-    let PromptAttachment { path, display_name } = attachment;
+    let PromptAttachment { path, display_name, .. } = attachment;
     let mime_type = mime_guess::from_path(path).first_or_octet_stream().to_string();
     match classify_attachment(path) {
         AttachmentKind::Image | AttachmentKind::Audio => {
@@ -180,6 +195,12 @@ fn file_uri(path: &Path, display_name: &str) -> Result<String, String> {
     Url::from_file_path(uri_path)
         .map(|url| url.to_string())
         .map_err(|()| format!("Failed to build file URI for {display_name}"))
+}
+
+fn workspace_link(attachment: &PromptAttachment) -> acp::ContentBlock {
+    let mut url = Url::parse("file:///").expect("a valid base URL");
+    url.set_path(&attachment.path.to_string_lossy());
+    acp::ContentBlock::ResourceLink(acp::ResourceLink::new(attachment.display_name.clone(), url.to_string()))
 }
 
 fn attached_uri(display_name: &str) -> String {

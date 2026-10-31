@@ -5,6 +5,7 @@ use agent_client_protocol::{self as acp, Agent, ByteStreams, Client, ConnectTo};
 use clankerdiff_client::ConnectionHeader;
 use clankerdiff_remote::{AcpTarget, Channel, Invocation, RemoteError, RemoteSpec, Remotes};
 use client_core::connection::{Connection, ConnectionError, Session};
+use client_core::session_model::WorkspaceAccess;
 use serde::de::DeserializeOwned;
 use std::future::Future;
 use std::io;
@@ -177,7 +178,9 @@ impl AgentConnector {
                     }
                 };
                 match cwd {
-                    Some(cwd) => Ok(connection.open(session_id, cwd.into()).await?),
+                    Some(cwd) => {
+                        Ok(connection.open_with_access(session_id, cwd.into(), WorkspaceAccess::Remote).await?)
+                    }
                     None => connection.open_remote(session_id).await.map_err(|error| match error {
                         ConnectionError::MissingRemoteContract => ConnectError::NoCwd { remote: remote.name.clone() },
                         error @ ConnectionError::Acp(_) => error.into(),

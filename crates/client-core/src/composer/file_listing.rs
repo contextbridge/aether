@@ -44,7 +44,7 @@ impl FileListing {
 
 impl RepoFiles {
     pub fn attachment(&self, path: &RepoPath) -> PromptAttachment {
-        PromptAttachment::new(self.root.join(path.as_str()), &self.root)
+        PromptAttachment::in_workspace(self.root.join(path.as_str()), &self.root)
     }
 
     pub fn repo_path(&self, path: &Path) -> Option<RepoPath> {
