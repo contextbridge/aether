@@ -30,7 +30,6 @@ use agent_client_protocol::schema::v2::{self as acp, CreateElicitationRequest, C
 use agent_client_protocol::{Error, JsonRpcRequest, JsonRpcResponse, Responder};
 use clankerdiff_core::git_patch_from_texts;
 use clankerdiff_ratatui::ThemeChoice;
-use client_core::composer::file_index::index_files;
 use client_core::runtime::{Input, SessionRuntime};
 use client_core::session_core::ForegroundOperation;
 use client_core::testing::{FakeGit, SessionCoreConfigBuilder, git_diff_agent};
@@ -464,7 +463,6 @@ impl World {
 
 #[derive(Default)]
 struct FakeTuiHost {
-    workspace: PathBuf,
     themes: Vec<String>,
     review_themes: Vec<ThemeChoice>,
     results: VecDeque<HostCommandResult>,
@@ -481,10 +479,6 @@ impl Host for FakeTuiHost {
                 let mut choices = builtin_review_theme_choices();
                 choices.extend(self.review_themes.iter().cloned());
                 self.results.push_back(HostCommandResult::ReviewThemesListed(choices));
-            }
-            HostCommand::IndexFiles { root } => {
-                let files = if root.starts_with(&self.workspace) { index_files(&root) } else { Vec::new() };
-                self.results.push_back(HostCommandResult::FilesIndexed(files));
             }
             HostCommand::ApplyTheme { settings } => self.applying.push_back(settings),
             HostCommand::RingBell => self.bells += 1,
@@ -731,7 +725,10 @@ impl TestUiBuilder {
             .hold::<WorkspaceListParams>()
             .hold::<WorkspaceMoveParams>()
             .capture();
-        let server = git_diff_agent(agent, self.git);
+        let git = if self.files.is_empty() { self.git } else { FakeGit::new(&root) };
+        let git =
+            self.files.iter().fold(git, |git, (path, contents)| git.with_untracked(path.to_string_lossy(), contents));
+        let server = git_diff_agent(agent, git);
         let (connection, client) = tokio.block_on(local.run_until(async {
             let (agent_end, client_end) = Channel::duplex();
             let connection = tokio::task::spawn_local(server.connect_to(agent_end));
@@ -740,12 +737,7 @@ impl TestUiBuilder {
         }));
 
         let config = AppConfig { session: session.build(), settings: self.settings };
-        let host = FakeTuiHost {
-            workspace: root.clone(),
-            themes: self.themes,
-            review_themes: self.review_themes,
-            ..FakeTuiHost::default()
-        };
+        let host = FakeTuiHost { themes: self.themes, review_themes: self.review_themes, ..FakeTuiHost::default() };
         let mut ui = TestUi {
             app: App::new(config),
             renderer: Renderer::new(),

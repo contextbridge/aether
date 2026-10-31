@@ -1,5 +1,4 @@
 use super::{App, ExitState, Overlay, Route};
-use crate::command::HostCommand;
 use crate::screens::git_diff::GitDiffScreen;
 use crate::settings::KeyAction;
 use crate::settings::overlay::ProviderLoginStatus;
@@ -189,7 +188,8 @@ impl App {
                     self.update_core(|core| core.notify("File picker is unavailable for remote workspaces"));
                 } else {
                     self.composer.open_file_picker();
-                    self.queue(HostCommand::IndexFiles { root: self.core.session().working_dir().to_path_buf() });
+                    self.update_core(SessionCore::ensure_git_review);
+                    self.composer.on_files_listed(self.core.files());
                 }
                 return;
             }

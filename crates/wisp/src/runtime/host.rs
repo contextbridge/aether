@@ -2,7 +2,6 @@ use crate::command::{HostCommand, HostCommandResult};
 use crate::platform::{open_url, ring_bell, write_clipboard};
 use crate::settings::{UiSettings, list_theme_files, review_theme_choices, save_settings};
 use crate::theme::{Theme, ThemeApplicationError};
-use client_core::composer::file_index::index_files;
 use std::collections::HashMap;
 use tokio::task::{AbortHandle, JoinSet, spawn_blocking};
 
@@ -26,9 +25,6 @@ impl Host for TuiHost {
             }
             HostCommand::ListReviewThemes => {
                 self.read(HostRead::ReviewThemes, || HostCommandResult::ReviewThemesListed(review_theme_choices()));
-            }
-            HostCommand::IndexFiles { root } => {
-                self.read(HostRead::FileIndex, move || HostCommandResult::FilesIndexed(index_files(&root)));
             }
             HostCommand::ApplyTheme { settings } => {
                 self.tasks.spawn(async move { (None, apply_theme(settings).await) });
@@ -97,7 +93,6 @@ impl TuiHost {
 enum HostRead {
     Themes,
     ReviewThemes,
-    FileIndex,
 }
 
 async fn apply_theme(settings: Box<UiSettings>) -> HostCommandResult {

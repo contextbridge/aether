@@ -1,8 +1,6 @@
 use crate::settings::UiSettings;
 use crate::theme::{Theme, ThemeApplicationError};
-use client_core::composer::attachment::PromptAttachment;
 use client_core::elicitation::ElicitationId;
-use std::path::PathBuf;
 use tokio::task::JoinError;
 
 #[derive(Debug, Clone)]
@@ -17,9 +15,6 @@ pub enum HostCommand {
     ListReviewThemes,
     ApplyTheme {
         settings: Box<UiSettings>,
-    },
-    IndexFiles {
-        root: PathBuf,
     },
     RingBell,
     /// Opens a URL request's link in the browser; the result goes back to the
@@ -39,7 +34,6 @@ pub enum HostCommandResult {
     ThemesListed(Vec<String>),
     ReviewThemesListed(Vec<clankerdiff_ratatui::ThemeChoice>),
     ThemeApplied(Result<(Box<UiSettings>, Theme), ThemeApplicationError>),
-    FilesIndexed(Vec<PromptAttachment>),
     BellFailed(String),
     UrlOpened { elicitation: ElicitationId, result: Result<(), String> },
     UrlCopied { elicitation: ElicitationId, result: Result<(), String> },
