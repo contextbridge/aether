@@ -3,7 +3,7 @@ use acp_utils::websocket;
 use agent_client_protocol::schema::v2::{Implementation, SessionId};
 use agent_client_protocol::{self as acp, Agent, ByteStreams, Client, ConnectTo};
 use clankerdiff_client::ConnectionHeader;
-use clankerdiff_remote::{AcpTarget, AcpTransport, Invocation, RemoteError, RemoteSpec, Remotes};
+use clankerdiff_remote::{AcpTarget, Channel, Invocation, RemoteError, RemoteSpec, Remotes};
 use client_core::connection::{Connection, ConnectionError, Session};
 use serde::de::DeserializeOwned;
 use std::future::Future;
@@ -167,10 +167,10 @@ impl AgentConnector {
                 let AcpTarget { transport, cwd } =
                     remote.acp(Some(instance))?.ok_or_else(|| ConnectError::NoAgent { remote: remote.name.clone() })?;
                 let connection = match transport {
-                    AcpTransport::Stdio(invocation) => {
+                    Channel::Stdio(invocation) => {
                         self.transport.stdio(&command_line(&invocation), &invocation.dir).await?
                     }
-                    AcpTransport::Websocket(invocation) => {
+                    Channel::Websocket(invocation) => {
                         let endpoint: Endpoint = self.run_for_json(&command_line(&invocation), &invocation.dir).await?;
                         let startup = if remote.is_static() { Duration::ZERO } else { STARTUP_WINDOW };
                         self.transport.websocket(&endpoint, startup).await?

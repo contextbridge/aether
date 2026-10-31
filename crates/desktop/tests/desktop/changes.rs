@@ -72,6 +72,7 @@ fn a_clean_working_tree_shows_no_changes_in_whichever_scope_is_chosen(cx: &mut T
 
     harness.simulate_keystrokes(cx, "secondary-2");
     assert!(!harness.shows(cx, "changes-count", "0"), "a clean working tree counts nothing");
+    harness.click(cx, "files-mode-diff").unwrap();
     assert!(harness.bounds(cx, "changes-clean").is_some());
 
     harness.click(cx, "scope-staged").unwrap();
