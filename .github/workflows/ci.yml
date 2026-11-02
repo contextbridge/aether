@@ -124,6 +124,7 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Check and test wasm
+        timeout-minutes: 10
         run: just wasm-check wasm-test
       - name: Build browser client
         run: pnpm browser:build
