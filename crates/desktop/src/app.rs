@@ -285,11 +285,12 @@ impl DesktopApp {
         let Some(thread) = self.threads.read(cx).selected().cloned() else {
             return;
         };
-        let files = cx.new(|cx| FilePicker::new(thread, window, cx));
-        let subscription = cx.subscribe_in(&files, window, |this, _, picked: &Option<RepoPath>, window, cx| {
+        let files = cx.new(|cx| FilePicker::new(thread.clone(), window, cx));
+        let subscription = cx.subscribe_in(&files, window, move |this, _, picked: &Option<RepoPath>, window, cx| {
             if let Some(path) = picked
-                && let Some(view) = this.selected_view(cx)
+                && let Some(view) = this.thread_view(&thread).cloned()
             {
+                this.threads.update(cx, |threads, cx| threads.select(&thread, cx));
                 view.update(cx, |view, cx| view.open_file(path.clone(), None, window, cx));
             }
             this.close_modal(window, cx);

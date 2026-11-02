@@ -28,6 +28,28 @@ fn secondary_p_finds_a_file_by_name_and_opens_it_read_only_in_the_files_tab(cx: 
 }
 
 #[gpui::test]
+fn a_file_picked_after_switching_threads_opens_in_the_thread_it_was_listed_for(cx: &mut TestAppContext) {
+    let harness = DesktopHarnessBuilder::default()
+        .agent("/alpha", replying("alpha-session", "a"))
+        .agent("/beta", replying("beta-session", "b"))
+        .git("/alpha", FakeGit::new("/alpha").with_committed("src/util.rs", UTIL))
+        .git("/beta", FakeGit::new("/beta").with_committed("README.md", "# beta\n"))
+        .build(cx);
+    let beta = harness.start_thread(cx, "/beta");
+    let alpha = harness.start_thread(cx, "/alpha");
+    wait_for_review(&harness, cx, &beta);
+    wait_for_review(&harness, cx, &alpha);
+
+    open_picker(&harness, cx, &alpha);
+    harness.simulate_keystrokes(cx, "secondary-]");
+    assert_eq!(harness.selected_thread(cx).as_ref(), Some(&beta));
+    harness.click(cx, "file-picker-src/util.rs").unwrap();
+
+    assert_eq!(harness.selected_thread(cx), Some(alpha), "the picked file's thread is selected");
+    harness.run_until_painted(cx, "code:src/util.rs:new:1");
+}
+
+#[gpui::test]
 fn a_cloud_thread_browses_and_mentions_the_files_of_its_remote_checkout(cx: &mut TestAppContext) {
     let remote = RemoteServerInfo { cwd: "/devbox".into(), session_id: None };
     let (agent, mut requests) = FakeAgent::new("cloud-session-0").remote_server(&remote).capture();
