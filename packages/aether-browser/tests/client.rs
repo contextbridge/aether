@@ -55,7 +55,7 @@ async fn prompt_resolves_on_insertion_and_streams_the_turn_as_events() {
     let mut client = test_client().with_session().connect().await;
 
     let response = client.prompt().await;
-    assert_eq!(response.message_id.0.as_ref(), "user-message");
+    assert_eq!(response.message_id.0.as_ref(), "user-message-1");
     client.expect_turn_start().await;
     assert_eq!(client.next_message().await, "hello from the fake agent");
     assert!(matches!(
@@ -144,9 +144,15 @@ async fn a_prompt_reduces_into_conversation_snapshots() {
 
 #[wasm_bindgen_test]
 async fn a_prompt_during_a_turn_is_sent_to_the_agent() {
-    let client = test_client().eliciting().with_session().connect().await;
-    client.prompt().await;
-    client.try_prompt().await.expect("the agent decides when a prompt sent during a turn joins it");
+    let mut client = test_client().eliciting().with_session().connect().await;
+    let mut elicitation = client.elicit().await;
+
+    let (queued, ()) = futures::join!(client.try_prompt(), async {
+        elicitation.respond(js(&json!({"action": "decline"}))).expect("the answer is accepted");
+    });
+
+    let response = queued.expect("the agent takes the prompt once its turn ends");
+    assert_eq!(response.message_id.0.as_ref(), "user-message-2");
 }
 
 #[wasm_bindgen_test]
@@ -430,7 +436,7 @@ impl TestClient {
     async fn expect_turn_start(&mut self) {
         assert!(matches!(self.next_update().await, SessionUpdate::StateUpdate(StateUpdate::Running(_))));
         assert!(
-            matches!(self.next_update().await, SessionUpdate::UserMessage(message) if message.message_id.0.as_ref() == "user-message")
+            matches!(self.next_update().await, SessionUpdate::UserMessage(message) if message.message_id.0.as_ref() == "user-message-1")
         );
     }
 
