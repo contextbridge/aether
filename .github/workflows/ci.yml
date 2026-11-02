@@ -124,7 +124,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Check and test wasm
-        # wasm-bindgen-test has no per-test timeout: fail a hung test here rather than cancel the whole job.
         timeout-minutes: 10
         run: just wasm-check wasm-test
       - name: Build browser client
