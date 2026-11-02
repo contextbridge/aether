@@ -6,14 +6,21 @@ use wisp::error::AppError;
 const MODELS: &[(&str, &str)] = &[("a", "Alpha"), ("b", "Beta")];
 
 #[test]
-fn remote_checkout_actions_are_blocked_without_losing_text() {
-    let mut ui = TestUiBuilder::new().session(SessionCoreConfigBuilder::remote_workspace).dimensions(120, 24).build();
-    ui.type_text("draft");
+fn a_remote_mention_completes_from_the_agents_checkout_and_is_linked_for_it_to_read() {
+    let git = FakeGit::new("/workspace").with_untracked("remote.rs", "fn remote() {}\n");
+    let mut ui =
+        TestUiBuilder::new().session(SessionCoreConfigBuilder::remote_workspace).git(git).dimensions(120, 24).build();
+
+    ui.type_text("draft ");
     ui.key(key(KeyCode::Char('@')));
-    assert!(!ui.app().full_screen_active());
-    assert!(!ui.app().composer().has_completion());
-    ui.assert_conversation_contains("unavailable for remote workspaces");
-    assert!(ui.app().composer().text().starts_with("draft"));
+    ui.assert_viewport_contains("remote.rs");
+    ui.key(key(KeyCode::Enter));
+    assert_eq!(ui.app().composer().text(), "draft @remote.rs ");
+    ui.key(key(KeyCode::Enter));
+
+    let prompt = ui.agent().prompt.try_recv().expect("the agent received the prompt").prompt;
+    let link = acp::ResourceLink::new("remote.rs", "file:///workspace/remote.rs");
+    assert!(prompt.contains(&acp::ContentBlock::ResourceLink(link)), "the agent reads the file itself: {prompt:?}");
 }
 
 #[test]

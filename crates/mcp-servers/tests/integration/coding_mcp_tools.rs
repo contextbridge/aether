@@ -177,6 +177,27 @@ async fn edit_file_supports_batch_edits_and_response_metadata() -> TestResult {
 }
 
 #[tokio::test]
+async fn file_tools_locate_the_file_and_line_they_start_at() -> TestResult {
+    let workspace = CodingWorkspace::new().await;
+    let path = workspace.write("source.txt", "alpha\nbeta\ngamma\n");
+    let at = |line: Option<u32>| match line {
+        Some(line) => serde_json::json!([{ "path": path, "line": line }]),
+        None => serde_json::json!([{ "path": path }]),
+    };
+
+    let (_, meta) = workspace.client.call_displayed("read_file", serde_json::json!({ "filePath": path })).await?;
+    assert_eq!(meta["locations"], at(None));
+    let (_, meta) =
+        workspace.client.call_displayed("read_file", serde_json::json!({ "filePath": path, "offset": 2 })).await?;
+    assert_eq!(meta["locations"], at(Some(2)));
+    let edits = serde_json::json!([{ "old_string": "gamma", "new_string": "GAMMA" }]);
+    let (_, meta) =
+        workspace.client.call_displayed("edit_file", serde_json::json!({ "filePath": path, "edits": edits })).await?;
+    assert_eq!(meta["locations"], at(Some(3)), "an edit starts at its first changed line");
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_bash_pwd_uses_workspace_root() -> TestResult {
     let workspace = CodingWorkspace::new().await;
     let parsed = workspace.client.call("bash", BashInput { command: "pwd".to_string(), ..Default::default() }).await?;

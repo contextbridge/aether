@@ -60,6 +60,10 @@ impl ToolCall {
         })
     }
 
+    pub fn locations(&self) -> &[acp::ToolCallLocation] {
+        self.protocol.locations.value().map_or(&[], Vec::as_slice)
+    }
+
     pub fn headline(&self) -> Option<&str> {
         first_line(self.title())
     }

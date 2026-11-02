@@ -15,12 +15,18 @@ dist = false
 name = "client_core"
 path = "src/lib.rs"
 
+[[bin]]
+name = "stdio-diff-server"
+path = "tests/fixtures/stdio_diff_server.rs"
+test = false
+required-features = ["testing"]
+
 [[test]]
 name = "client_core"
 path = "tests/client_core/main.rs"
 
 [features]
-testing = ["dep:clankerdiff-core", "acp_utils/testing"]
+testing = ["acp_utils/testing"]
 
 [package.metadata.docs.rs]
 all-features = true
@@ -34,11 +40,11 @@ acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["
 agent-client-protocol = { workspace = true, features = ["process"] }
 clankerdiff-client = { workspace = true, features = ["websocket"] }
 clankerdiff-server = { workspace = true }
-clankerdiff-core = { workspace = true, optional = true }
-tokio = { workspace = true, features = ["rt", "macros", "sync"] }
+clankerdiff-core = { workspace = true }
+clankerdiff-remote = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros", "sync", "process", "io-std"] }
 tracing = { workspace = true }
 thiserror = { workspace = true }
-ignore = { workspace = true }
 base64 = { workspace = true }
 mime_guess = { workspace = true }
 url = { workspace = true }
@@ -48,6 +54,7 @@ utils = { package = "aether-utils", path = "../utils", version = "0.3.0" }
 aether-client-core = { path = ".", features = ["testing"] }
 acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client", "testing"], version = "0.5.18" }
 clankerdiff-core = { workspace = true }
+clankerdiff-remote = { workspace = true }
 clankerdiff-git = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }

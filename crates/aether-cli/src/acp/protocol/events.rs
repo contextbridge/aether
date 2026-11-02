@@ -249,13 +249,12 @@ fn map_tool_result_to_notification(result: &ToolCallResult, result_meta: Option<
         content.push(diff.into());
     }
 
-    let mut update = ToolCallUpdate::new(result.id.clone()).status(ToolCallStatus::Completed).content(content);
+    let update = ToolCallUpdate::new(result.id.clone()).status(ToolCallStatus::Completed).content(content);
 
-    if let Some(rm) = result_meta {
-        update = update.title(rm.display.title.clone()).meta(tool_display_meta(&rm.display.value));
-    }
-
-    SessionUpdate::ToolCallUpdate(update)
+    SessionUpdate::ToolCallUpdate(match result_meta {
+        Some(rm) => displayed(update, rm),
+        None => update,
+    })
 }
 
 fn map_tool_error_to_notification(error: &ToolCallError) -> SessionUpdate {
@@ -288,13 +287,22 @@ fn map_tool_progress_to_notification(
 }
 
 fn map_display_update_to_notification(request: &ToolCallRequest, meta: &ToolResultMeta) -> SessionUpdate {
-    let update = ToolCallUpdate::new(request.id.clone())
-        .status(ToolCallStatus::InProgress)
-        .title(meta.display.title.clone())
-        .name(request.name.clone())
-        .meta(tool_display_meta(&meta.display.value));
+    let update = ToolCallUpdate::new(request.id.clone()).status(ToolCallStatus::InProgress).name(request.name.clone());
 
-    SessionUpdate::ToolCallUpdate(update)
+    SessionUpdate::ToolCallUpdate(displayed(update, meta))
+}
+
+fn displayed(update: ToolCallUpdate, meta: &ToolResultMeta) -> ToolCallUpdate {
+    let update = update.title(meta.display.title.clone()).meta(tool_display_meta(&meta.display.value));
+    if meta.locations.is_empty() {
+        return update;
+    }
+    update.locations(
+        meta.locations
+            .iter()
+            .map(|location| acp::ToolCallLocation::new(location.path.as_str()).line(location.line))
+            .collect::<Vec<_>>(),
+    )
 }
 
 fn tool_display_meta(value: &str) -> serde_json::Map<String, serde_json::Value> {
@@ -357,7 +365,7 @@ mod tests {
     use llm::ContextUsage;
     use serde_json::json;
     use tokio::sync::mpsc::unbounded_channel;
-    use utils::display_meta::{PlanMeta, PlanMetaEntry, ToolDisplayMeta};
+    use utils::display_meta::{PlanMeta, PlanMetaEntry, ToolDisplayMeta, ToolLocation};
 
     fn forwarded<T: JsonRpcNotification + Send + 'static>(events: &[AgentEvent]) -> T {
         tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(
@@ -488,6 +496,26 @@ mod tests {
         let plain = mapped_tool(&AgentEvent::tool_result("call_1", "external__some_tool", "{}", "ok"));
         assert!(plain.title.is_undefined());
         assert!(plain.meta.is_undefined());
+    }
+
+    #[test]
+    fn tool_locations_become_acp_locations_and_updates_without_any_keep_the_earlier_ones() {
+        let located = || {
+            ToolResultMeta::from(ToolDisplayMeta::new("Read file", "main.rs"))
+                .located(ToolLocation::new("/repo/src/main.rs", Some(4)))
+        };
+        let display =
+            mapped_tool(&AgentEvent::Tool(ToolEvent::DisplayUpdate { request: request("{}"), meta: located() }));
+        let result = mapped_tool(&result_event(Some(located())));
+        for tool in [&display, &result] {
+            assert_eq!(
+                tool.locations,
+                MaybeUndefined::Value(vec![acp::ToolCallLocation::new("/repo/src/main.rs").line(4)])
+            );
+        }
+
+        let unlocated = mapped_tool(&result_event(Some(ToolDisplayMeta::new("Read file", "main.rs").into())));
+        assert!(unlocated.locations.is_undefined());
     }
 
     #[test]

@@ -27,6 +27,6 @@ impl PastedImages {
         fs::create_dir_all(self.dir.path())
             .and_then(|()| fs::write(&path, &image.bytes))
             .map_err(|error| format!("Couldn't save the pasted image: {error}"))?;
-        Ok(PromptAttachment { path, display_name })
+        Ok(PromptAttachment::new(path, self.dir.path()))
     }
 }

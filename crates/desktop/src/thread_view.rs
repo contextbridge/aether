@@ -1,13 +1,15 @@
 use crate::artifact_review::ArtifactReview;
-use crate::changes::{Changes, Dismissed};
 use crate::chat::{Composer, PickerClosed, SessionOptions, StatusLine, Transcript, reconnect_banner};
 use crate::elicitation::{ElicitationCard, OpenReview};
+use crate::files::{Dismissed, Files};
 use crate::registry::Registry;
 use crate::sidebar;
 use crate::theme::DesktopTheme;
 use crate::threads::{Thread, ThreadEvent, ThreadStatus, observe_changes, observe_thread};
 use crate::ui::tokens::{GROUP_HEIGHT, ICON_SIZE_SMALL, RADIUS_CONTROL, RADIUS_INNER, ROW_HEIGHT, rem};
 use crate::ui::{Icon, IconName, StyledExt, Typography, TypographyExt, UiTheme, WindowDragExt, tagged, text_selector};
+use agent_client_protocol::schema::v2 as acp;
+use clankerdiff_core::RepoPath;
 use gpui::{
     AnyElement, AnyView, App, AppContext, Context, Div, Entity, ExternalPaths, Hsla, Role, Stateful, StyleRefinement,
     Subscription, Window, div, prelude::*,
@@ -23,7 +25,7 @@ pub(crate) struct ThreadView {
     changes_seen: Option<usize>,
     elicitation: Entity<ElicitationCard>,
     composer: Entity<Composer>,
-    changes: Entity<Changes>,
+    files: Entity<Files>,
     review: Entity<ArtifactReview>,
     _subscriptions: Vec<Subscription>,
 }
@@ -31,7 +33,7 @@ pub(crate) struct ThreadView {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ThreadTab {
     Chat,
-    Changes,
+    Files,
     Review,
 }
 
@@ -47,7 +49,7 @@ impl ThreadView {
         let options = cx.new(|cx| SessionOptions::new(thread.clone(), cx));
         let elicitation = cx.new(|cx| ElicitationCard::new(thread.clone(), window, cx));
         let composer = cx.new(|cx| Composer::new(thread.clone(), window, cx));
-        let changes = cx.new(|cx| Changes::new(thread.clone(), cx));
+        let files = cx.new(|cx| Files::new(thread.clone(), cx));
         let review = cx.new(|cx| ArtifactReview::new(thread.clone(), cx));
         let subscriptions = vec![
             observe_thread(
@@ -57,7 +59,7 @@ impl ThreadView {
                     (
                         thread.title(),
                         thread.status(),
-                        changes_label(thread),
+                        files_label(thread),
                         thread.pending_review().is_some(),
                         unreachable(thread),
                     )
@@ -68,8 +70,11 @@ impl ThreadView {
                 },
             ),
             observe_changes(&registry, cx, header(&thread), |_, cx| cx.notify()),
-            cx.observe(&changes, |_, _, cx| cx.notify()),
+            cx.observe(&files, |_, _, cx| cx.notify()),
             cx.subscribe_in(&options, window, |this, _, _: &PickerClosed, window, cx| this.focus(window, cx)),
+            cx.subscribe_in(&transcript, window, |this, _, location: &acp::ToolCallLocation, window, cx| {
+                this.open_location(location, window, cx);
+            }),
             cx.subscribe_in(&elicitation, window, |this, _, _: &OpenReview, window, cx| {
                 this.show(ThreadTab::Review, window, cx);
             }),
@@ -78,7 +83,7 @@ impl ThreadView {
                     this.show(ThreadTab::Chat, window, cx);
                 }
             }),
-            cx.subscribe_in(&changes, window, |this, _, _: &Dismissed, window, cx| {
+            cx.subscribe_in(&files, window, |this, _, _: &Dismissed, window, cx| {
                 this.show(ThreadTab::Chat, window, cx);
             }),
             cx.subscribe_in(&review, window, |this, _, _: &Dismissed, window, cx| {
@@ -97,7 +102,7 @@ impl ThreadView {
             changes_seen: None,
             elicitation,
             composer,
-            changes,
+            files,
             review,
             _subscriptions: subscriptions,
         }
@@ -113,15 +118,29 @@ impl ThreadView {
         cx.notify();
     }
 
+    pub(crate) fn open_file(&mut self, path: RepoPath, line: Option<u32>, window: &mut Window, cx: &mut Context<Self>) {
+        self.show(ThreadTab::Files, window, cx);
+        self.files.update(cx, |files, cx| files.open(path, line, window, cx));
+    }
+
+    fn open_location(&mut self, location: &acp::ToolCallLocation, window: &mut Window, cx: &mut Context<Self>) {
+        let path = location.path.0.as_path();
+        let Some(file) = self.thread.read(cx).listed_files().ok().and_then(|files| files.repo_path(path)) else {
+            let message = format!("Can't open {}: it isn't in this thread's repository", path.display());
+            return self.thread.update(cx, |thread, cx| thread.report_error(&message, cx));
+        };
+        self.open_file(file, location.line, window, cx);
+    }
+
     pub(crate) fn focus(&self, window: &mut Window, cx: &mut App) {
         match self.tab {
             ThreadTab::Chat => self.composer.update(cx, |composer, cx| composer.focus(window, cx)),
-            ThreadTab::Changes | ThreadTab::Review => window.blur(cx),
+            ThreadTab::Files | ThreadTab::Review => window.blur(cx),
         }
     }
 
     fn see_changes(&mut self, cx: &App) {
-        if self.tab == ThreadTab::Changes {
+        if self.tab == ThreadTab::Files {
             self.changes_seen = changed_files(self.thread.read(cx));
         }
     }
@@ -132,23 +151,22 @@ impl ThreadView {
         let thread = self.thread.read(cx);
         let files = changed_files(thread);
         let reviewing = thread.pending_review().is_some();
-        let changes_label = changes_label(thread);
+        let files_label = files_label(thread);
         let agent = match thread.status() {
             _ if self.tab == ThreadTab::Chat => None,
             ThreadStatus::NeedsInput => Some(("chat-waiting", colors.warning)),
             ThreadStatus::Running | ThreadStatus::Background => Some(("chat-working", colors.info)),
             _ => None,
         };
-        let unseen = files.is_some_and(|files| self.tab != ThreadTab::Changes && self.changes_seen != Some(files));
+        let unseen = files.is_some_and(|files| self.tab != ThreadTab::Files && self.changes_seen != Some(files));
         let tab = |id: &'static str, icon: IconName, label: &'static str, value: ThreadTab, cx: &mut Context<Self>| {
             segment(id, icon, label, self.tab == value, &theme)
                 .on_click(cx.listener(move |this, _, window, cx| this.show(value, window, cx)))
         };
         let chat = tab("tab-chat", IconName::MessageSquareText, "Chat", ThreadTab::Chat, cx)
             .children(agent.map(|(selector, color)| corner_dot(selector, color)));
-        let changes = tab("tab-changes", IconName::GitCompare, "Changes", ThreadTab::Changes, cx)
-            .aria_label(changes_label)
-            .when(files.is_none() && self.tab != ThreadTab::Changes, |segment| segment.text_color(colors.text_muted))
+        let files_tab = tab("tab-files", IconName::Folder, "Files", ThreadTab::Files, cx)
+            .aria_label(files_label)
             .children(files.map(|files| {
                 let count = files.to_string();
                 div()
@@ -175,24 +193,24 @@ impl ThreadView {
             .bg(colors.input)
             .typography(Typography::Small)
             .child(chat)
-            .child(changes)
+            .child(files_tab)
             .children(review)
             .into_any_element()
     }
 
     fn render_review_pill(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let comments = self.changes.read(cx).comments();
-        if self.tab != ThreadTab::Changes || comments == 0 {
+        let comments = self.files.read(cx).comments();
+        if self.tab != ThreadTab::Files || comments == 0 {
             return None;
         }
         let theme = DesktopTheme::global(cx).ui();
         let colors = theme.colors;
         let copy = pill_button("review-copy", "Copy", false, &theme).on_click(cx.listener(|this, _, window, cx| {
-            this.changes.update(cx, |changes, cx| changes.copy(window, cx));
+            this.files.update(cx, |files, cx| files.copy(window, cx));
         }));
         let submit =
             pill_button("review-submit", "Submit review", true, &theme).on_click(cx.listener(|this, _, window, cx| {
-                this.changes.update(cx, |changes, cx| changes.submit(window, cx));
+                this.files.update(cx, |files, cx| files.submit(window, cx));
             }));
         let label = comments_label(comments);
         let count = div()
@@ -262,7 +280,7 @@ impl Render for ThreadView {
             .child(self.render_switch(cx));
         let view = match self.tab {
             ThreadTab::Chat => AnyView::from(self.transcript.clone()),
-            ThreadTab::Changes => AnyView::from(self.changes.clone()),
+            ThreadTab::Files => AnyView::from(self.files.clone()),
             ThreadTab::Review => AnyView::from(self.review.clone()),
         }
         .cached(StyleRefinement::default().size_full());
@@ -394,10 +412,10 @@ fn changed_files(thread: &Thread) -> Option<usize> {
     thread.changed_files().filter(|&files| files > 0)
 }
 
-fn changes_label(thread: &Thread) -> String {
-    match thread.changed_files() {
-        Some(files) => format!("Changes ({files})"),
-        None => "Changes".to_owned(),
+fn files_label(thread: &Thread) -> String {
+    match changed_files(thread) {
+        Some(files) => format!("Files ({files} changed)"),
+        None => "Files".to_owned(),
     }
 }
 

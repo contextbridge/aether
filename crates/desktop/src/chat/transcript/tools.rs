@@ -3,8 +3,8 @@ use super::groups::{GroupKind, Work};
 use crate::theme::DesktopTheme;
 use crate::ui::tokens::{ICON_SIZE_SMALL, ROW_HEIGHT, rem};
 use crate::ui::{
-    Button, ButtonVariant, CODE_FONT, ControlSize, Disclosure, Icon, IconName, Typography, TypographyExt, UiTheme,
-    Waveform,
+    Button, ButtonVariant, CODE_FONT, ControlSize, Disclosure, Icon, IconName, Tooltip, Typography, TypographyExt,
+    UiTheme, Waveform,
 };
 use acp_utils::content::first_line;
 use acp_utils::conversation::{ConversationItem, SubAgent, ToolCall, ToolStatus, diff_change_label};
@@ -18,7 +18,14 @@ use gpui::{AnyElement, App, ClickEvent, Div, ElementId, Role, StyledText, Window
 use std::rc::Rc;
 use std::sync::Arc;
 
-pub(crate) type OpenDiff = Rc<dyn Fn(&Arc<DiffDocument>, &mut Window, &mut App)>;
+pub(crate) struct ToolActions {
+    pub(crate) open_diff: OpenDiff,
+    pub(crate) open_location: OpenLocation,
+}
+
+type OpenDiff = Rc<dyn Fn(&Arc<DiffDocument>, &mut Window, &mut App)>;
+
+type OpenLocation = Rc<dyn Fn(&acp::ToolCallLocation, &mut Window, &mut App)>;
 
 type ShowAll = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 
@@ -27,7 +34,7 @@ pub(crate) struct ToolRenderer<'a> {
     theme: UiTheme,
     highlighter: &'a mut SyntaxHighlighter,
     patches: &'a mut DiffPreviewCache,
-    open_diff: OpenDiff,
+    actions: ToolActions,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -109,9 +116,9 @@ impl<'a> ToolRenderer<'a> {
         theme: &'a DesktopTheme,
         highlighter: &'a mut SyntaxHighlighter,
         patches: &'a mut DiffPreviewCache,
-        open_diff: OpenDiff,
+        actions: ToolActions,
     ) -> Self {
-        Self { review: theme.review(), theme: theme.ui(), highlighter, patches, open_diff }
+        Self { review: theme.review(), theme: theme.ui(), highlighter, patches, actions }
     }
 
     pub(crate) fn render(
@@ -127,6 +134,10 @@ impl<'a> ToolRenderer<'a> {
         let on_show_all: ShowAll = Rc::new(on_show_all);
         let diffs: Vec<_> = tool.diffs().collect();
         let title = div().debug_selector(move || format!("tool-title-{index}")).min_w_0().truncate().child(title(tool));
+        let summary = self.summary(tool).map(|summary| match tool.locations().first() {
+            Some(location) => self.location_link(location.clone(), index, summary),
+            None => summary,
+        });
         let header = Disclosure::new(("tool-card", index), expanded, theme)
             .h(rem(ROW_HEIGHT))
             .overflow_hidden()
@@ -134,7 +145,7 @@ impl<'a> ToolRenderer<'a> {
             .children(tool_line(
                 status_icon(tool.status, tool.id(), &theme),
                 title,
-                self.summary(tool),
+                summary,
                 tool.status == ToolStatus::Failed,
                 &theme,
             ))
@@ -193,6 +204,28 @@ impl<'a> ToolRenderer<'a> {
         Some(div().font_family(CODE_FONT).child(path).into_any_element())
     }
 
+    fn location_link(&self, location: acp::ToolCallLocation, index: usize, summary: AnyElement) -> AnyElement {
+        let colors = self.theme.colors;
+        let open = self.actions.open_location.clone();
+        let label = format!("Open {}", location.path.0.display());
+        div()
+            .id(("tool-location", index))
+            .debug_selector(move || format!("tool-location-{index}"))
+            .role(Role::Link)
+            .aria_label(label.clone())
+            .min_w_0()
+            .truncate()
+            .cursor_pointer()
+            .hover(move |link| link.text_color(colors.text))
+            .tooltip(Tooltip::text(label, self.theme))
+            .on_click(move |_, window, cx| {
+                cx.stop_propagation();
+                open(&location, window, cx);
+            })
+            .child(summary)
+            .into_any_element()
+    }
+
     fn details(&mut self, tool: &ToolCall, index: usize, full: bool, on_show_all: &ShowAll) -> Div {
         let theme = self.theme;
         let command = tool.bash_command().map(|command| {
@@ -230,7 +263,7 @@ impl<'a> ToolRenderer<'a> {
             changes = match diff.patch.as_ref().filter(|patch| !patch.text.trim().is_empty()) {
                 Some(patch) if patch.format == acp::DiffPatchFormat::GitPatch => {
                     let id = ElementId::named_usize(format!("tool-diff-{index}"), position);
-                    let open = self.open_diff.clone();
+                    let open = self.actions.open_diff.clone();
                     let open = move |document: &Arc<DiffDocument>, window: &mut Window, cx: &mut App| {
                         open(document, window, cx);
                     };

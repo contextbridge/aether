@@ -232,7 +232,6 @@ impl App {
                 Route::Conversation => {}
             },
             HostCommandResult::ThemeApplied(result) => self.finish_theme_change(result),
-            HostCommandResult::FilesIndexed(files) => self.composer.on_files_indexed(files),
             HostCommandResult::BellFailed(error) => self.update_core(|core| core.report_error(&error)),
             HostCommandResult::UrlOpened { elicitation, result } => {
                 if let Some(answer) =

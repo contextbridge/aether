@@ -5,8 +5,8 @@ use aether_desktop::threads::{Thread, ThreadStatus};
 use agent_client_protocol as acp;
 use agent_client_protocol::schema::v2::PromptRequest;
 use gpui::{Entity, TestAppContext};
-use std::fs;
 use std::path::PathBuf;
+use utils::testing::TestWorkspace;
 
 #[gpui::test]
 fn enter_or_secondary_enter_sends_the_prompt_and_clears_the_composer_and_shift_enter_does_not(cx: &mut TestAppContext) {
@@ -88,11 +88,8 @@ fn escape_stops_the_running_turn_and_keeps_the_draft(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn escape_closes_the_file_menu_before_it_stops_the_turn(cx: &mut TestAppContext) {
-    let workspace = tempfile::tempdir().unwrap();
-    let root = workspace.path().join("alpha");
-    fs::create_dir_all(&root).unwrap();
-    fs::write(root.join("README.md"), "# alpha\n").unwrap();
-    let (harness, _, requests) = working_thread(cx, root);
+    let workspace = TestWorkspace::new().git_init().file("README.md", "# alpha\n");
+    let (harness, _, requests) = working_thread(cx, workspace.root());
     harness.simulate_input(cx, "@read");
     harness.run_until_painted(cx, "completion-item-0");
 

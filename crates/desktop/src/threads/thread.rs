@@ -8,6 +8,7 @@ use agent_client_protocol::schema::v2::SessionId;
 use chrono::{DateTime, Utc};
 use clankerdiff_client::{ClientError, ClientState, LookupReply};
 use client_core::command::Reply;
+use client_core::composer::file_listing::{FileListing, RepoFiles};
 use client_core::composer::submission::Submission;
 use client_core::elicitation::{Elicitation, ElicitationId};
 use client_core::session_core::{Effect, SessionCore};
@@ -163,6 +164,15 @@ impl Thread {
         self.review()?.snapshot.as_ref().map(|snapshot| snapshot.files.len())
     }
 
+    pub fn listed_files(&self) -> Result<RepoFiles, String> {
+        match self.core.as_ref().map_or(FileListing::Pending, SessionCore::files) {
+            FileListing::Pending if self.status().is_stopped() => {
+                Err("Start the thread again to browse its files".to_owned())
+            }
+            listing => listing.into_result(),
+        }
+    }
+
     pub fn send(&mut self, submission: Submission, cx: &mut Context<Self>) {
         if self.connected_core().is_some() {
             self.update_core(cx, |core| core.submit(submission));
@@ -272,6 +282,10 @@ impl Thread {
 impl EventEmitter<ThreadEvent> for Thread {}
 
 impl ThreadStatus {
+    pub fn is_stopped(self) -> bool {
+        matches!(self, Self::Errored | Self::Disconnected | Self::Dormant)
+    }
+
     pub fn problem(self) -> Option<&'static str> {
         match self {
             Self::Errored => Some("The agent could not start"),

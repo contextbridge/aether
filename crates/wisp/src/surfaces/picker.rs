@@ -5,6 +5,7 @@ use crate::view::selection::SelectionState;
 use acp_utils::notifications::AetherCapabilities;
 use client_core::composer::attachment::PromptAttachment;
 use client_core::composer::completion_token::Trigger;
+use client_core::composer::file_listing::FileListing;
 use client_core::session_core::CommandEntry;
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders};
@@ -34,8 +35,8 @@ pub enum Builtin {
 pub struct CompletionOverlay {
     trigger: Trigger,
     entries: FilterableList<CompletionEntry>,
-    empty_message: &'static str,
-    indexing: bool,
+    empty_message: String,
+    loading: bool,
 }
 
 impl CompletionOverlay {
@@ -43,23 +44,25 @@ impl CompletionOverlay {
         Self::new(Trigger::Command, entries.into_iter().map(CompletionEntry::Command).collect(), "no matching commands")
     }
 
-    /// An empty file list, waiting on the walk of the working tree. Entries
-    /// arrive later via [`CompletionOverlay::set_files`].
     pub fn file() -> Self {
-        Self { indexing: true, ..Self::new(Trigger::File, Vec::new(), "indexing files…") }
+        Self { loading: true, ..Self::new(Trigger::File, Vec::new(), "loading files…") }
     }
 
-    /// Fills in the results of the walk this overlay is waiting on, ignoring
-    /// any that arrive after it has already been filled.
-    pub fn set_files(&mut self, files: Vec<PromptAttachment>) {
-        if !self.indexing {
+    pub fn set_files(&mut self, listing: FileListing) {
+        if !self.loading || listing == FileListing::Pending {
             return;
         }
-        self.indexing = false;
-        self.empty_message = "no matching files";
+        self.loading = false;
+        let (entries, empty_message) = match listing.into_result() {
+            Ok(files) => (
+                files.paths.iter().map(|path| CompletionEntry::File(files.attachment(path))).collect(),
+                "no matching files".to_owned(),
+            ),
+            Err(reason) => (Vec::new(), reason),
+        };
+        self.empty_message = empty_message;
         let query = self.entries.query().to_string();
-        self.entries =
-            FilterableList::new(files.into_iter().map(CompletionEntry::File).collect(), CompletionEntry::match_key);
+        self.entries = FilterableList::new(entries, CompletionEntry::match_key);
         self.entries.set_query(query);
     }
 
@@ -102,7 +105,7 @@ impl CompletionOverlay {
     }
 
     pub fn view<'a>(&'a mut self, theme: &'a Theme) -> (ListView<'a>, &'a mut SelectionState) {
-        let empty_message = self.empty_message;
+        let empty_message = &self.empty_message;
         let (view, selection) =
             self.entries.view(theme, |entry| Line::styled(format!("  {}", entry.label()), theme.text_secondary));
         let view =
@@ -114,8 +117,8 @@ impl CompletionOverlay {
         Self {
             trigger,
             entries: FilterableList::new(entries, CompletionEntry::match_key),
-            empty_message,
-            indexing: false,
+            empty_message: empty_message.to_owned(),
+            loading: false,
         }
     }
 }

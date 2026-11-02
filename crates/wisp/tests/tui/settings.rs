@@ -1533,7 +1533,11 @@ fn configured_picker_bindings_fire_on_chords() {
         ]),
         ..UiSettings::default()
     };
-    let mut ui = TestUiBuilder::new().session(|session| session.working_dir("/workspace")).settings(settings).build();
+    let mut ui = TestUiBuilder::new()
+        .session(|session| session.working_dir("/workspace"))
+        .git(FakeGit::new("/workspace"))
+        .settings(settings)
+        .build();
 
     ui.key(ctrl('p'));
     assert!(ui.app().composer().has_completion(), "a configured chord must open the command picker");

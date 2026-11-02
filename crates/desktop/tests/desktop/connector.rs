@@ -2,12 +2,14 @@ use crate::support::{define_agent, serve_websocket, serve_websocket_refusing};
 use acp_utils::notifications::RemoteServerInfo;
 use acp_utils::testing::FakeAgent;
 use acp_utils::websocket;
-use aether_desktop::agents::{AgentProfile, Endpoint};
-use aether_desktop::remotes::{Acp, InstanceState, RemoteSpec};
+use aether_desktop::agents::AgentProfile;
+use aether_desktop::remotes::{Acp, Channel, InstanceState, RemoteSpec};
 use aether_desktop::target::{AgentConnector, ConnectError, ProcessTransport, SessionTarget};
 use aether_desktop::testing::{FAKE_AGENT_LOCK_FILE, launching_remote};
 use agent_client_protocol::schema::v2::SessionId;
+use clankerdiff_remote::Invocation;
 use clankerdiff_remote::testing::FakeRemotes;
+use client_core::command::ReviewSource;
 use client_core::session_model::WorkspaceAccess;
 use serde_json::json;
 use std::fs::{File, TryLockError};
@@ -86,8 +88,9 @@ async fn a_thread_on_a_remote_launches_an_instance_and_reaches_its_agent_where_t
     assert_eq!(remotes.state_of("patchwave", "instance-0"), Some(InstanceState::Running));
     assert_eq!(session.session_response.session_id, SessionId::new("vm-session"));
     assert_eq!(session.working_dir, PathBuf::from("/vm/patchwave"), "the agent works in the remote's `acp.cwd`");
+    assert_eq!(session.workspace_access, WorkspaceAccess::Remote, "`acp.cwd` is not a path on this machine");
     assert_eq!(connector.launch(&target).await.unwrap(), None, "a launched instance is reused");
-    assert_eq!(connector.diff_endpoint(&target).await.unwrap(), None, "the agent diffs its own working tree");
+    assert!(connector.review_source(&target).await.unwrap().is_none(), "the agent diffs its own working tree");
 }
 
 #[tokio::test]
@@ -112,6 +115,7 @@ async fn a_static_remotes_agent_runs_over_stdio_in_the_remotes_directory_without
     assert_eq!(target.instance(), Some("devbox"));
     assert_eq!(remotes.launches(), 0);
     assert_eq!(session.session_response.session_id, SessionId::new("local-session"));
+    assert_eq!(session.workspace_access, WorkspaceAccess::Remote, "`acp.cwd` is not a path on this machine");
     assert!(dir.path().join(FAKE_AGENT_LOCK_FILE).exists(), "the agent started in the remote's directory");
 }
 
@@ -168,7 +172,7 @@ async fn a_thread_on_a_remote_cannot_connect_before_its_instance_is_launched() {
 }
 
 #[tokio::test]
-async fn an_agents_diff_endpoint_is_wherever_its_endpoint_command_says() {
+async fn an_agents_diff_is_reviewed_wherever_its_endpoint_command_says() {
     let workspace = tempfile::tempdir().unwrap();
     let printed = json!({ "url": "ws://vm:7331/ws", "headers": { "Authorization": "Bearer minted" } }).to_string();
     let agent = define_agent(
@@ -181,18 +185,48 @@ async fn an_agents_diff_endpoint_is_wherever_its_endpoint_command_says() {
         }),
     );
 
-    let endpoint = connector().diff_endpoint(&target(workspace.path(), agent)).await.unwrap();
+    let source = connector().review_source(&target(workspace.path(), agent)).await.unwrap();
 
-    let headers = [("Authorization".to_owned(), "Bearer minted".to_owned())].into();
-    assert_eq!(endpoint, Some(Endpoint { url: "ws://vm:7331/ws".to_owned(), headers }));
+    assert_websocket(source, "ws://vm:7331/ws", &[("authorization", "Bearer minted")]);
 }
 
 #[tokio::test]
-async fn an_agent_without_a_diff_endpoint_has_none() {
+async fn an_agent_without_a_diff_endpoint_has_no_review_source_of_its_own() {
     let workspace = tempfile::tempdir().unwrap();
     let agent = define_agent(workspace.path(), "claude", &json!({ "type": "stdio", "command": "claude-code-acp" }));
 
-    assert_eq!(connector().diff_endpoint(&target(workspace.path(), agent)).await.unwrap(), None);
+    assert!(connector().review_source(&target(workspace.path(), agent)).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn a_remotes_diff_is_reviewed_over_the_stdio_of_its_diff_command_on_the_threads_instance() {
+    let remote = RemoteSpec {
+        diff: Some(Channel::Stdio(words(&["remote", "exec", "${ID}", "clankerdiff", "serve", "--stdio"]))),
+        ..launching_remote("docker", "/docker")
+    };
+
+    let source = connector().review_source(&SessionTarget::remote(&remote, Some("c1".to_owned()))).await.unwrap();
+
+    let Some(ReviewSource::Stdio(Invocation { program, args, dir, .. })) = source else {
+        panic!("a stdio review: {source:?}")
+    };
+    assert_eq!(program, "remote");
+    assert_eq!(args, ["exec", "c1", "clankerdiff", "serve", "--stdio"]);
+    assert_eq!(dir, PathBuf::from("/docker"), "the command runs in the remote's directory");
+}
+
+#[tokio::test]
+async fn a_remotes_diff_is_reviewed_wherever_its_websocket_command_says() {
+    let dir = tempfile::tempdir().unwrap();
+    let printed = json!({ "url": "ws://vm:7331/ws" }).to_string();
+    let remote = RemoteSpec {
+        diff: Some(Channel::Websocket(words(&["printf", "%s", &printed]))),
+        ..launching_remote("patchwave", dir.path())
+    };
+
+    let source = connector().review_source(&SessionTarget::remote(&remote, Some("vm-1".to_owned()))).await.unwrap();
+
+    assert_websocket(source, "ws://vm:7331/ws", &[]);
 }
 
 #[tokio::test]
@@ -235,6 +269,18 @@ type IsExpected = fn(&ConnectError) -> bool;
 
 fn target(cwd: &Path, agent: AgentProfile) -> SessionTarget {
     SessionTarget::agent(cwd.into(), agent)
+}
+
+fn assert_websocket(source: Option<ReviewSource>, expected: &str, expected_headers: &[(&str, &str)]) {
+    let Some(ReviewSource::WebSocket { url, headers }) = source else { panic!("a WebSocket review: {source:?}") };
+    let headers: Vec<_> =
+        headers.iter().map(|header| (header.name().as_str(), header.value().to_str().unwrap())).collect();
+    assert_eq!(url, expected);
+    assert_eq!(headers, expected_headers);
+}
+
+fn words(words: &[&str]) -> Vec<String> {
+    words.iter().map(|word| (*word).to_owned()).collect()
 }
 
 fn connector() -> AgentConnector {

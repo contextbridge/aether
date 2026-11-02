@@ -23,8 +23,8 @@ use clankerdiff_gpui::{DiffPreviewCache, DiffViewer, DiffViewerEvent, DiffViewer
 use client_core::session_core::SessionCore;
 use code::SharedHighlighter;
 use gpui::{
-    AnyElement, App, Context, Entity, FollowMode, Image, ListAlignment, ListState, Role, Subscription, Window, div,
-    linear_color_stop, linear_gradient, list, prelude::*, px,
+    AnyElement, App, Context, Entity, EventEmitter, FollowMode, Image, ListAlignment, ListState, Role, Subscription,
+    Window, div, linear_color_stop, linear_gradient, list, prelude::*, px,
 };
 use gpui_base::{TextView, TextViewMotion, TextViewState};
 use groups::{Group, GroupKind, groups};
@@ -37,7 +37,7 @@ use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
-use tools::{OpenDiff, ToolFold, ToolRenderer, fold_header};
+use tools::{ToolActions, ToolFold, ToolRenderer, fold_header};
 
 pub(crate) struct Transcript {
     thread: Entity<Thread>,
@@ -289,11 +289,16 @@ impl Transcript {
                     (true, true) => ToolFold::Full,
                 };
                 let show_all = cx.listener(move |this, _, _, cx| this.toggle(full, index..index + 1, cx));
-                let open_diff: OpenDiff = Rc::new(cx.listener(|this, document: &Arc<DiffDocument>, window, cx| {
-                    this.open_full_diff(document, window, cx);
-                }));
+                let actions = ToolActions {
+                    open_diff: Rc::new(cx.listener(|this, document: &Arc<DiffDocument>, window, cx| {
+                        this.open_full_diff(document, window, cx);
+                    })),
+                    open_location: Rc::new(cx.listener(|_, location: &acp::ToolCallLocation, _, cx| {
+                        cx.emit(location.clone());
+                    })),
+                };
                 self.highlighter.with(|highlighter| {
-                    ToolRenderer::new(DesktopTheme::global(cx), highlighter, &mut self.patches, open_diff)
+                    ToolRenderer::new(DesktopTheme::global(cx), highlighter, &mut self.patches, actions)
                         .render(tool, index, fold, toggle, show_all)
                 })
             }
@@ -302,6 +307,8 @@ impl Transcript {
         }
     }
 }
+
+impl EventEmitter<acp::ToolCallLocation> for Transcript {}
 
 impl Render for Transcript {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

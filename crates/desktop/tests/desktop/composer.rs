@@ -4,7 +4,7 @@ use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder};
 use aether_desktop::threads::ThreadStatus;
 use agent_client_protocol::schema::v2 as acp;
 use gpui::{TestAppContext, px};
-use std::fs;
+use utils::testing::TestWorkspace;
 
 #[gpui::test]
 fn up_and_down_walk_the_prompts_sent_before(cx: &mut TestAppContext) {
@@ -75,13 +75,13 @@ fn escape_closes_the_menu_until_the_token_ends(cx: &mut TestAppContext) {
 
 #[gpui::test]
 fn an_at_mention_sends_the_file_with_the_prompt(cx: &mut TestAppContext) {
-    let workspace = tempfile::tempdir().unwrap();
-    let root = workspace.path().join("alpha");
-    fs::create_dir_all(root.join("src")).unwrap();
-    fs::write(root.join("src/lib.rs"), "pub fn answer() -> u32 { 42 }\n").unwrap();
-    fs::write(root.join("README.md"), "# alpha\n").unwrap();
+    let workspace = TestWorkspace::new()
+        .git_init()
+        .file("src/lib.rs", "pub fn answer() -> u32 { 42 }\n")
+        .file("README.md", "# alpha\n");
+    let root = workspace.root();
     let (agent, mut requests) = FakeAgent::new("alpha-session").capture();
-    let (harness, _) = DesktopHarnessBuilder::default().agent(&root, agent).start(cx, &root);
+    let (harness, _) = DesktopHarnessBuilder::default().agent(root, agent).start(cx, root);
 
     harness.simulate_input(cx, "explain @lib");
     harness.run_until_painted(cx, "completion-item-0");

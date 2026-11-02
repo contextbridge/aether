@@ -11,12 +11,12 @@ fn undoing_every_change_to_a_thread_forgets_it(cx: &mut TestAppContext) {
     let session = SessionId::new("session");
 
     Registry::update(&registry, cx, |state| {
-        state.pinned.insert(session.clone());
+        state.archived.insert(session.clone());
         state.rename(session.clone(), "Custom title");
         state.add_project("/alpha".into());
     });
     Registry::update(&registry, cx, |state| {
-        state.pinned.remove(&session);
+        state.archived.remove(&session);
         state.rename(session.clone(), "   ");
     });
     cx.run_until_parked();

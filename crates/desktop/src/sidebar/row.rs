@@ -26,8 +26,6 @@ pub(super) enum RowIcon {
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum RowAction {
     Rename,
-    Pin,
-    Unpin,
     Archive,
     Stop,
     Suspend,
@@ -156,8 +154,6 @@ impl RowAction {
     fn spec(self) -> (&'static str, &'static str, IconName) {
         match self {
             Self::Rename => ("rename", "Rename", IconName::Pencil),
-            Self::Pin => ("pin", "Pin", IconName::Pin),
-            Self::Unpin => ("unpin", "Unpin", IconName::PinOff),
             Self::Archive => ("archive", "Archive", IconName::Archive),
             Self::Stop => ("stop", "Stop thread", IconName::Square),
             Self::Suspend => ("suspend", "Suspend", IconName::Pause),
@@ -180,9 +176,6 @@ impl RowAction {
         match (self, &row.kind) {
             (Self::Rename, RowKind::Local { session_id: Some(session_id), .. }) => {
                 sidebar.start_rename(session_id.clone(), &row.title, window, cx);
-            }
-            (Self::Pin | Self::Unpin, RowKind::Local { session_id: Some(session_id), .. }) => {
-                Registry::update(&sidebar.registry, cx, |state| state.toggle_pinned(session_id.clone()));
             }
             (Self::Archive, RowKind::Local { session_id: Some(session_id), .. }) => {
                 Registry::update(&sidebar.registry, cx, |state| state.archive(session_id.clone()));
