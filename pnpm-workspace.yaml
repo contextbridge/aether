@@ -1,7 +1,22 @@
 packages:
   - "packages/*"
 
-onlyBuiltDependencies:
-  - "@aether-agent/cli"
-  - esbuild
-  - sharp
+catalogPrune: true
+minimumReleaseAgeExcludePrune: true
+
+# Trusted scopes, exempt from pnpm's 24h minimumReleaseAge delay (still enforced elsewhere).
+minimumReleaseAgeExclude:
+  - "@aether-agent/*"
+
+allowBuilds:
+  # downloads the `aether` binary that @aether-agent/sdk spawns
+  "@aether-agent/cli": true
+  # bundler binary; vite and astro shell out to it
+  esbuild: true
+  # SSH-cipher accelerator ssh2 try/requires; needs node-gyp, and ssh2 runs fine without it
+  cpu-features: false
+  # postinstall is only a CJS-interop shim
+  protobufjs: false
+  # optional crypto binding, only used for Docker-over-SSH; testcontainers in aether-evals
+  # reaches Docker over a local socket, so Node's built-in crypto suffices
+  ssh2: false
