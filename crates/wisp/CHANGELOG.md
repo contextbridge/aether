@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.7.20](https://github.com/contextbridge/aether/compare/aether-wisp-v0.7.19...aether-wisp-v0.7.20) - 2026-11-03
+
+### Added
+
+- *(desktop)* browse repository files and open where tools worked ([#637](https://github.com/contextbridge/aether/pull/637))
+- ACP native subagents ([#627](https://github.com/contextbridge/aether/pull/627))
+
+### Other
+
+- extract aether-client-core from wisp ([#634](https://github.com/contextbridge/aether/pull/634))
+
 ## [0.7.19](https://github.com/contextbridge/aether/compare/aether-wisp-v0.7.18...aether-wisp-v0.7.19) - 2026-10-20
 
 ### Other

@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.9.21](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.9.20...aether-agent-cli-v0.9.21) - 2026-11-03
+
+### Added
+
+- add gpt-6.1-terra to codex subscription models ([#642](https://github.com/contextbridge/aether/pull/642))
+- *(desktop)* browse repository files and open where tools worked ([#637](https://github.com/contextbridge/aether/pull/637))
+- ACP native subagents ([#627](https://github.com/contextbridge/aether/pull/627))
+
+### Other
+
+- extract aether-client-core from wisp ([#634](https://github.com/contextbridge/aether/pull/634))
+- replace aether-lspd with clankerdiff-lspd ([#633](https://github.com/contextbridge/aether/pull/633))
+
 ## [0.9.20](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.9.19...aether-agent-cli-v0.9.20) - 2026-10-20
 
 ### Fixed

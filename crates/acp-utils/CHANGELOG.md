@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.19](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.5.18...aether-acp-utils-v0.5.19) - 2026-11-03
+
+### Added
+
+- *(desktop)* browse repository files and open where tools worked ([#637](https://github.com/contextbridge/aether/pull/637))
+- ACP native subagents ([#627](https://github.com/contextbridge/aether/pull/627))
+
+### Other
+
+- extract aether-client-core from wisp ([#634](https://github.com/contextbridge/aether/pull/634))
+
 ## [0.5.18](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.5.17...aether-acp-utils-v0.5.18) - 2026-10-20
 
 ### Other

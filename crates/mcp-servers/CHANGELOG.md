@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.10](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.8.9...aether-mcp-servers-v0.8.10) - 2026-11-03
+
+### Added
+
+- add gpt-6.1-terra to codex subscription models ([#642](https://github.com/contextbridge/aether/pull/642))
+- *(desktop)* browse repository files and open where tools worked ([#637](https://github.com/contextbridge/aether/pull/637))
+- ACP native subagents ([#627](https://github.com/contextbridge/aether/pull/627))
+
+### Other
+
+- replace aether-lspd with clankerdiff-lspd ([#633](https://github.com/contextbridge/aether/pull/633))
+
 ## [0.8.9](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.8.8...aether-mcp-servers-v0.8.9) - 2026-10-20
 
 ### Fixed
