@@ -1,5 +1,5 @@
 use crate::theme::Theme;
-use crate::view::syntax::SyntaxHighlighter;
+use crate::view::syntax::highlight;
 use crate::view::wrap::{as_u16, truncate_to_width, wrap_line};
 use acp_utils::conversation::{SubAgent, ToolCall, ToolStatus, diff_change_label};
 use agent_client_protocol::schema::v2 as acp;
@@ -22,7 +22,6 @@ pub(crate) fn tool_lines(
     padding: usize,
     spinner_tick: usize,
     theme: &Theme,
-    highlighter: &mut SyntaxHighlighter,
 ) -> Vec<Line<'static>> {
     let prefix = Line::from(vec![
         Span::raw(" ".repeat(padding)),
@@ -30,7 +29,7 @@ pub(crate) fn tool_lines(
         Span::raw(" "),
         Span::styled(tool.headline().unwrap_or_default().to_string(), theme.text_primary),
     ]);
-    let mut lines = tool_line(tool, prefix, content_width, padding + 2, theme, highlighter);
+    let mut lines = tool_line(tool, prefix, content_width, padding + 2, theme);
     for diff in tool.diffs().filter(|_| tool.status == ToolStatus::Success) {
         if let Some(patch) = &diff.patch
             && patch.format == acp::DiffPatchFormat::GitPatch
@@ -39,13 +38,7 @@ pub(crate) fn tool_lines(
                 Ok(files) => {
                     for file in files {
                         lines.extend(indent_lines(
-                            render_diff_preview(
-                                file,
-                                content_width,
-                                theme.review(),
-                                &mut highlighter.inner,
-                                DiffPreviewOptions::default(),
-                            ),
+                            render_diff_preview(file, content_width, theme.review(), DiffPreviewOptions::default()),
                             padding,
                         ));
                     }
@@ -61,7 +54,7 @@ pub(crate) fn tool_lines(
     }
     if !tool.sub_agents.is_empty() {
         lines.push(Line::default());
-        lines.extend(sub_agent_tree_lines(&tool.sub_agents, content_width, spinner_tick, padding, theme, highlighter));
+        lines.extend(sub_agent_tree_lines(&tool.sub_agents, content_width, spinner_tick, padding, theme));
     }
     lines
 }
@@ -73,7 +66,6 @@ fn sub_agent_tree_lines(
     spinner_tick: usize,
     padding: usize,
     theme: &Theme,
-    highlighter: &mut SyntaxHighlighter,
 ) -> Vec<Line<'static>> {
     let pad = " ".repeat(padding);
     let muted = Style::from(theme.muted);
@@ -106,7 +98,7 @@ fn sub_agent_tree_lines(
                 status_glyph(tool.status, spinner_tick, theme),
                 Span::raw(format!(" {}", tool.headline().unwrap_or_default())),
             ]);
-            lines.extend(tool_line(tool, prefix, content_width, padding + 6, theme, highlighter));
+            lines.extend(tool_line(tool, prefix, content_width, padding + 6, theme));
         }
     }
 
@@ -174,7 +166,6 @@ fn tool_line(
     width: u16,
     continuation_padding: usize,
     theme: &Theme,
-    highlighter: &mut SyntaxHighlighter,
 ) -> Vec<Line<'static>> {
     let command = visible_bash_command(tool.bash_command(), tool.display_value(), tool.status);
     let detail = command.map_or_else(
@@ -182,7 +173,7 @@ fn tool_line(
         |command| bash_tool_detail(command, tool.display_value(), tool.status),
     );
     let suffix = tool_suffix(detail, tool.status, theme);
-    let command_lines = command.map(|command| highlighter.highlight(command, "bash", theme));
+    let command_lines = command.map(|command| highlight(command, "bash", theme));
     if let Some(command_lines) = &command_lines
         && let Some(first) = command_lines.first()
     {

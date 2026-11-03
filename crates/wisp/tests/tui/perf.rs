@@ -41,7 +41,7 @@ fn settled_session_renders_nothing_per_frame() {
     assert_eq!(stats.frames, 1);
     assert_eq!(stats.item_rebuilds, 0, "a frame with no state change must rebuild nothing");
     assert_eq!(stats.markdown_bytes_parsed, 0);
-    assert_eq!(stats.highlight.calls, 0);
+    assert_eq!(stats.syntax.parses(), 0);
     assert_eq!(stats.history_rows_inserted, 0);
     assert_eq!(backend.draws, 1);
     assert_eq!(backend.cells_drawn, 0, "a frame with no state change must repaint no cells");
@@ -108,10 +108,10 @@ fn streaming_code_block_rerenders_bounded_work() {
         stats.markdown_bytes_parsed
     );
     assert!(
-        stats.highlight.bytes_highlighted <= budget,
+        stats.syntax.parser_input_bytes as u64 <= budget,
         "streaming {} bytes re-highlighted {} bytes: a growing code block must not re-highlight from the top each chunk",
         total,
-        stats.highlight.bytes_highlighted
+        stats.syntax.parser_input_bytes
     );
 }
 
@@ -272,7 +272,7 @@ fn rendering_work_breakdown() {
         "frames",
         "rebuilds",
         "md bytes",
-        "hl miss/bytes",
+        "hl parse/bytes",
         "max live",
         "layout",
         "live",
@@ -376,8 +376,8 @@ fn bench(
         stats.frames,
         stats.item_rebuilds,
         stats.markdown_bytes_parsed,
-        stats.highlight.cache_misses,
-        stats.highlight.bytes_highlighted,
+        stats.syntax.parses(),
+        stats.syntax.parser_input_bytes,
         stats.max_live_rows,
         ms(stats.ns_layout),
         ms(stats.ns_live),

@@ -1,8 +1,7 @@
 //! Frame rendering.
 //!
-//! [`Renderer`] is the facade: it owns the drawing services (theme, syntax
-//! highlighter) and every cache, and sequences one draw. The rest of this
-//! module layers below it:
+//! [`Renderer`] is the facade: it owns the theme and every cache, and sequences
+//! one draw. The rest of this module layers below it:
 //!
 //! - `layout` measures the frame's bands once per draw;
 //! - `history` moves overflow rows into the terminal's native scrollback;
@@ -27,8 +26,8 @@ use crate::app::App;
 use crate::error::RenderError;
 use crate::theme::Theme;
 use crate::view::generation::Generation;
-use crate::view::syntax::SyntaxHighlighter;
 use acp_utils::conversation::{ConversationId, ConversationItemId};
+use clankerdiff_syntax::{SyntaxWorkStats, thread_work};
 use frame::draw_frame;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
@@ -36,8 +35,8 @@ use ratatui::backend::Backend;
 use cache::RenderCache;
 use history::NativeHistoryCursor;
 use layout::FrameLayout;
-use stats::Lap;
 pub use stats::RenderStats;
+use stats::{Lap, work_since};
 use streaming::StreamEntry;
 
 /// Shared rendering services, borrowed for the duration of one draw.
@@ -46,19 +45,12 @@ use streaming::StreamEntry;
 /// rebuild it only when the theme actually changes.
 pub struct DrawContext<'a> {
     pub theme: &'a Theme,
-    pub highlighter: &'a mut SyntaxHighlighter,
     pub theme_generation: Generation,
 }
 
-/// Owns everything drawing a frame needs: the theme, the syntax highlighter,
-/// and the caches that keep streaming content stable between frames.
-///
-/// Methods destructure `self` rather than taking `&self.theme` through `&mut
-/// self`, so the theme is borrowed alongside the highlighter instead of cloned
-/// once per item per frame.
 pub struct Renderer {
     theme: Theme,
-    highlighter: SyntaxHighlighter,
+    syntax_baseline: SyntaxWorkStats,
     theme_generation: Option<Generation>,
     render_cache: RenderCache,
     native_history: NativeHistoryCursor,
@@ -76,7 +68,7 @@ impl Renderer {
     pub fn new() -> Self {
         Self {
             theme: Theme::default(),
-            highlighter: SyntaxHighlighter::new(),
+            syntax_baseline: thread_work(),
             theme_generation: None,
             render_cache: RenderCache::default(),
             native_history: NativeHistoryCursor::default(),
@@ -86,8 +78,8 @@ impl Renderer {
     }
 
     pub fn take_stats(&mut self) -> RenderStats {
-        let highlight = self.highlighter.take_stats();
-        RenderStats { highlight, ..std::mem::take(&mut self.stats) }
+        let before = std::mem::replace(&mut self.syntax_baseline, thread_work());
+        RenderStats { syntax: work_since(before, self.syntax_baseline), ..std::mem::take(&mut self.stats) }
     }
 
     pub fn theme(&self) -> &Theme {
@@ -136,7 +128,7 @@ impl Renderer {
     /// The rendering services a full-screen route or overlay draws with.
     fn context(&mut self) -> DrawContext<'_> {
         let theme_generation = self.generation();
-        DrawContext { theme: &self.theme, highlighter: &mut self.highlighter, theme_generation }
+        DrawContext { theme: &self.theme, theme_generation }
     }
 
     fn sync_conversation(&mut self, conversation_id: ConversationId) {

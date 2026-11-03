@@ -422,9 +422,7 @@ fn markdown_rendering_preserves_semantic_content_and_styles() {
 #[test]
 fn syntax_highlighting_and_plain_code_fallback_are_explicit() {
     let theme = Theme::default();
-    let mut highlighter = SyntaxHighlighter::new();
-
-    let highlighted = highlighter.highlight("fn main() { println!(\"hi\"); }", "rust", &theme);
+    let highlighted = highlight("fn main() { println!(\"hi\"); }", "rust", &theme);
     let highlighted_text: String =
         highlighted.iter().flat_map(|line| line.spans.iter()).map(|span| span.content.as_ref()).collect();
     assert_eq!(highlighted_text, "fn main() { println!(\"hi\"); }");
@@ -436,7 +434,7 @@ fn syntax_highlighting_and_plain_code_fallback_are_explicit() {
         "known Rust syntax should receive a semantic highlight style"
     );
 
-    let plain = highlighter.highlight("not highlighted", "not-a-language", &theme);
+    let plain = highlight("not highlighted", "not-a-language", &theme);
     assert_eq!(plain.len(), 1);
     assert_eq!(plain[0].spans[0].content, "not highlighted");
     assert_eq!(plain[0].spans[0].style.fg, Some(theme.code_fg));

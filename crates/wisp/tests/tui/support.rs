@@ -53,7 +53,7 @@ pub(crate) use wisp::surfaces::composer::Composer;
 pub(crate) use wisp::surfaces::picker::SlashCommand;
 pub(crate) use wisp::theme::Theme;
 pub(crate) use wisp::view::input::UiEvent;
-pub(crate) use wisp::view::syntax::SyntaxHighlighter;
+pub(crate) use wisp::view::syntax::highlight;
 
 pub(crate) type Step = fn(&mut TestUi);
 

@@ -51,7 +51,6 @@ impl Renderer {
                 &entry.stream,
                 layout_options(content_width(width, padding)),
                 self.theme.review(),
-                &mut self.highlighter.inner,
             )?;
 
             let update = entry.state.update_since(entry.row_revision);

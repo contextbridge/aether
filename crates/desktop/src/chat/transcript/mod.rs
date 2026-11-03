@@ -19,9 +19,8 @@ use acp_utils::conversation::{
 };
 use agent_client_protocol::schema::v2 as acp;
 use clankerdiff_core::DiffDocument;
-use clankerdiff_gpui::{DiffPreviewCache, DiffViewer, DiffViewerEvent, DiffViewerOptions};
+use clankerdiff_gpui::{DiffViewer, DiffViewerEvent, DiffViewerOptions};
 use client_core::session_core::SessionCore;
-use code::SharedHighlighter;
 use gpui::{
     AnyElement, App, Context, Entity, EventEmitter, FollowMode, Image, ListAlignment, ListState, Role, Subscription,
     Window, div, linear_color_stop, linear_gradient, list, prelude::*, px,
@@ -37,7 +36,7 @@ use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
-use tools::{ToolActions, ToolFold, ToolRenderer, fold_header};
+use tools::{ToolActions, ToolFold, ToolPreviews, ToolRenderer, fold_header};
 
 pub(crate) struct Transcript {
     thread: Entity<Thread>,
@@ -50,8 +49,7 @@ pub(crate) struct Transcript {
     unfolded: HashSet<Fold>,
     preview: Option<Arc<Image>>,
     full_diff: Option<(Entity<DiffViewer>, Subscription)>,
-    highlighter: SharedHighlighter,
-    patches: DiffPreviewCache,
+    tools: ToolPreviews,
     _thread_changed: Subscription,
 }
 
@@ -76,8 +74,7 @@ impl Transcript {
             unfolded: HashSet::new(),
             preview: None,
             full_diff: None,
-            highlighter: SharedHighlighter::global(cx),
-            patches: DiffPreviewCache::default(),
+            tools: ToolPreviews::default(),
             _thread_changed: thread_changed,
         }
     }
@@ -92,7 +89,7 @@ impl Transcript {
             self.list.reset(revisions.len() + 1);
             self.replies.clear();
             self.attachments.clear();
-            self.patches.clear();
+            self.tools.clear();
             self.unfolded.clear();
             self.full_diff = None;
             (0..revisions.len()).collect()
@@ -297,10 +294,8 @@ impl Transcript {
                         cx.emit(location.clone());
                     })),
                 };
-                self.highlighter.with(|highlighter| {
-                    ToolRenderer::new(DesktopTheme::global(cx), highlighter, &mut self.patches, actions)
-                        .render(tool, index, fold, toggle, show_all)
-                })
+                ToolRenderer::new(DesktopTheme::global(cx), self.tools.get(item, tool), actions)
+                    .render(tool, index, fold, toggle, show_all)
             }
             ConversationContent::Notice(Notice { level: NoticeLevel::Info, text }) => notice(text, theme),
             ConversationContent::Notice(Notice { level: NoticeLevel::Error, text }) => error(index, text, theme),

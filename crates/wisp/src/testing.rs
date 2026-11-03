@@ -16,7 +16,6 @@ use crate::settings::{UiSettings, builtin_review_theme_choices};
 use crate::surfaces::composer::ComposerLayout;
 use crate::theme::Theme;
 use crate::view::generation::Generation;
-use crate::view::syntax::SyntaxHighlighter;
 use acp_utils::client::{AcpEvent, connect_acp_client};
 use acp_utils::notifications::{
     ContextClearedParams, PromptSearchParams, SessionPreviewParams, WorkspaceListParams, WorkspaceMoveParams,
@@ -887,8 +886,7 @@ pub fn numbered_lines(prefix: &str, count: usize) -> String {
 
 pub fn render_surface<R>(mut buffer: Buffer, render: impl FnOnce(&mut Buffer, &mut DrawContext<'_>) -> R) -> Buffer {
     let theme = Theme::default();
-    let mut highlighter = SyntaxHighlighter::new();
-    let mut cx = DrawContext { theme: &theme, highlighter: &mut highlighter, theme_generation: Generation::default() };
+    let mut cx = DrawContext { theme: &theme, theme_generation: Generation::default() };
     render(&mut buffer, &mut cx);
     buffer
 }

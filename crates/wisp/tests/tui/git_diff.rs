@@ -632,7 +632,6 @@ fn inline_preview_renders_a_bounded_prefix_of_canonical_rows() {
             .render(
                 width - 4,
                 theme.review(),
-                &mut clankerdiff_ratatui::syntax::SyntaxHighlighter::default(),
                 DiffPreviewOptions { max_content_rows: usize::MAX, ..DiffPreviewOptions::default() },
             )
             .iter()
