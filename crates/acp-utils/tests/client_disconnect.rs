@@ -160,3 +160,26 @@ async fn disconnect_drops_connection_before_the_ui_releases_a_pending_approval()
         })
         .await;
 }
+
+#[tokio::test]
+async fn disconnect_delivers_notifications_sent_before_it() {
+    use acp::v2::schema::CancelSessionNotification;
+
+    LocalSet::new()
+        .run_until(async {
+            let (agent_transport, client_transport) = Channel::duplex();
+            let (agent, mut requests) = FakeAgent::default().capture();
+            let server = spawn_local(agent.agent().connect_to(agent_transport));
+            let client = connect_acp_client(client_transport, initialize_request()).await.unwrap();
+
+            client.handle.notify(CancelSessionNotification::new("live")).unwrap();
+            client.handle.disconnect().await;
+
+            assert_eq!(
+                requests.cancel.recv().await.map(|cancel| cancel.session_id.to_string()).as_deref(),
+                Some("live")
+            );
+            let _ = server.await;
+        })
+        .await;
+}

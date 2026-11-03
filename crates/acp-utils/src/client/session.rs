@@ -10,8 +10,9 @@ use agent_client_protocol::v2::schema::{
     RequestPermissionResponse, SelectedPermissionOutcome, SessionCapabilities, UpdateSessionNotification,
 };
 use agent_client_protocol::{self as acp, Client, ConnectTo, ConnectionTo, Dispatch, HandleDispatchFrom, Handled, v2};
-use futures::future::{AbortHandle, abortable};
+use futures::future::select;
 use std::future::Future;
+use std::pin::pin;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -37,12 +38,10 @@ pub async fn connect_acp_client(
     let (event_tx, event_rx) = mpsc::unbounded_channel();
     let (init_tx, init_rx) = oneshot::channel();
     let closed = CancellationToken::new();
+    let stop = CancellationToken::new();
     let events = ConnectionEvents { event_tx, closed: closed.clone() };
-    let (driver, abort) = abortable(run_client_connection(agent, init_request, init_tx, events));
-    spawn(async move {
-        let _ = driver.await;
-    });
-    let connection = Arc::new(ClientConnection { abort, closed });
+    spawn(run_client_connection(agent, init_request, init_tx, events, stop.clone()));
+    let connection = Arc::new(ClientConnection { stop, closed });
     let (initialize_response, cx) = await_response(init_rx).await?;
     Ok(AcpClient { initialize_response, event_rx, handle: AcpClientHandle { cx, connection } })
 }
@@ -76,7 +75,7 @@ impl AcpClient {
 impl AcpClientHandle {
     /// Stop this connection and wait for it to close without sending session/cancel or session/close.
     pub async fn disconnect(&self) {
-        self.connection.abort.abort();
+        self.connection.stop.cancel();
         self.connection.closed.cancelled().await;
     }
 
@@ -95,13 +94,13 @@ impl AcpClientHandle {
 }
 
 struct ClientConnection {
-    abort: AbortHandle,
+    stop: CancellationToken,
     closed: CancellationToken,
 }
 
 impl Drop for ClientConnection {
     fn drop(&mut self) {
-        self.abort.abort();
+        self.stop.cancel();
     }
 }
 
@@ -122,18 +121,22 @@ async fn run_client_connection(
     init_request: InitializeRequest,
     init_tx: oneshot::Sender<Result<(InitializeResponse, v2::ConnectionTo<acp::Agent>), AcpClientError>>,
     events: ConnectionEvents,
+    stop: CancellationToken,
 ) {
     let connection_result = Client
         .v2()
         .name(&init_request.info.name)
         .with_handler(ClientHandlers(events.event_tx.clone()))
         .connect_with(agent, async move |cx: v2::ConnectionTo<acp::Agent>| {
-            let result = cx.send_request(init_request).block_task().await.map_err(AcpClientError::Protocol);
-            let _ = init_tx.send(result.map(|response| {
-                info!("ACP initialized: protocol={:?}, agent_info={:?}", response.protocol_version, response.info);
-                (response, cx.clone())
-            }));
-            cx.incoming_closed().await;
+            let run = async {
+                let result = cx.send_request(init_request).block_task().await.map_err(AcpClientError::Protocol);
+                let _ = init_tx.send(result.map(|response| {
+                    info!("ACP initialized: protocol={:?}, agent_info={:?}", response.protocol_version, response.info);
+                    (response, cx.clone())
+                }));
+                cx.incoming_closed().await;
+            };
+            select(pin!(run), pin!(stop.cancelled())).await;
             Ok(())
         })
         .await;
