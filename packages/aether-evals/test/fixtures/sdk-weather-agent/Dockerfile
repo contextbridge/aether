@@ -41,6 +41,8 @@ RUN pnpm --filter @aether-agent/sdk compile
 COPY --from=aether /usr/local/bin/aether /usr/local/bin/aether
 
 WORKDIR /app
+
+ENV pnpm_config_strict_dep_builds=false
 COPY packages/aether-evals/test/fixtures/sdk-weather-agent/package.json ./package.json
 COPY packages/aether-evals/test/fixtures/sdk-weather-agent/tsconfig.json ./tsconfig.json
 COPY packages/aether-evals/test/fixtures/sdk-weather-agent/eval-agent.ts ./eval-agent.ts
