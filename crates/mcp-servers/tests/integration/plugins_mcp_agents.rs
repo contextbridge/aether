@@ -485,7 +485,7 @@ fn create_project_with_codex_agent() -> TestWorkspace {
     {
       "name": "explorer",
       "description": "A Codex sub-agent",
-      "model": "codex:gpt-5.4-mini",
+      "model": "codex:gpt-6-luna",
       "agentInvocable": true,
       "prompts": [{"type":"text","text":"You are a codebase explorer."}]
     }

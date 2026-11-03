@@ -135,9 +135,7 @@ struct ProviderConfig {
     /// Additional models.dev keys whose models are merged into this provider
     extra_source_ids: &'static [&'static str],
     /// When set, the provider exposes only these models (e.g. subscription-gated providers).
-    explicit_models: Option<&'static [&'static str]>,
-    /// Context window applied to every model.
-    explicit_context_window: Option<u32>,
+    explicit_models: Option<&'static [ExplicitModel]>,
     /// Our Rust enum name (e.g. "Gemini")
     enum_name: &'static str,
     /// Our internal provider name used for parsing (e.g. "gemini")
@@ -243,7 +241,6 @@ impl ProviderConfig {
             source_dev_id: None,
             extra_source_ids: &[],
             explicit_models: None,
-            explicit_context_window: None,
             enum_name,
             parser_name,
             genai_provider_name: parser_name,
@@ -315,7 +312,6 @@ const PROVIDERS: &[ProviderConfig] = &[
     ProviderConfig {
         source_dev_id: Some("openai"),
         explicit_models: Some(CODEX_SUBSCRIPTION_MODELS),
-        explicit_context_window: Some(272_000),
         genai_provider_name: "openai",
         oauth_provider_id: Some("codex"),
         fallback_reasoning_levels: &[
@@ -376,18 +372,27 @@ const PROVIDERS: &[ProviderConfig] = &[
     ProviderConfig::local("LlamaCpp", "llamacpp", "llama.cpp", "LlamaCpp"),
 ];
 
-const CODEX_SUBSCRIPTION_MODELS: &[&str] = &[
-    "gpt-6.1-sol",
-    "gpt-6-sol",
-    "gpt-6-astra",
-    "gpt-6-luna",
-    "gpt-5.6-sol",
-    "gpt-5.6-terra",
-    "gpt-5.6-luna",
-    "gpt-5.5",
-    "gpt-5.4",
-    "gpt-5.4-mini",
-    "gpt-5.2",
+struct ExplicitModel {
+    id: &'static str,
+    context_window: u32,
+}
+
+impl ExplicitModel {
+    const fn new(id: &'static str, context_window: u32) -> Self {
+        Self { id, context_window }
+    }
+}
+
+const CODEX_SUBSCRIPTION_MODELS: &[ExplicitModel] = &[
+    ExplicitModel::new("gpt-6.1-sol", 272_000),
+    ExplicitModel::new("gpt-6.1-terra", 500_000),
+    ExplicitModel::new("gpt-6-sol", 272_000),
+    ExplicitModel::new("gpt-6-astra", 272_000),
+    ExplicitModel::new("gpt-6-luna", 272_000),
+    ExplicitModel::new("gpt-5.6-sol", 272_000),
+    ExplicitModel::new("gpt-5.6-terra", 272_000),
+    ExplicitModel::new("gpt-5.6-luna", 272_000),
+    ExplicitModel::new("gpt-5.5", 272_000),
 ];
 
 #[derive(Debug, Clone)]
@@ -492,7 +497,7 @@ fn validate_provider_config(cfg: &ProviderConfig, provider: &ProviderData) -> Re
         return Ok(());
     };
     let mut seen = HashSet::new();
-    for &model_id in explicit_models {
+    for &ExplicitModel { id: model_id, .. } in explicit_models {
         if !seen.insert(model_id) {
             return Err(CodegenError::DuplicateConfiguredModel {
                 provider_id: cfg.dev_id.to_string(),
@@ -519,16 +524,17 @@ fn collect_models_from(
     cfg: &ProviderConfig,
     models: &HashMap<String, ModelData>,
 ) -> Result<Vec<ModelInfo>, CodegenError> {
+    let explicit_model = |id: &str| cfg.explicit_models.and_then(|models| models.iter().find(|m| m.id == id));
     models
         .values()
         .filter(|m| m.tool_call == Some(true))
         .filter(|m| !is_alias(&m.id))
-        .filter(|m| cfg.explicit_models.is_none_or(|ids| ids.contains(&m.id.as_str())))
+        .filter(|m| cfg.explicit_models.is_none() || explicit_model(&m.id).is_some())
         .map(|m| {
             let input_modalities =
                 m.modalities.as_ref().map_or_else(|| vec!["text".to_string()], |md| md.input.clone());
-            let context_window =
-                cfg.explicit_context_window.unwrap_or_else(|| m.limit.as_ref().map_or(0, |l| l.context));
+            let context_window = explicit_model(&m.id)
+                .map_or_else(|| m.limit.as_ref().map_or(0, |l| l.context), |explicit| explicit.context_window);
             let pricing = m.cost.clone().filter(|_| cfg.per_token_pricing);
             Ok(ModelInfo {
                 variant_name: model_id_to_variant(&m.id),

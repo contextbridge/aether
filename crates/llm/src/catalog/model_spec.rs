@@ -123,7 +123,7 @@ mod tests {
             );
             assert!(!model.reasoning_levels().contains(&ReasoningEffort::Default));
         }
-        for text in ["openai:gpt-4o-mini", "codex:gpt-5.4", "ollama:unknown", "openai:gpt-5.4,codex:gpt-5.4"] {
+        for text in ["openai:gpt-4o-mini", "codex:gpt-5.5", "ollama:unknown", "openai:gpt-5.4,codex:gpt-5.5"] {
             let spec: ModelSpec = text.parse().unwrap();
             assert_eq!(spec.clamp_reasoning_effort(Some(ReasoningEffort::Disabled)), Some(ReasoningEffort::Disabled));
             assert!(spec.validate_reasoning_effort(Some(ReasoningEffort::Disabled)).is_err());
