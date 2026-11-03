@@ -165,6 +165,28 @@ fn a_set_title_replaces_the_prompt_title_and_survives_later_prompts() {
 }
 
 #[test]
+fn retitling_while_events_are_appended_keeps_every_event() {
+    const ROUNDS: usize = 100;
+    let store = TestStore::new().session("session-1", &[user_message("first prompt")]);
+
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            for round in 0..ROUNDS {
+                store.append("session-1", &assistant_text(&format!("message-{round}"), "reply"));
+            }
+        });
+        scope.spawn(|| {
+            for round in 0..ROUNDS {
+                store.store().set_title("session-1", &format!("Title {round}")).expect("retitling succeeds");
+            }
+        });
+    });
+
+    let (_, events) = store.store().load("session-1").expect("the session loads");
+    assert_eq!(events.len(), ROUNDS + 1, "an append raced with a title rewrite and was lost");
+}
+
+#[test]
 fn a_blank_title_is_rejected() {
     let store = TestStore::new().session("session-1", &[user_message("first prompt")]);
 

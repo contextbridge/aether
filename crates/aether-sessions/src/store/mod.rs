@@ -7,6 +7,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::UNIX_EPOCH;
 use tracing::warn;
 use utils::fs::{append_line, write_atomic};
@@ -83,6 +84,7 @@ pub fn discover_session_files(sessions_dir: impl AsRef<Path>) -> std::io::Result
 pub struct SessionStore {
     dir: PathBuf,
     prompt_history: PromptHistoryIndex,
+    writes: Mutex<()>,
 }
 
 #[derive(Debug, Default)]
@@ -109,7 +111,7 @@ impl SessionStore {
 
     pub fn from_path(dir: PathBuf) -> Self {
         let prompt_history = PromptHistoryIndex::new(dir.join(PROMPT_HISTORY_FILE));
-        Self { dir, prompt_history }
+        Self { dir, prompt_history, writes: Mutex::new(()) }
     }
 
     pub fn append_meta(&self, session_id: &str, meta: &SessionMeta) -> Result<(), SessionStoreError> {
@@ -200,6 +202,8 @@ impl SessionStore {
     }
 
     fn rewrite_meta(&self, session_id: &str, update: impl FnOnce(&mut SessionMeta)) -> Result<(), SessionStoreError> {
+        // Held from the read to the atomic replace so a concurrent append can't land in the replaced file.
+        let _writes = self.lock_writes();
         let path = self.session_path(session_id);
         let content = fs::read_to_string(&path)?;
         let mut lines = content.lines();
@@ -222,7 +226,13 @@ impl SessionStore {
     }
 
     fn append_json<T: Serialize>(&self, session_id: &str, value: &T) -> Result<(), SessionStoreError> {
-        Ok(append_line(&self.session_path(session_id), &serde_json::to_string(value)?)?)
+        let line = serde_json::to_string(value)?;
+        let _writes = self.lock_writes();
+        Ok(append_line(&self.session_path(session_id), &line)?)
+    }
+
+    fn lock_writes(&self) -> MutexGuard<'_, ()> {
+        self.writes.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn session_path(&self, session_id: &str) -> PathBuf {
