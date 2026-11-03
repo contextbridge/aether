@@ -372,7 +372,6 @@ const PROVIDERS: &[ProviderConfig] = &[
     ProviderConfig::local("LlamaCpp", "llamacpp", "llama.cpp", "LlamaCpp"),
 ];
 
-/// A model a provider exposes explicitly, with the context window its subscription grants.
 struct ExplicitModel {
     id: &'static str,
     context_window: u32,
