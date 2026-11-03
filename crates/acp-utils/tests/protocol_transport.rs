@@ -84,10 +84,11 @@ async fn test_peer_roundtrips_v2_updates_and_extensions() {
 }
 
 #[tokio::test]
-async fn stdio_accepts_json_rpc_batch_notifications() {
+async fn stdio_rejects_json_rpc_batches_without_running_their_entries() {
     LocalSet::new().run_until(async {
         let (mut writer, reader) = tokio::io::duplex(4096);
         let (output, output_reader) = tokio::io::duplex(4096);
+        let mut output_lines = BufReader::new(output_reader).lines();
         let (mut peer, builder) = TestPeer::new();
         let (initialized, ready) = oneshot::channel();
         let connection = spawn_local(builder.connect_with(
@@ -99,24 +100,25 @@ async fn stdio_accepts_json_rpc_batch_notifications() {
                 Ok(())
             },
         ));
-        let mut line = String::new();
-        BufReader::new(output_reader).read_line(&mut line).await.unwrap();
-        let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+        let request: serde_json::Value = serde_json::from_str(&output_lines.next_line().await.unwrap().unwrap()).unwrap();
         let response = json!({"jsonrpc": "2.0", "id": request["id"], "result": initialize_response()});
         writer.write_all(format!("{response}\n").as_bytes()).await.unwrap();
         ready.await.unwrap();
         let batch = json!([
             {"jsonrpc": "2.0", "method": "session/update", "params": {
                 "sessionId": "session", "update": {"sessionUpdate": "state_update", "state": "running"}
-            }},
-            {"jsonrpc": "2.0", "method": "session/update", "params": {
-                "sessionId": "session", "update": {"sessionUpdate": "state_update", "state": "idle", "stopReason": "end_turn"}
             }}
         ]);
         writer.write_all(format!("{batch}\n").as_bytes()).await.unwrap();
-        writer.shutdown().await.unwrap();
-        assert_eq!(peer.next_session_notification().await, running_notification("session"));
+        writer.write_all(format!("{}\n", json!({"jsonrpc": "2.0", "method": "session/update", "params": {
+            "sessionId": "session", "update": {"sessionUpdate": "state_update", "state": "idle", "stopReason": "end_turn"}
+        }})).as_bytes()).await.unwrap();
+
+        let rejection: serde_json::Value = serde_json::from_str(&output_lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(rejection["error"]["code"], -32600);
+        assert_eq!(rejection["id"], serde_json::Value::Null);
         assert_eq!(peer.next_session_notification().await, idle_notification("session", Some(StopReason::EndTurn)));
+        writer.shutdown().await.unwrap();
         let _ = connection.await.unwrap();
     }).await;
 }
