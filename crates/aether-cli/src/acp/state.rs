@@ -15,7 +15,7 @@ use agent_client_protocol::v2::schema::{
     LoginAuthResponse, LogoutAuthRequest, LogoutAuthResponse, McpCapabilities, NewSessionRequest, NewSessionResponse,
     PromptAudioCapabilities, PromptCapabilities, PromptEmbeddedContextCapabilities, PromptImageCapabilities,
     PromptRequest, PromptResponse, ResumeSessionRequest, ResumeSessionResponse, SessionId,
-    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse,
+    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, SetSessionTitleRequest, SetSessionTitleResponse,
 };
 use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, Error, Responder};
 use llm::ContentBlock;
@@ -185,6 +185,7 @@ impl AcpState {
         let session_capabilities = acp::SessionCapabilities::new()
             .prompt(prompt_capabilities)
             .mcp(McpCapabilities::new().stdio(acp::McpStdioCapabilities::new()).http(acp::McpHttpCapabilities::new()))
+            .title(acp::SessionTitleCapabilities::new())
             .meta(Some(aether_capabilities.to_meta()));
 
         let session_id = self.registry.session_id().await;
@@ -343,6 +344,22 @@ impl AcpState {
 
         info!("Found {} sessions", sessions.len());
         Ok(ListSessionsResponse::new(sessions).next_cursor(next_cursor.map(acp::SessionListCursor::new)))
+    }
+
+    pub(crate) fn set_session_title(&self, req: &SetSessionTitleRequest) -> Result<SetSessionTitleResponse, Error> {
+        match self.session_store.set_title(&req.session_id.0, &req.title) {
+            Ok(title) => Ok(SetSessionTitleResponse::new(title)),
+            Err(SessionStoreError::InvalidTitle) => {
+                Err(Error::invalid_params().data("session titles must not be blank"))
+            }
+            Err(SessionStoreError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                Err(acp::Error::session_not_found(req.session_id.clone()).into())
+            }
+            Err(e) => {
+                error!("Failed to set session title: {e}");
+                Err(Error::internal_error())
+            }
+        }
     }
 
     pub(crate) fn search_prompts(&self, params: &PromptSearchParams) -> Result<PromptSearchResponse, Error> {

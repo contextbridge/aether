@@ -7,6 +7,7 @@ use agent_client_protocol::util::MatchDispatchFrom;
 use agent_client_protocol::v2::schema::{
     CancelSessionNotification, CloseSessionRequest, InitializeRequest, ListSessionsRequest, LoginAuthRequest,
     LogoutAuthRequest, NewSessionRequest, PromptRequest, ResumeSessionRequest, SetSessionConfigOptionRequest,
+    SetSessionTitleRequest,
 };
 use agent_client_protocol::{
     self as acp, Agent, Client, ConnectionTo, Dispatch, HandleDispatchFrom, Handled, JsonRpcResponse, NullRun,
@@ -43,6 +44,10 @@ impl HandleDispatchFrom<Client> for AcpHandlers {
             .await
             .if_request(async |req: ListSessionsRequest, responder| {
                 spawn_response(&cx, state, responder, move |state, _| async move { state.list_sessions(&req) })
+            })
+            .await
+            .if_request(async |req: SetSessionTitleRequest, responder| {
+                spawn_response(&cx, state, responder, move |state, _| async move { state.set_session_title(&req) })
             })
             .await
             .if_request(async |req: LogoutAuthRequest, responder| {
