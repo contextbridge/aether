@@ -1,7 +1,7 @@
 use crate::TestResult;
 use crate::acp_process::{AcpProcess, AcpProcessBuilder, initialize_params};
 use serde_json::{Value, json};
-use std::io::{BufRead, BufReader, Error as IoError, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
@@ -62,17 +62,11 @@ fn pipe_backed_stdio_rejects_removed_v1_methods() -> TestResult {
     let mut agent = acp_builder(log_dir.path()).spawn()?;
     agent.initialize()?;
 
-    agent.send(&json!([
-        {"jsonrpc": "2.0", "method": "session/load", "params": {}, "id": 2},
-        {"jsonrpc": "2.0", "method": "authenticate", "params": {}, "id": 3}
-    ]))?;
-
-    let response = agent.read_message()?;
-    let responses = response.as_array().ok_or_else(|| IoError::other("expected a grouped response array"))?;
-    assert_eq!(responses.len(), 2, "expected one response per batch entry: {response}");
-    for (index, id) in [2u64, 3].into_iter().enumerate() {
-        assert_eq!(responses[index]["id"], json!(id), "response order should match the batch: {response}");
-        let message = responses[index]["error"]["message"].as_str().unwrap_or_default();
+    for (id, method) in [(2u64, "session/load"), (3, "authenticate")] {
+        agent.send(&json!({"jsonrpc": "2.0", "method": method, "params": {}, "id": id}))?;
+        let response = agent.read_message()?;
+        assert_eq!(response["id"], json!(id), "response should echo the request id: {response}");
+        let message = response["error"]["message"].as_str().unwrap_or_default();
         assert!(message.contains("Method not found"), "expected Method not found: {response}");
     }
     Ok(())

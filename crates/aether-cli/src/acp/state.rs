@@ -9,15 +9,14 @@ use acp_utils::notifications::{
 use aether_auth::OAuthCredentialStorage;
 use aether_telemetry::TelemetryRuntime;
 use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::schema::v2::{
+use agent_client_protocol::v2::schema::{
     self as acp, AgentCapabilities, AuthMethod, CancelSessionNotification, CloseSessionRequest, CloseSessionResponse,
     Implementation, InitializeRequest, InitializeResponse, ListSessionsRequest, ListSessionsResponse, LoginAuthRequest,
     LoginAuthResponse, LogoutAuthRequest, LogoutAuthResponse, McpCapabilities, NewSessionRequest, NewSessionResponse,
     PromptAudioCapabilities, PromptCapabilities, PromptEmbeddedContextCapabilities, PromptImageCapabilities,
     PromptRequest, PromptResponse, ResumeSessionRequest, ResumeSessionResponse, SessionId,
-    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse,
+    SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, SetSessionTitleRequest, SetSessionTitleResponse,
 };
-use agent_client_protocol::util::internal_error;
 use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, Error, Responder};
 use llm::ContentBlock;
 use llm::catalog::{LlmModel, ModelSpec};
@@ -136,7 +135,7 @@ impl AcpState {
         transport: impl ConnectTo<Agent> + 'static,
         stop: CancellationToken,
     ) -> Result<(), Error> {
-        let guard = self.try_attach().ok_or_else(|| internal_error("client already attached"))?;
+        let guard = self.try_attach().ok_or_else(|| Error::internal_error().data("client already attached"))?;
         guard.serve(transport, stop).await
     }
 
@@ -147,7 +146,7 @@ impl AcpState {
         stop: CancellationToken,
         on_connected: oneshot::Sender<ConnectionTo<Client>>,
     ) -> Result<(), Error> {
-        let guard = self.try_attach().ok_or_else(|| internal_error("client already attached"))?;
+        let guard = self.try_attach().ok_or_else(|| Error::internal_error().data("client already attached"))?;
         self.serve_attached(transport, stop, guard, acp_utils::testing::CaptureConnection(on_connected)).await
     }
 
@@ -186,6 +185,7 @@ impl AcpState {
         let session_capabilities = acp::SessionCapabilities::new()
             .prompt(prompt_capabilities)
             .mcp(McpCapabilities::new().stdio(acp::McpStdioCapabilities::new()).http(acp::McpHttpCapabilities::new()))
+            .title(acp::SessionTitleCapabilities::new())
             .meta(Some(aether_capabilities.to_meta()));
 
         let session_id = self.registry.session_id().await;
@@ -269,7 +269,7 @@ impl AcpState {
         _req: LogoutAuthRequest,
         cx: &ConnectionTo<Client>,
     ) -> Result<LogoutAuthResponse, Error> {
-        self.oauth_credential_store.delete("codex").await.map_err(|e| internal_error(e.to_string()))?;
+        self.oauth_credential_store.delete("codex").await.map_err(|e| Error::internal_error().data(e.to_string()))?;
         self.factory.forget_cached_credentials().await;
         self.broadcast_auth_state(cx).await;
         Ok(LogoutAuthResponse::new())
@@ -344,6 +344,22 @@ impl AcpState {
 
         info!("Found {} sessions", sessions.len());
         Ok(ListSessionsResponse::new(sessions).next_cursor(next_cursor.map(acp::SessionListCursor::new)))
+    }
+
+    pub(crate) fn set_session_title(&self, req: &SetSessionTitleRequest) -> Result<SetSessionTitleResponse, Error> {
+        match self.session_store.set_title(&req.session_id.0, &req.title) {
+            Ok(title) => Ok(SetSessionTitleResponse::new(title)),
+            Err(SessionStoreError::InvalidTitle) => {
+                Err(Error::invalid_params().data("session titles must not be blank"))
+            }
+            Err(SessionStoreError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                Err(acp::Error::session_not_found(req.session_id.clone()).into())
+            }
+            Err(e) => {
+                error!("Failed to set session title: {e}");
+                Err(Error::internal_error())
+            }
+        }
     }
 
     pub(crate) fn search_prompts(&self, params: &PromptSearchParams) -> Result<PromptSearchResponse, Error> {
@@ -424,8 +440,8 @@ impl AcpState {
             (Arc::clone(&self.session_store), params.session_id.clone(), new_cwd.clone());
         spawn_blocking(move || session_store.relocate(&session_id, &relocated_cwd))
             .await
-            .map_err(|e| internal_error(format!("workspace task failed: {e}")))?
-            .map_err(|e| internal_error(format!("failed to relocate session: {e}")))?;
+            .map_err(|e| Error::internal_error().data(format!("workspace task failed: {e}")))?
+            .map_err(|e| Error::internal_error().data(format!("failed to relocate session: {e}")))?;
         drop(active);
 
         info!("Moved session {} to workspace {}", params.session_id, new_cwd.display());
@@ -446,7 +462,7 @@ impl AcpState {
             op(&session_store, &manager, src_cwd)
         })
         .await
-        .map_err(|e| internal_error(format!("workspace task failed: {e}")))?
+        .map_err(|e| Error::internal_error().data(format!("workspace task failed: {e}")))?
         .map_err(workspace_request_error)
     }
 
@@ -619,7 +635,11 @@ fn workspace_request_error(e: WorkspaceRequestError) -> Error {
 }
 
 fn workspace_error(e: &WorkspaceError) -> Error {
-    if e.is_invalid_input() { Error::invalid_params().data(e.to_string()) } else { internal_error(e.to_string()) }
+    if e.is_invalid_input() {
+        Error::invalid_params().data(e.to_string())
+    } else {
+        Error::internal_error().data(e.to_string())
+    }
 }
 
 fn mcp_elicitation(client: &acp::ClientCapabilities) -> ElicitationCapability {

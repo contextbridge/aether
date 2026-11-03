@@ -2,7 +2,7 @@ use crate::support::{deliver, notices};
 use acp_utils::config_meta::SelectOptionMeta;
 use acp_utils::conversation::NoticeLevel;
 use acp_utils::testing::{model_choice, model_picker, option_group};
-use agent_client_protocol::schema::v2::{self as acp, ContentBlock};
+use agent_client_protocol::v2::schema::{self as acp, ContentBlock};
 use client_core::command::CommandResult;
 use client_core::composer::attachment::{AttachmentOutcome, PromptAttachment};
 use client_core::composer::submission::Submission;

@@ -2,7 +2,7 @@
 //! notifications.
 use std::path::PathBuf;
 
-use agent_client_protocol::schema::v2::{self as acp, AuthMethod, Meta, SessionId, ToolCallId};
+use agent_client_protocol::v2::schema::{self as acp, AuthMethod, Meta, SessionId, ToolCallId};
 use agent_client_protocol::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 use clankerdiff_protocol::client::ClientCommand;
 use clankerdiff_protocol::shared::{DocumentUpdate, Event};

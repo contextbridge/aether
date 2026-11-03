@@ -1,5 +1,5 @@
 use crate::theme::Theme;
-use agent_client_protocol::schema::v2::{PlanEntry, PlanEntryStatus};
+use agent_client_protocol::v2::schema::{PlanEntry, PlanEntryStatus};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -65,7 +65,7 @@ fn build_plan_lines(entries: &[PlanEntry], theme: &Theme) -> Vec<Line<'static>> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::schema::v2::{PlanEntryPriority, PlanEntryStatus};
+    use agent_client_protocol::v2::schema::{PlanEntryPriority, PlanEntryStatus};
 
     fn test_theme() -> Theme {
         Theme::default()

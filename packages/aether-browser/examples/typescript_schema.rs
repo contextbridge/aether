@@ -1,6 +1,6 @@
 use acp_utils::notifications::RemoteServerInfo;
 use aether_browser::types::{AetherClientErrorDetails, AetherClientEvent, AetherClientOptions, ConversationSnapshot};
-use agent_client_protocol::schema::v2::{
+use agent_client_protocol::v2::schema::{
     AgentNotification, AgentRequest, AgentResponse, ClientNotification, ClientRequest, ClientResponse,
 };
 use schemars::SchemaGenerator;

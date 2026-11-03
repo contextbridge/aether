@@ -3,7 +3,7 @@ use crate::session_core::SessionCoreConfig;
 use crate::session_model::{WorkspaceAccess, initial_workspace_status};
 use acp_utils::client::{AcpClient, AcpClientError, connect_acp_client, initialize_request};
 use acp_utils::notifications::{RemoteServerInfo, SessionPreviewParams};
-use agent_client_protocol::schema::v2::{
+use agent_client_protocol::v2::schema::{
     Implementation, NewSessionRequest, NewSessionResponse, ReplayFrom, ReplayFromStart, ResumeSessionRequest, SessionId,
 };
 use agent_client_protocol::{Client, ConnectTo};

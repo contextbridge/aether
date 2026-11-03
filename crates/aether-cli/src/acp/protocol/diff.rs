@@ -1,4 +1,4 @@
-use agent_client_protocol::schema::v2::{AbsolutePath, Diff, DiffChange, DiffFileType, DiffPatch};
+use agent_client_protocol::v2::schema::{AbsolutePath, Diff, DiffChange, DiffFileType, DiffPatch};
 use clankerdiff_core::git_patch_from_texts;
 use utils::display_meta::FileDiff;
 

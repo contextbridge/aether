@@ -1,6 +1,6 @@
 use crate::TestResult;
 use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::schema::v2::{Implementation, InitializeRequest};
+use agent_client_protocol::v2::schema::{Implementation, InitializeRequest};
 use serde_json::{Value, json};
 use std::ffi::OsStr;
 use std::io::{BufRead, BufReader, Error as IoError, Write};

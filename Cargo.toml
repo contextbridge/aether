@@ -48,11 +48,11 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
 
 # ACP
-agent-client-protocol = { version = "=3.5.0", features = ["unstable_protocol_v2", "unstable_subagents"] }
+agent-client-protocol = { version = "=5.0.0", features = ["unstable_protocol_v2", "unstable_session_set_title", "unstable_subagents"] }
 tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"] }
 
 # MCP and API clients
-rmcp = { version = "^3.5.1", default-features = false }
+rmcp = { version = "^3.8.0", default-features = false }
 sse-stream = "0.3.0"
 reqwest = { version = "^0.13.4", default-features = false, features = ["json", "query", "rustls", "http2", "stream"] }
 oauth2 = { version = "5.0", default-features = false }

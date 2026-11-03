@@ -4,7 +4,7 @@ use crate::target::{AgentConnector, SessionTarget};
 use acp_utils::content::first_text;
 use acp_utils::conversation::ConversationContent;
 use aether_sessions::prompt_title;
-use agent_client_protocol::schema::v2::SessionId;
+use agent_client_protocol::v2::schema::SessionId;
 use chrono::{DateTime, Utc};
 use clankerdiff_client::{ClientError, ClientState, LookupReply};
 use client_core::command::Reply;

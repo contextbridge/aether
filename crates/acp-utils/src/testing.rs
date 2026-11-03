@@ -9,7 +9,8 @@ use crate::notifications::{
     PromptSearchResult, SessionPreviewResponse, SessionPreviewRole, SessionPreviewTurn, SubAgentMeta,
 };
 pub use agent_client_protocol::Channel;
-use agent_client_protocol::schema::v2::{
+use agent_client_protocol::schema::{IntoOption, ProtocolVersion};
+use agent_client_protocol::v2::schema::{
     CompleteElicitationNotification, ContentBlock, ContentChunk, CreateElicitationRequest, CreateElicitationResponse,
     ElicitationFormMode, ElicitationSchema, ElicitationSessionScope, IdleStateUpdate, Implementation,
     InitializeRequest, InitializeResponse, PlanEntry, PlanId, PlanUpdate, PlanUpdateContent, RunningStateUpdate,
@@ -17,10 +18,9 @@ use agent_client_protocol::schema::v2::{
     SessionUpdate, StateUpdate, StopReason, SubagentUpdate, ToolCallStatus, ToolCallUpdate, UpdateSessionNotification,
     UserMessage,
 };
-use agent_client_protocol::schema::{IntoOption, ProtocolVersion};
 use agent_client_protocol::{
     self as acp, Agent, Client, ConnectionTo, HandleConnectionClose, HandleDispatchFrom, NullRun, Responder,
-    RunWithConnectionTo, V2Builder,
+    RunWithConnectionTo, v2,
 };
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -39,7 +39,7 @@ pub struct TestPeer {
 }
 
 impl TestPeer {
-    pub fn new() -> (Self, V2Builder<Client, impl HandleDispatchFrom<Agent>, NullRun>) {
+    pub fn new() -> (Self, v2::Builder<Client, impl HandleDispatchFrom<Agent>, NullRun>) {
         let (session_tx, session_notifications) = mpsc::unbounded_channel();
         let (mcp_tx, mcp_notifications) = mpsc::unbounded_channel();
         let (git_diff_tx, git_diff_notifications) = mpsc::unbounded_channel();
@@ -77,12 +77,12 @@ impl TestPeer {
                 {
                     let responses = elicitation_responses.clone();
                     let capture = responder_capture.clone();
-                    async move |req: CreateElicitationRequest, responder: Responder<CreateElicitationResponse>, _cx| {
+                    async move |req: CreateElicitationRequest,
+                                responder: v2::Responder<CreateElicitationResponse>,
+                                _cx| {
                         if let Some(capture_tx) = capture.lock().unwrap().take() {
-                            return match capture_tx.send(responder) {
-                                Ok(()) => Ok(()),
-                                Err(responder) => responder.respond_with_error(acp::Error::internal_error()),
-                            };
+                            let _ = capture_tx.send(responder.into_raw());
+                            return Ok(());
                         }
                         let _ = elicitation_tx.send(req);
                         let queued = responses.lock().unwrap().pop_front();
@@ -242,7 +242,7 @@ pub fn prompt_search_response(query: &str, results: Vec<PromptSearchResult>) -> 
 pub async fn test_connection() -> (ConnectionTo<Client>, TestPeer) {
     let (peer, client_builder) = TestPeer::new();
     let agent = Agent.v2().name("test-agent").on_receive_request(
-        async |_: InitializeRequest, responder: Responder<InitializeResponse>, _cx| {
+        async |_: InitializeRequest, responder: v2::Responder<InitializeResponse>, _cx| {
             responder.respond(initialize_response())
         },
         acp::on_receive_request!(),
@@ -260,8 +260,8 @@ pub struct ConnectedPair {
 }
 
 pub async fn connect_pair<T, U, V, X, Y, Z>(
-    agent: V2Builder<Agent, T, U, V>,
-    client: V2Builder<Client, X, Y, Z>,
+    agent: v2::Builder<Agent, T, U, V>,
+    client: v2::Builder<Client, X, Y, Z>,
 ) -> ConnectedPair
 where
     T: HandleDispatchFrom<Client> + 'static,

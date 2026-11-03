@@ -1,7 +1,7 @@
 use crate::TestResult;
 use acp_utils::config_option_id::ConfigOptionId;
 use aether_cli::acp::testing::{AcpTestHarness, FakeAgentSwitchingSession};
-use agent_client_protocol::schema::v2::{
+use agent_client_protocol::v2::schema::{
     CloseSessionRequest, ContentBlock, ImageContent, SetSessionConfigOptionRequest, StopReason,
 };
 

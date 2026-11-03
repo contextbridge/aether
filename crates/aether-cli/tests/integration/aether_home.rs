@@ -3,7 +3,7 @@ use crate::acp_process::AcpProcess;
 use aether_auth::{EncryptedFileCredentialStore, OAuthCredential, OAuthCredentialStorage};
 use aether_cli::workspace::testing::init_repo;
 use aether_sessions::{SessionMeta, SessionStore};
-use agent_client_protocol::schema::v2 as acp;
+use agent_client_protocol::v2::schema as acp;
 use serde_json::json;
 use std::path::Path;
 use tempfile::TempDir;

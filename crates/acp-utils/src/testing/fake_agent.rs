@@ -4,7 +4,8 @@ use crate::notifications::{
     SessionPreviewResponse, WorkspaceListParams, WorkspaceMoveParams, WorkspaceMoveTarget, WorkspaceStatusPayload,
     WorkspaceStatusResponse,
 };
-use agent_client_protocol::schema::v2::{
+use agent_client_protocol::util::MatchDispatchFrom;
+use agent_client_protocol::v2::schema::{
     AgentCapabilities, CancelSessionNotification, CloseSessionRequest, CloseSessionResponse, CompactionStatus,
     CompactionUpdate, CreateElicitationRequest, CreateElicitationResponse, ElicitationFormMode, ElicitationSchema,
     ElicitationSessionScope, ElicitationUrlMode, Implementation, InitializeRequest, InitializeResponse,
@@ -14,10 +15,9 @@ use agent_client_protocol::schema::v2::{
     SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, StopReason, StringPropertySchema,
     UpdateSessionNotification,
 };
-use agent_client_protocol::util::MatchDispatchFrom;
 use agent_client_protocol::{
     self as acp, Agent, Client, ConnectionTo, Dispatch, HandleDispatchFrom, Handled, JsonRpcRequest, NullRun,
-    Responder, V2Builder,
+    Responder, v2,
 };
 use std::any::{Any, TypeId};
 use std::collections::{HashMap, VecDeque};
@@ -186,7 +186,7 @@ impl FakeAgent {
         (self, requests)
     }
 
-    pub fn agent(self) -> V2Builder<Agent, impl HandleDispatchFrom<Client>, NullRun> {
+    pub fn agent(self) -> v2::Builder<Agent, impl HandleDispatchFrom<Client>, NullRun> {
         Agent.v2().name("fake-agent").with_handler(self)
     }
 

@@ -4,7 +4,7 @@ use git_diff_server::FakeGitDiffServer;
 pub use session_config::SessionCoreConfigBuilder;
 
 use acp_utils::testing::FakeAgent;
-use agent_client_protocol::{Agent, Client, HandleDispatchFrom, NullRun, V2Builder};
+use agent_client_protocol::{Agent, Client, HandleDispatchFrom, NullRun, v2};
 use clankerdiff_client::{RemoteError, RemoteErrorCode};
 use clankerdiff_core::{
     DiffDocument, DiffScope, FileDiff, FileStatus, LookupAnswer, LookupRequest, RepoPath, RepositoryAction, Resolution,
@@ -29,7 +29,7 @@ pub struct FakeGitFile {
     pub committed_contents: Option<Vec<u8>>,
 }
 
-pub fn git_diff_agent(agent: FakeAgent, git: FakeGit) -> V2Builder<Agent, impl HandleDispatchFrom<Client>, NullRun> {
+pub fn git_diff_agent(agent: FakeAgent, git: FakeGit) -> v2::Builder<Agent, impl HandleDispatchFrom<Client>, NullRun> {
     agent.git_diff().agent().with_handler(FakeGitDiffServer::new(git))
 }
 

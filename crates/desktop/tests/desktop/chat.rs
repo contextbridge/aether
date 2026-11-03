@@ -3,7 +3,7 @@ use acp_utils::testing::{FakeAgent, FakeAgentRequests};
 use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder};
 use aether_desktop::threads::{Thread, ThreadStatus};
 use agent_client_protocol as acp;
-use agent_client_protocol::schema::v2::PromptRequest;
+use agent_client_protocol::v2::schema::PromptRequest;
 use gpui::{Entity, TestAppContext};
 use std::path::PathBuf;
 use utils::testing::TestWorkspace;

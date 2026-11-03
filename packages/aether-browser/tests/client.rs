@@ -5,7 +5,7 @@ mod common;
 use acp_utils::notifications::RemoteServerInfo;
 use aether_browser::types::AetherClientErrorCode;
 use aether_browser::{AetherClient, Elicitation};
-use agent_client_protocol::schema::v2::{
+use agent_client_protocol::v2::schema::{
     ContentBlock, CreateElicitationRequest, InitializeResponse, NewSessionResponse, PromptResponse, SessionUpdate,
     StateUpdate, StopReason, UpdateSessionNotification,
 };

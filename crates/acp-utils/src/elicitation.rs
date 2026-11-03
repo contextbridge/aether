@@ -1,5 +1,5 @@
 use crate::notifications::AETHER_META_NAMESPACE;
-use agent_client_protocol::schema::v2::{
+use agent_client_protocol::v2::schema::{
     self as acp, CompleteElicitationNotification, CreateElicitationRequest, CreateElicitationResponse, Meta, SessionId,
 };
 use rmcp::model::{self as mcp, ElicitRequestParams, ElicitResult};
@@ -118,7 +118,7 @@ fn build_scoped_elicitation_id(session_id: &SessionId, server_name: &str, elicit
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::schema::v2::{
+    use agent_client_protocol::v2::schema::{
         ElicitationAction, ElicitationMode, ElicitationPropertySchema, ElicitationScope,
     };
     use serde_json::Map;

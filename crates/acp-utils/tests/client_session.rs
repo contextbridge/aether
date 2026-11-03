@@ -1,9 +1,9 @@
-use acp::schema::v2::{AgentCapabilities, CompactionStatus, LoginAuthRequest};
+use acp::v2::schema::{AgentCapabilities, CompactionStatus, LoginAuthRequest};
 use acp_utils::client::{AcpClient, AcpClientError, AcpEvent, connect_acp_client};
 use acp_utils::notifications::{PromptSearchParams, SessionPreviewParams};
 use acp_utils::testing::FakeAgent;
 use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::schema::v2::{
+use agent_client_protocol::v2::schema::{
     CancelSessionNotification, CloseSessionRequest, ContentBlock, ContentChunk, Implementation, ListSessionsRequest,
     NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse, ReplayFrom, ReplayFromStart,
     ResumeSessionRequest, SessionId, SessionInfo, SessionUpdate, SetSessionConfigOptionRequest,
@@ -225,7 +225,7 @@ async fn initialization_without_capabilities_exposes_none() -> Result<(), TestEr
 
 #[tokio::test]
 async fn v2_initialization_accessors_expose_agent_metadata() -> Result<(), TestError> {
-    use acp::schema::v2::{PromptCapabilities, SessionCapabilities};
+    use acp::v2::schema::{PromptCapabilities, SessionCapabilities};
     LocalSet::new()
         .run_until(async {
             let client = acp_utils::testing::FakeAgent::default()
@@ -261,7 +261,7 @@ async fn login_accepts_supported_methods_and_rejects_unknown_methods() -> Result
 
 #[tokio::test]
 async fn permission_with_no_options_is_cancelled() {
-    use acp::schema::v2::{RequestPermissionOutcome, RequestPermissionRequest};
+    use acp::v2::schema::{RequestPermissionOutcome, RequestPermissionRequest};
 
     LocalSet::new()
         .run_until(async {
@@ -275,7 +275,7 @@ async fn permission_with_no_options_is_cancelled() {
                 .block_task()
                 .await
                 .unwrap();
-            assert_eq!(response.outcome, RequestPermissionOutcome::Cancelled);
+            assert!(matches!(response.outcome, RequestPermissionOutcome::Cancelled(_)));
             responder.respond(PromptResponse::new("user-message")).unwrap();
             prompt.await.unwrap();
             client.handle.disconnect().await;

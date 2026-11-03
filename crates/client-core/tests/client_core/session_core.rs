@@ -8,7 +8,7 @@ use acp_utils::testing::{
     FakeAgent, idle_notification, message_chunk, on_session, running_notification, select, test_connection, texts,
     user_message,
 };
-use agent_client_protocol::schema::v2::{
+use agent_client_protocol::v2::schema::{
     self as acp, ContentBlock, CreateElicitationRequest, CreateElicitationResponse, ElicitationAction,
     ElicitationFormMode, ElicitationSchema, ElicitationSessionScope, ImageContent, NewSessionResponse,
     SessionConfigOption, SessionId, SessionUpdate, StopReason,

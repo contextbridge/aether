@@ -1,6 +1,6 @@
 use super::thread::Thread;
 use crate::target::{AgentConnector, ConnectError, SessionTarget};
-use agent_client_protocol::schema::v2::SessionId;
+use agent_client_protocol::v2::schema::SessionId;
 use clankerdiff_gpui_shell::runtime;
 use client_core::command::{Command, ReviewSource};
 use client_core::runtime::{Input, SessionRuntime};

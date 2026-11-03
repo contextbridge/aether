@@ -1,7 +1,7 @@
 use acp_utils::client::{AcpClientError, AcpEvent};
 use acp_utils::conversation::{ConversationContent, Notice, NoticeLevel};
 use acp_utils::testing::{Channel, FakeAgent};
-use agent_client_protocol::schema::v2::{Implementation, SessionId};
+use agent_client_protocol::v2::schema::{Implementation, SessionId};
 use clankerdiff_client::ClientState;
 use clankerdiff_core::DiffDocument;
 use client_core::command::CommandResult;

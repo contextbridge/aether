@@ -140,7 +140,9 @@ async fn authorization_flow(
 
     manager.set_metadata(resolution.metadata);
 
-    let request = AuthorizationRequest::new(loopback_redirect_uri(port)).with_client_name(OAUTH_CLIENT_NAME);
+    let request = AuthorizationRequest::new(loopback_redirect_uri(port))
+        .with_client_name(OAUTH_CLIENT_NAME)
+        .with_initial_scope_selection();
     let request = match oauth.registration {
         OAuthClientRegistration::PreRegistered(client_id) => request.with_preregistered_client(client_id),
         OAuthClientRegistration::ClientMetadata(url) => request.with_client_metadata_url(url),

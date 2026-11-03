@@ -28,7 +28,7 @@ use aether_core::testing::ready_catalog;
 use aether_project::AgentCatalog;
 use aether_sessions::SessionStore;
 use aether_sessions::{SessionControlEvent, SessionEvent, SessionMeta, UserEvent, last_agent_from_events};
-use agent_client_protocol::schema::v2::{
+use agent_client_protocol::v2::schema::{
     AbsolutePath, AvailableCommand, ContentBlock, InitializeResponse, PromptRequest, PromptResponse, ReplayFrom,
     ReplayFromStart, ResumeSessionRequest, SessionId, SessionUpdate, StateUpdate, StopReason,
 };
@@ -460,7 +460,7 @@ impl AcpTestHarness {
 
     pub async fn expect_available_commands(&mut self, expected: &[&str], unexpected: &[&str]) {
         let commands = self.next_available_commands().await;
-        let names = commands.iter().map(|command| command.name.as_str()).collect::<Vec<_>>();
+        let names = commands.iter().map(AvailableCommand::name).collect::<Vec<_>>();
         for name in expected {
             assert!(names.contains(name), "expected command /{name} in {names:?}");
         }

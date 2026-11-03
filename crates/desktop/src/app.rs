@@ -20,7 +20,7 @@ use crate::ui::{
     StyledExt, Typography, TypographyExt, UI_FONT, UiTheme, picker_closed, place_window_buttons, spin_when_shown,
 };
 use aether_sessions::SessionStore;
-use agent_client_protocol::schema::v2::SessionId;
+use agent_client_protocol::v2::schema::SessionId;
 use clankerdiff_core::RepoPath;
 use clankerdiff_gpui::ui::keymap::key_binding;
 use clankerdiff_remote::Remotes;

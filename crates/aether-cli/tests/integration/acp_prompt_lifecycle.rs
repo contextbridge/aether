@@ -2,7 +2,7 @@ use crate::TestResult;
 use aether_cli::acp::testing::{AcpTestHarness, FakeBackgroundTask};
 use aether_sessions::{SessionEvent, UserEvent};
 use agent_client_protocol::ErrorCode;
-use agent_client_protocol::schema::v2::{
+use agent_client_protocol::v2::schema::{
     CancelSessionNotification, CloseSessionRequest, ContentBlock, MessageId, PromptResponse, SessionId, SessionUpdate,
     StateUpdate, StopReason,
 };
@@ -22,7 +22,7 @@ async fn cancel_during_mcp_prompt_expansion_does_not_wait_for_the_server() {
         expansion.reached().await;
         harness.client_cx.send_notification(CancelSessionNotification::new(id.clone())).unwrap();
         let error = prompt.await.expect_err("a prompt cancelled before insertion errors");
-        assert_eq!(error.code, ErrorCode::RequestCancelled);
+        assert_eq!(error.code, ErrorCode::REQUEST_CANCELLED);
         session.planner().assert_never_ran();
         harness.shutdown().await;
         assert_eq!(harness.live_runtime_count(), 0);
@@ -60,7 +60,7 @@ async fn cancel_sent_before_acceptance_is_not_lost() {
         harness.client_cx.send_notification(CancelSessionNotification::new(id.clone())).unwrap();
         match prompt.await {
             Ok(_) => harness.expect_idle(&id, StopReason::Cancelled).await,
-            Err(error) => assert_eq!(error.code, ErrorCode::RequestCancelled),
+            Err(error) => assert_eq!(error.code, ErrorCode::REQUEST_CANCELLED),
         }
     })
     .await;
@@ -306,7 +306,7 @@ async fn cancel_rejects_a_prompt_queued_behind_the_running_reply() -> TestResult
         harness.client_cx.send_notification(CancelSessionNotification::new(id.clone()))?;
 
         let error = second.await.expect_err("a discarded prompt is rejected");
-        assert_eq!(error.code, ErrorCode::RequestCancelled);
+        assert_eq!(error.code, ErrorCode::REQUEST_CANCELLED);
         let updates = harness.updates_until(&id, is_idle).await;
         assert!(
             !updates.iter().any(|update| matches!(update, SessionUpdate::UserMessage(_))),
@@ -328,7 +328,7 @@ async fn prompt_sent_after_cancel_starts_a_new_turn() -> TestResult {
         let third = harness.prompt(&id, "third");
 
         let error = second.await.expect_err("a discarded prompt is rejected");
-        assert_eq!(error.code, ErrorCode::RequestCancelled);
+        assert_eq!(error.code, ErrorCode::REQUEST_CANCELLED);
         let third = third.await?;
         let updates = harness.updates_until(&id, |update| is_agent_message(update, "third reply")).await;
         assert!(updates.iter().any(|update| is_user_message(update, &third.message_id)), "{updates:?}");

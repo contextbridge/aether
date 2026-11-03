@@ -12,7 +12,7 @@ pub use turn::{TurnFinished, TurnPhase};
 
 use crate::client::AcpEvent;
 use crate::notifications::{AetherMeta, SubAgentMeta};
-use agent_client_protocol::schema::{MaybeUndefined, v2 as acp};
+use agent_client_protocol::{schema::MaybeUndefined, v2::schema as acp};
 use items::MessageRole;
 use std::collections::{HashMap, HashSet};
 use turn::WorkState;

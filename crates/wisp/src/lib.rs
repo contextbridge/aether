@@ -14,7 +14,7 @@ pub mod testing;
 pub mod theme;
 pub mod view;
 
-use agent_client_protocol::schema::v2::{Implementation, SessionId};
+use agent_client_protocol::v2::schema::{Implementation, SessionId};
 use agent_client_protocol::{AcpAgent, Client, ConnectTo};
 use client_core::connection::{Connection, Session};
 

@@ -1,5 +1,5 @@
 use crate::content::{display_content_blocks, map_content_blocks_to_text};
-use agent_client_protocol::schema::v2 as acp;
+use agent_client_protocol::v2::schema as acp;
 use schemars::JsonSchema;
 use serde::Serialize;
 use std::borrow::Cow;

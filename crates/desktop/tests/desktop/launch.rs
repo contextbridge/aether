@@ -4,7 +4,7 @@ use aether_desktop::registry::{Registry, STATE_FILE};
 use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder};
 use aether_desktop::threads::ThreadStatus;
 use aether_desktop::ui::interface_size::DEFAULT_INTERFACE_SIZE;
-use agent_client_protocol::schema::v2::SessionId;
+use agent_client_protocol::v2::schema::SessionId;
 use gpui::{AppContext, TestAppContext, point, px};
 use std::path::{Path, PathBuf};
 

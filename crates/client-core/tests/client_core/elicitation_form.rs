@@ -1,4 +1,4 @@
-use agent_client_protocol::schema::v2::{
+use agent_client_protocol::v2::schema::{
     BooleanPropertySchema, ElicitationContentValue as Value, ElicitationPropertySchema, ElicitationSchema, EnumOption,
     IntegerPropertySchema, MultiSelectPropertySchema, NumberPropertySchema, StringPropertySchema,
 };

@@ -1,5 +1,5 @@
 use crate::session_model::WorkspaceAccess;
-use agent_client_protocol::schema::v2 as acp;
+use agent_client_protocol::v2::schema as acp;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use std::io::Read;

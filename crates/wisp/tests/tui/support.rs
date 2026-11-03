@@ -11,7 +11,7 @@ pub(crate) use acp_utils::testing::{
     prompt_search_hit, prompt_search_response, running_state, select, session_preview, user_message,
 };
 pub(crate) use agent_client_protocol::Error;
-pub(crate) use agent_client_protocol::schema::v2::{
+pub(crate) use agent_client_protocol::v2::schema::{
     self as acp, BooleanPropertySchema, CreateElicitationRequest, CreateElicitationResponse, ElicitationAction,
     ElicitationFormMode, ElicitationSchema, ElicitationSessionScope, ElicitationUrlMode, SessionId,
     StringPropertySchema,

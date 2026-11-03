@@ -4,7 +4,7 @@ use crate::surfaces::modal::frame::MODAL_HORIZONTAL_PADDING;
 use crate::theme::Theme;
 use crate::view::filterable_list::FilterableList;
 use crate::view::input::{Nav, UiEvent};
-use agent_client_protocol::schema::v2::AuthMethod;
+use agent_client_protocol::v2::schema::AuthMethod;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::Line;

@@ -3,7 +3,7 @@ use crate::theme::Theme;
 use crate::view::reasoning_bar::{reasoning_bar, reasoning_color, slot_bar};
 use crate::view::wrap::{truncate_spans, truncate_to_width};
 use acp_utils::config_option_id::ConfigOptionId;
-use agent_client_protocol::schema::v2 as acp;
+use agent_client_protocol::v2::schema as acp;
 use client_core::format::token_count;
 use client_core::session_config_view::{LocalConfigOption, LocalConfigView};
 use client_core::session_model::WorkspaceStatus;

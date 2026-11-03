@@ -2,7 +2,7 @@ use crate::support::{replying, texts};
 use acp_utils::testing::{FakeAgent, FakeAgentRequests, select};
 use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder};
 use aether_desktop::threads::ThreadStatus;
-use agent_client_protocol::schema::v2 as acp;
+use agent_client_protocol::v2::schema as acp;
 use gpui::{TestAppContext, px};
 use utils::testing::TestWorkspace;
 
@@ -243,10 +243,13 @@ fn prompt_search_is_not_offered_once_the_agent_disconnects(cx: &mut TestAppConte
 }
 
 fn advertising_commands() -> FakeAgent {
-    let explain = acp::AvailableCommand::new("explain", "Explain something")
+    let explain = acp::Command::new("explain", "Explain something")
         .input(acp::AvailableCommandInput::Text(acp::TextCommandInput::new("topic")));
-    let commands =
-        acp::AvailableCommandsUpdate::new(vec![acp::AvailableCommand::new("review", "Review the diff"), explain]);
+    let review = acp::Command::new("review", "Review the diff");
+    let commands = acp::AvailableCommandsUpdate::new(vec![
+        acp::AvailableCommand::Command(review),
+        acp::AvailableCommand::Command(explain),
+    ]);
     FakeAgent::new("alpha-session").prompt_updates(vec![acp::SessionUpdate::AvailableCommandsUpdate(commands)])
 }
 

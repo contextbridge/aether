@@ -1,8 +1,8 @@
 use acp_utils::websocket;
 use aether_cli::acp::testing::AcpTestHarness;
 use aether_cli::client::{ClientArgs, ClientRunError, run_client};
-use agent_client_protocol::schema::v2::SessionId;
-use agent_client_protocol::schema::v2::{CloseSessionRequest, PromptRequest};
+use agent_client_protocol::v2::schema::SessionId;
+use agent_client_protocol::v2::schema::{CloseSessionRequest, PromptRequest};
 use clap::Parser;
 use client_core::connection::{Connection, Session};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;

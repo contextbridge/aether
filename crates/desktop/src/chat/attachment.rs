@@ -1,6 +1,6 @@
 use crate::ui::tokens::{ICON_SIZE_SMALL, RADIUS_INNER, rem};
 use crate::ui::{Icon, IconName, Typography, TypographyExt, UiTheme};
-use agent_client_protocol::schema::v2 as acp;
+use agent_client_protocol::v2::schema as acp;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use client_core::composer::attachment::{AttachmentKind, PromptAttachment, classify_attachment};

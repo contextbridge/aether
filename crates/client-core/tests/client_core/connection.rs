@@ -7,7 +7,7 @@ use acp_utils::testing::{
 };
 use agent_client_protocol::Error;
 use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::schema::v2::{
+use agent_client_protocol::v2::schema::{
     AgentCapabilities, AuthMethodId, ContentBlock, ContentChunk, Implementation, NewSessionResponse,
     PromptCapabilities, PromptImageCapabilities, PromptRequest, PromptResponse, ReplayFrom, ResumeSessionRequest,
     ResumeSessionResponse, SessionCapabilities, SessionConfigId, SessionConfigOption, SessionConfigOptionValue,

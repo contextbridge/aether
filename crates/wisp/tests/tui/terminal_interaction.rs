@@ -330,7 +330,7 @@ mod event_routing {
 
     #[test]
     fn mouse_activation_uses_shared_settings_actions() {
-        use agent_client_protocol::schema::v2::{AuthMethod, AuthMethodAgent, SessionConfigOption};
+        use agent_client_protocol::v2::schema::{AuthMethod, AuthMethodAgent, SessionConfigOption};
 
         fn settings_app(
             options: Vec<SessionConfigOption>,
@@ -504,7 +504,7 @@ mod event_routing {
 }
 
 mod refocus_click {
-    use agent_client_protocol::schema::v2::{AuthMethod, AuthMethodAgent};
+    use agent_client_protocol::v2::schema::{AuthMethod, AuthMethodAgent};
     use crossterm::event::Event;
 
     use super::*;

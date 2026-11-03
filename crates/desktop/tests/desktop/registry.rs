@@ -1,5 +1,5 @@
 use aether_desktop::registry::{Registry, STATE_FILE, State};
-use agent_client_protocol::schema::v2::SessionId;
+use agent_client_protocol::v2::schema::SessionId;
 use gpui::{AppContext, Entity, TestAppContext};
 use std::fs;
 use std::path::{Path, PathBuf};

@@ -3,7 +3,7 @@ use crate::session_model::{WorkspaceAccess, WorkspaceStatus, initial_workspace_s
 use acp_utils::notifications::{AetherCapabilities, AetherMeta};
 use acp_utils::testing::FakeAgent;
 use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::schema::v2 as acp;
+use agent_client_protocol::v2::schema as acp;
 use std::path::PathBuf;
 
 pub struct SessionCoreConfigBuilder {

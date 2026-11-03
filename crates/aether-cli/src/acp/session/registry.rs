@@ -1,4 +1,4 @@
-use agent_client_protocol::schema::v2::SessionId;
+use agent_client_protocol::v2::schema::SessionId;
 use std::future::Future;
 use tokio::sync::{Mutex, MutexGuard, mpsc};
 
