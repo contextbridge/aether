@@ -52,7 +52,7 @@ agent-client-protocol = { version = "=3.5.0", features = ["unstable_protocol_v2"
 tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"] }
 
 # MCP and API clients
-rmcp = { version = "^3.5.1", default-features = false }
+rmcp = { version = "^3.8.0", default-features = false }
 sse-stream = "0.3.0"
 reqwest = { version = "^0.13.4", default-features = false, features = ["json", "query", "rustls", "http2", "stream"] }
 oauth2 = { version = "5.0", default-features = false }
