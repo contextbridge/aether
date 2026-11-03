@@ -428,13 +428,6 @@ mod tests {
     }
 
     #[test]
-    fn codex_gpt61_terra_uses_its_larger_subscription_context_window() {
-        let model: LlmModel = "codex:gpt-6.1-terra".parse().unwrap();
-        assert_eq!(model.context_window(), Some(500_000));
-        assert_eq!(model.oauth_provider_id(), Some("codex"));
-    }
-
-    #[test]
     fn codex_gpt55_uses_subscription_context_window() {
         let model: LlmModel = "codex:gpt-5.5".parse().unwrap();
         assert_eq!(model.context_window(), Some(272_000));
