@@ -1,4 +1,4 @@
-use crate::view::syntax::HighlightStats;
+use clankerdiff_syntax::SyntaxWorkStats;
 #[cfg(feature = "testing")]
 use std::time::Instant;
 
@@ -25,7 +25,7 @@ pub struct RenderStats {
     /// are supposed to bound this to roughly the viewport height.
     pub max_live_rows: usize,
     pub history_rows_inserted: u64,
-    pub highlight: HighlightStats,
+    pub syntax: SyntaxWorkStats,
     pub ns_layout: u64,
     pub ns_live: u64,
     pub ns_draw: u64,
@@ -53,5 +53,18 @@ impl Lap {
         return u64::try_from(self.start.elapsed().as_nanos()).unwrap_or(u64::MAX);
         #[cfg(not(feature = "testing"))]
         0
+    }
+}
+
+pub(super) fn work_since(before: SyntaxWorkStats, now: SyntaxWorkStats) -> SyntaxWorkStats {
+    SyntaxWorkStats {
+        parser_input_bytes: now.parser_input_bytes - before.parser_input_bytes,
+        queried_bytes: now.queried_bytes - before.queried_bytes,
+        full_parses: now.full_parses - before.full_parses,
+        incremental_parses: now.incremental_parses - before.incremental_parses,
+        projected_bytes: now.projected_bytes - before.projected_bytes,
+        projected_lines: now.projected_lines - before.projected_lines,
+        reused_lines: now.reused_lines - before.reused_lines,
+        compared_nodes: now.compared_nodes - before.compared_nodes,
     }
 }

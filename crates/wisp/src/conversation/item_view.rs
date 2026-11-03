@@ -1,6 +1,5 @@
 use crate::theme::Theme;
 use crate::view::markdown::render_markdown;
-use crate::view::syntax::SyntaxHighlighter;
 use crate::view::wrap::wrap_text;
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthStr;
@@ -28,12 +27,11 @@ pub(crate) fn item_lines(
     padding: usize,
     spinner_tick: usize,
     theme: &Theme,
-    highlighter: &mut SyntaxHighlighter,
 ) -> Vec<Line<'static>> {
     let content_width = content_width(width, padding);
     let text = match item.content() {
         ConversationContent::Tool(tool) => {
-            return tool_lines(tool, content_width, padding, spinner_tick, theme, highlighter);
+            return tool_lines(tool, content_width, padding, spinner_tick, theme);
         }
         ConversationContent::Thought(_) => return Vec::new(),
         ConversationContent::Notice(notice) => Cow::Owned(format!("{NOTICE_PREFIX} {}", notice.text)),
@@ -43,9 +41,7 @@ pub(crate) fn item_lines(
         return Vec::new();
     }
     match item.content() {
-        ConversationContent::Assistant(_) => {
-            indent_lines(render_markdown(&text, content_width, theme, highlighter), padding)
-        }
+        ConversationContent::Assistant(_) => indent_lines(render_markdown(&text, content_width, theme), padding),
         _ => user_block_lines(&text, width, padding, theme),
     }
 }

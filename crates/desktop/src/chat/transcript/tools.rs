@@ -1,4 +1,4 @@
-use super::code::highlight;
+use super::code::highlights;
 use super::groups::{GroupKind, Work};
 use crate::theme::DesktopTheme;
 use crate::ui::tokens::{ICON_SIZE_SMALL, ROW_HEIGHT, rem};
@@ -7,14 +7,20 @@ use crate::ui::{
     UiTheme, Waveform,
 };
 use acp_utils::content::first_line;
-use acp_utils::conversation::{ConversationItem, SubAgent, ToolCall, ToolStatus, diff_change_label};
+use acp_utils::conversation::{
+    ConversationItem, ConversationItemId, Revision, SubAgent, ToolCall, ToolStatus, diff_change_label,
+};
 use agent_client_protocol::schema::v2 as acp;
 use clankerdiff_core::{DiffDocument, LineStat};
-use clankerdiff_gpui::DiffPreviewCache;
+use clankerdiff_gpui::PatchPreview;
 use clankerdiff_gpui::style::stat_badges;
-use clankerdiff_syntax::{LanguageHint, SyntaxHighlighter};
+use clankerdiff_syntax::{LanguageHint, SyntaxCell};
 use clankerdiff_ui_core::ReviewTheme;
-use gpui::{AnyElement, App, ClickEvent, Div, ElementId, Role, StyledText, Window, div, prelude::*, px};
+use gpui::{
+    AnyElement, App, ClickEvent, Div, ElementId, HighlightStyle, Role, StyledText, Window, div, prelude::*, px,
+};
+use std::collections::HashMap;
+use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -32,9 +38,50 @@ type ShowAll = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 pub(crate) struct ToolRenderer<'a> {
     review: &'a ReviewTheme,
     theme: UiTheme,
-    highlighter: &'a mut SyntaxHighlighter,
-    patches: &'a mut DiffPreviewCache,
+    preview: &'a ToolPreview,
     actions: ToolActions,
+}
+
+#[derive(Default)]
+pub(crate) struct ToolPreviews(HashMap<ConversationItemId, ToolPreview>);
+
+pub(crate) struct ToolPreview {
+    revision: Revision,
+    command: SyntaxCell,
+    patches: Vec<Option<PatchPreview>>,
+}
+
+impl ToolPreviews {
+    pub(crate) fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    pub(crate) fn get(&mut self, item: &ConversationItem, tool: &ToolCall) -> &ToolPreview {
+        let preview = self.0.entry(item.id()).or_insert_with(|| ToolPreview::new(item.revision(), tool));
+        if preview.revision != item.revision() {
+            *preview = ToolPreview::new(item.revision(), tool);
+        }
+        preview
+    }
+}
+
+impl ToolPreview {
+    fn new(revision: Revision, tool: &ToolCall) -> Self {
+        let patches = tool
+            .diffs()
+            .map(|diff| {
+                diff.patch
+                    .as_ref()
+                    .filter(|patch| patch.format == acp::DiffPatchFormat::GitPatch && !patch.text.trim().is_empty())
+                    .map(|patch| PatchPreview::parse(&patch.text))
+            })
+            .collect();
+        Self { revision, command: SyntaxCell::default(), patches }
+    }
+
+    fn patch(&self, position: usize) -> Option<&PatchPreview> {
+        self.patches.get(position)?.as_ref()
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -112,13 +159,8 @@ pub(crate) fn fold_header(
 }
 
 impl<'a> ToolRenderer<'a> {
-    pub(crate) fn new(
-        theme: &'a DesktopTheme,
-        highlighter: &'a mut SyntaxHighlighter,
-        patches: &'a mut DiffPreviewCache,
-        actions: ToolActions,
-    ) -> Self {
-        Self { review: theme.review(), theme: theme.ui(), highlighter, patches, actions }
+    pub(crate) fn new(theme: &'a DesktopTheme, preview: &'a ToolPreview, actions: ToolActions) -> Self {
+        Self { review: theme.review(), theme: theme.ui(), preview, actions }
     }
 
     pub(crate) fn render(
@@ -149,7 +191,7 @@ impl<'a> ToolRenderer<'a> {
                 tool.status == ToolStatus::Failed,
                 &theme,
             ))
-            .when(!diffs.is_empty(), |header| header.child(self.change_summary(tool, &diffs, index)));
+            .when(!diffs.is_empty(), |header| header.child(self.change_summary(tool, index)));
         div()
             .flex()
             .flex_col()
@@ -179,6 +221,11 @@ impl<'a> ToolRenderer<'a> {
             .into_any_element()
     }
 
+    fn command_highlights(&self, command: &str) -> Vec<(Range<usize>, HighlightStyle)> {
+        let syntax = self.preview.command.get(LanguageHint::Id("bash"), || command);
+        highlights(command, &syntax.highlights, &self.review.syntax)
+    }
+
     fn summary(&mut self, tool: &ToolCall) -> Option<AnyElement> {
         if tool.status == ToolStatus::Failed
             && let Some(error) = output_headline(tool)
@@ -188,7 +235,8 @@ impl<'a> ToolRenderer<'a> {
         if let Some(command) = tool.bash_command()
             && let Some(first) = command.lines().next()
         {
-            let highlights = highlight(command, LanguageHint::Id("bash"), &self.review.syntax, self.highlighter)
+            let highlights = self
+                .command_highlights(command)
                 .into_iter()
                 .filter_map(|(range, style)| {
                     (range.start < first.len()).then(|| (range.start + 2..range.end.min(first.len()) + 2, style))
@@ -229,7 +277,7 @@ impl<'a> ToolRenderer<'a> {
     fn details(&mut self, tool: &ToolCall, index: usize, full: bool, on_show_all: &ShowAll) -> Div {
         let theme = self.theme;
         let command = tool.bash_command().map(|command| {
-            let highlights = highlight(command, LanguageHint::Id("bash"), &self.review.syntax, self.highlighter);
+            let highlights = self.command_highlights(command);
             section("Command", StyledText::new(command.to_owned()).with_highlights(highlights), &theme)
         });
         let input = if tool.diffs().next().is_some() { String::new() } else { tool.raw_input() };
@@ -260,17 +308,18 @@ impl<'a> ToolRenderer<'a> {
             .font_family(CODE_FONT)
             .typography(Typography::Small);
         for (position, diff) in diffs.iter().enumerate() {
-            changes = match diff.patch.as_ref().filter(|patch| !patch.text.trim().is_empty()) {
-                Some(patch) if patch.format == acp::DiffPatchFormat::GitPatch => {
+            let patch = diff.patch.as_ref().filter(|patch| !patch.text.trim().is_empty());
+            changes = match (patch, self.preview.patch(position)) {
+                (Some(_), Some(preview)) => {
                     let id = ElementId::named_usize(format!("tool-diff-{index}"), position);
                     let open = self.actions.open_diff.clone();
                     let open = move |document: &Arc<DiffDocument>, window: &mut Window, cx: &mut App| {
                         open(document, window, cx);
                     };
-                    changes.child(self.patches.render(id, &patch.text, self.review, self.highlighter, open))
+                    changes.child(preview.render(id, self.review, open))
                 }
-                Some(patch) => changes.child(section("Patch", patch.text.clone(), &theme)),
-                None => changes.children(diff.changes.iter().map(|change| {
+                (Some(patch), None) => changes.child(section("Patch", patch.text.clone(), &theme)),
+                (None, _) => changes.children(diff.changes.iter().map(|change| {
                     div().text_color(theme.colors.text_secondary).child(diff_change_label(change)).into_any_element()
                 })),
             };
@@ -278,11 +327,13 @@ impl<'a> ToolRenderer<'a> {
         changes
     }
 
-    fn change_summary(&mut self, tool: &ToolCall, diffs: &[&acp::Diff], index: usize) -> impl IntoElement + use<> {
-        let (added, removed) = diffs
+    fn change_summary(&self, tool: &ToolCall, index: usize) -> impl IntoElement + use<> {
+        let (added, removed) = self
+            .preview
+            .patches
             .iter()
-            .filter_map(|diff| diff.patch.as_ref())
-            .filter_map(|patch| self.patches.stats(&patch.text))
+            .flatten()
+            .filter_map(PatchPreview::stats)
             .fold((0, 0), |(added, removed), (more, fewer)| (added + more, removed + fewer));
         let files = tool.changed_paths().len();
         let changed_lines = added > 0 || removed > 0;

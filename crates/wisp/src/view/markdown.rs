@@ -1,18 +1,12 @@
 use crate::theme::Theme;
-use crate::view::syntax::SyntaxHighlighter;
 use clankerdiff_ratatui::MarkdownDocument;
 use clankerdiff_ratatui::{MarkdownLayoutOptions, MarkdownPresentation, MarkdownRenderer};
 use ratatui::text::Line;
 
-pub(crate) fn render_markdown(
-    source: &str,
-    width: u16,
-    theme: &Theme,
-    highlighter: &mut SyntaxHighlighter,
-) -> Vec<Line<'static>> {
+pub(crate) fn render_markdown(source: &str, width: u16, theme: &Theme) -> Vec<Line<'static>> {
     let document = MarkdownDocument::parse(source);
     MarkdownRenderer::new()
-        .render_layout(&document, layout_options(width), theme.review(), &mut highlighter.inner)
+        .render_layout(&document, layout_options(width), theme.review())
         .rows()
         .iter()
         .map(|row| row.line.clone())

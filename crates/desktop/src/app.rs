@@ -22,10 +22,11 @@ use crate::ui::{
 use aether_sessions::SessionStore;
 use agent_client_protocol::schema::v2::SessionId;
 use clankerdiff_core::RepoPath;
+use clankerdiff_gpui::ui::keymap::key_binding;
 use clankerdiff_remote::Remotes;
 use gpui::{
-    AnyElement, App, Context, Entity, EntityId, FocusHandle, KeyBinding, StyleRefinement, Subscription,
-    SystemNotification, Window, actions, div, prelude::*,
+    AnyElement, App, Context, Entity, EntityId, FocusHandle, StyleRefinement, Subscription, SystemNotification, Window,
+    actions, div, prelude::*,
 };
 use gpui_base::TextSelectionLayer;
 use std::collections::{BTreeSet, HashMap};
@@ -147,21 +148,22 @@ impl DesktopApp {
     }
 
     pub fn bind_keys(cx: &mut App) {
-        cx.bind_keys([
-            KeyBinding::new("secondary-n", NewThread, None),
-            KeyBinding::new("secondary-alt-n", NewCloudThread, None),
-            KeyBinding::new("secondary-b", ToggleSidebar, None),
-            KeyBinding::new("secondary-k", OpenThreadSwitcher, None),
-            KeyBinding::new("secondary-]", SelectNextThread, None),
-            KeyBinding::new("secondary-[", SelectPreviousThread, None),
-            KeyBinding::new("secondary-1", ShowChat, None),
-            KeyBinding::new("secondary-2", ShowFiles, None),
-            KeyBinding::new("secondary-p", OpenFile, None),
-            KeyBinding::new("secondary-,", OpenSettings, None),
-            KeyBinding::new("secondary-]", SelectNextThread, Some(INPUT_CONTEXT)),
-            KeyBinding::new("secondary-[", SelectPreviousThread, Some(INPUT_CONTEXT)),
-            KeyBinding::new("secondary-r", SearchPrompts, Some(INPUT_CONTEXT)),
-        ]);
+        let bindings = [
+            key_binding("secondary-n", NewThread, None, cx),
+            key_binding("secondary-alt-n", NewCloudThread, None, cx),
+            key_binding("secondary-b", ToggleSidebar, None, cx),
+            key_binding("secondary-k", OpenThreadSwitcher, None, cx),
+            key_binding("secondary-]", SelectNextThread, None, cx),
+            key_binding("secondary-[", SelectPreviousThread, None, cx),
+            key_binding("secondary-1", ShowChat, None, cx),
+            key_binding("secondary-2", ShowFiles, None, cx),
+            key_binding("secondary-p", OpenFile, None, cx),
+            key_binding("secondary-,", OpenSettings, None, cx),
+            key_binding("secondary-]", SelectNextThread, Some(INPUT_CONTEXT), cx),
+            key_binding("secondary-[", SelectPreviousThread, Some(INPUT_CONTEXT), cx),
+            key_binding("secondary-r", SearchPrompts, Some(INPUT_CONTEXT), cx),
+        ];
+        cx.bind_keys(bindings);
         SearchPicker::bind_keys(cx);
         Settings::bind_keys(cx);
     }

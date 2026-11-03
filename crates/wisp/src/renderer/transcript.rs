@@ -99,7 +99,7 @@ impl Renderer {
         spinner_tick: usize,
     ) -> Rc<[Line<'static>]> {
         let shape = RenderShape { width, padding: as_u16(padding), theme: self.generation() };
-        let Self { theme, highlighter, render_cache, stats, .. } = self;
+        let Self { theme, render_cache, stats, .. } = self;
         let animated = matches!(item.content(), ConversationContent::Tool(_)) && item.is_open();
         let key = RenderKey {
             item_id: item.id(),
@@ -108,8 +108,8 @@ impl Renderer {
             spinner: animated.then_some(spinner_tick),
         };
         let lap = Lap::start();
-        let (lines, built) = render_cache
-            .get_or_insert_with(key, || Rc::from(item_lines(item, width, padding, spinner_tick, theme, highlighter)));
+        let (lines, built) =
+            render_cache.get_or_insert_with(key, || Rc::from(item_lines(item, width, padding, spinner_tick, theme)));
         if !built {
             return lines;
         }

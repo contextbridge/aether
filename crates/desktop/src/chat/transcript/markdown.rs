@@ -1,7 +1,7 @@
-use super::code::{SharedHighlighter, highlight};
+use super::code::highlights;
 use crate::ui::tokens::{RADIUS_CONTROL, rem};
 use crate::ui::{Button, ButtonVariant, CODE_FONT, IconName, Typography, TypographyExt, UiTheme, color};
-use clankerdiff_syntax::LanguageHint;
+use clankerdiff_syntax::{LanguageHint, analyze};
 use clankerdiff_ui_core::ReviewTheme;
 use gpui::{App, ClipboardItem, Div, ElementId, FontWeight, HighlightStyle, StyleRefinement, div, prelude::*};
 use gpui_base::text::CodeBlock;
@@ -43,13 +43,12 @@ pub(crate) fn install(review: &ReviewTheme, ui: &UiTheme, cx: &mut App) {
         .with_table(refinement(div().bg(ui.colors.surface)))
         .with_table_head(refinement(div().typography(Typography::BodyStrong)));
     let syntax = review.syntax.clone();
-    let highlighter = SharedHighlighter::global(cx);
     TextViewDefaults::new()
         .with_style(style)
         .with_code_block_highlighter(move |block| {
             let language = block.lang().unwrap_or_default();
-            highlighter
-                .with(|highlighter| highlight(&block.code(), LanguageHint::InfoString(&language), &syntax, highlighter))
+            let code = block.code();
+            highlights(&code, &analyze(LanguageHint::InfoString(&language), &code).highlights, &syntax)
         })
         .install(cx);
 }
