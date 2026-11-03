@@ -103,14 +103,18 @@ pub fn client_metadata() -> OAuthSettings {
 
 pub const ACCESS_TOKEN: &str = "access-token";
 pub const REGISTERED_CLIENT_ID: &str = "registered-client";
+pub const CHALLENGED_SCOPE: &str = "mcp.read";
+const SUPPORTED_SCOPES: [&str; 2] = [CHALLENGED_SCOPE, "mcp.write"];
 
 fn require_token(request: &RecordedRequest) -> Result<(), impl IntoResponse + use<>> {
     let bearer = format!("Bearer {ACCESS_TOKEN}");
     if request.headers.get(AUTHORIZATION).is_some_and(|value| *value == bearer) {
         return Ok(());
     }
-    let challenge =
-        format!("Bearer resource_metadata=\"{}/.well-known/oauth-protected-resource/mcp\"", origin(&request.headers));
+    let challenge = format!(
+        "Bearer resource_metadata=\"{}/.well-known/oauth-protected-resource/mcp\", scope=\"{CHALLENGED_SCOPE}\"",
+        origin(&request.headers)
+    );
     Err((StatusCode::UNAUTHORIZED, [(WWW_AUTHENTICATE, challenge)]))
 }
 
@@ -125,7 +129,11 @@ async fn register(Json(request): Json<Value>) -> Json<Value> {
 async fn metadata(headers: HeaderMap, uri: Uri) -> Json<Value> {
     let origin = origin(&headers);
     if uri.path().contains("oauth-protected-resource") {
-        return Json(json!({ "resource": format!("{origin}/mcp"), "authorization_servers": [origin] }));
+        return Json(json!({
+            "resource": format!("{origin}/mcp"),
+            "authorization_servers": [origin],
+            "scopes_supported": SUPPORTED_SCOPES,
+        }));
     }
     Json(json!({
         "issuer": origin,
