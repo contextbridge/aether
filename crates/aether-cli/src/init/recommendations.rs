@@ -30,7 +30,7 @@ pub(crate) fn recommended_for_provider(provider: Provider) -> Option<ProviderRec
         Provider::Codex => Some(ProviderRecommendations {
             plan: ModelWithReasoning::new(CodexModel::Gpt55, Some(ReasoningEffort::Xhigh)),
             build: ModelWithReasoning::new(CodexModel::Gpt55, Some(ReasoningEffort::Medium)),
-            explore: ModelWithReasoning::new(CodexModel::Gpt54Mini, Some(ReasoningEffort::High)),
+            explore: ModelWithReasoning::new(CodexModel::Gpt6Luna, Some(ReasoningEffort::High)),
         }),
 
         Provider::Openai => Some(ProviderRecommendations {
