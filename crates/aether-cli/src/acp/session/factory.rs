@@ -102,6 +102,7 @@ impl SessionFactory {
             model: resolved.config.active_model.clone(),
             selected_mode: resolved.config.selected_mode.clone(),
             created_at: IsoString::now().0,
+            title: None,
         };
         if let Err(e) = self.session_store.append_meta(&session_id, &meta) {
             error!("Failed to write session meta: {e}");

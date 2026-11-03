@@ -511,6 +511,7 @@ impl AcpTestHarness {
             model: "anthropic:claude-sonnet-4-5".to_string(),
             selected_mode: None,
             created_at: created_at.to_string(),
+            title: None,
         };
 
         self.session_store.append_meta(session_id, &meta).expect("stored session meta appends");

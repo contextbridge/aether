@@ -47,6 +47,7 @@ fn workspace_registry_defaults_to_aether_home() -> TestResult {
         model: "anthropic:claude-sonnet-4-5".to_string(),
         selected_mode: None,
         created_at: "2026-05-01T00:00:00Z".to_string(),
+        title: None,
     };
     SessionStore::from_path(homes.aether_home().join("sessions")).append_meta("s1", &meta)?;
 

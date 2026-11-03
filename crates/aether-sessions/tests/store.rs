@@ -153,6 +153,37 @@ fn relocating_updates_metadata_and_derived_prompt_entries() {
 }
 
 #[test]
+fn a_set_title_replaces_the_prompt_title_and_survives_later_prompts() {
+    let store = TestStore::new().session("session-1", &[user_message("first prompt")]);
+
+    let stored = store.store().set_title("session-1", "  Renamed  ").expect("retitling succeeds");
+    store.append("session-1", &user_message("second prompt"));
+
+    assert_eq!(stored, "Renamed");
+    assert_eq!(store.store().list()[0].title.as_deref(), Some("Renamed"));
+    assert_eq!(store.store().session_cwd("session-1"), Some(PathBuf::from("/tmp/project")));
+}
+
+#[test]
+fn a_blank_title_is_rejected() {
+    let store = TestStore::new().session("session-1", &[user_message("first prompt")]);
+
+    let error = store.store().set_title("session-1", "   ").expect_err("a blank title is invalid");
+
+    assert!(matches!(error, SessionStoreError::InvalidTitle));
+    assert_eq!(store.store().list()[0].title.as_deref(), Some("first prompt"));
+}
+
+#[test]
+fn retitling_an_unknown_session_fails_as_not_found() {
+    let store = TestStore::new();
+
+    let error = store.store().set_title("missing", "Title").expect_err("the session does not exist");
+
+    assert!(matches!(error, SessionStoreError::Io(error) if error.kind() == std::io::ErrorKind::NotFound));
+}
+
+#[test]
 fn relocating_succeeds_while_a_temp_path_is_occupied() {
     let store = TestStore::new().session("session-1", &[user_message("move me")]);
     fs::create_dir(store.path().join("session-1.jsonl.tmp")).unwrap();

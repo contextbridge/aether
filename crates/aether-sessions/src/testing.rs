@@ -24,6 +24,7 @@ pub fn session_meta(session_id: &str, created_at: &str) -> SessionMeta {
         model: "test-model".into(),
         selected_mode: Some("planner".into()),
         created_at: created_at.to_string(),
+        title: None,
     }
 }
 
