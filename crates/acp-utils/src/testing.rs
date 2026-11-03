@@ -81,10 +81,8 @@ impl TestPeer {
                                 responder: v2::Responder<CreateElicitationResponse>,
                                 _cx| {
                         if let Some(capture_tx) = capture.lock().unwrap().take() {
-                            return match capture_tx.send(responder.into_raw()) {
-                                Ok(()) => Ok(()),
-                                Err(responder) => responder.respond_with_error(acp::Error::internal_error()),
-                            };
+                            let _ = capture_tx.send(responder.into_raw());
+                            return Ok(());
                         }
                         let _ = elicitation_tx.send(req);
                         let queued = responses.lock().unwrap().pop_front();

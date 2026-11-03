@@ -151,11 +151,7 @@ impl HandleDispatchFrom<acp::Agent> for ClientHandlers {
         cx: ConnectionTo<acp::Agent>,
     ) -> Result<Handled<Dispatch>, acp::Error> {
         let emit = |event| {
-            if let Err(error) = self.0.send(event)
-                && let AcpEvent::ElicitationRequest { responder, .. } = error.0
-            {
-                let _ = responder.respond_with_error(acp::Error::internal_error());
-            }
+            let _ = self.0.send(event);
             Ok::<_, acp::Error>(())
         };
         MatchDispatchFrom::new(message, &cx)

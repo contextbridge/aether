@@ -1,8 +1,8 @@
 use crate::ClientError;
 use crate::js::{from_js, to_js};
 use acp_utils::client::AcpClientError;
+use agent_client_protocol::Responder;
 use agent_client_protocol::v2::schema::{CreateElicitationRequest, CreateElicitationResponse, ElicitationAction};
-use agent_client_protocol::{self as acp, Responder};
 use wasm_bindgen::prelude::*;
 
 /// A form or URL elicitation from the agent.
@@ -37,13 +37,7 @@ impl Elicitation {
         request: &CreateElicitationRequest,
         responder: Responder<CreateElicitationResponse>,
     ) -> Result<Self, ClientError> {
-        match to_js(request) {
-            Ok(request) => Ok(Self { request, responder: Some(responder) }),
-            Err(error) => {
-                let _ = responder.respond_with_error(acp::Error::internal_error());
-                Err(error)
-            }
-        }
+        Ok(Self { request: to_js(request)?, responder: Some(responder) })
     }
 }
 
