@@ -200,21 +200,22 @@ fn generate_assigns_codex_model_specific_reasoning_levels() {
         [
             Model::new("gpt-5.6-sol").efforts(&["none", "low", "medium", "high", "xhigh", "max"]),
             Model::new("gpt-5.6-luna").efforts(&["none", "low", "medium", "high", "xhigh", "max"]),
-            Model::new("gpt-5.4").reasoning(true, json!([])),
+            Model::new("gpt-5.5").reasoning(true, json!([])),
         ],
     );
 
     let output = data.generate().unwrap();
     assert_eq!(reasoning_levels(&output, "CodexModel", "gpt-5.6-sol"), ["Low", "Medium", "High", "Xhigh", "Max"]);
     assert_eq!(reasoning_levels(&output, "CodexModel", "gpt-5.6-luna"), ["Low", "Medium", "High", "Xhigh", "Max"]);
-    assert_eq!(reasoning_levels(&output, "CodexModel", "gpt-5.4"), ["Low", "Medium", "High", "Xhigh"]);
+    assert_eq!(reasoning_levels(&output, "CodexModel", "gpt-5.5"), ["Low", "Medium", "High", "Xhigh"]);
 }
 
 #[test]
 fn generate_applies_codex_subscription_context_window_override() {
     let output = Catalog::new().generate().unwrap();
     for &id in CODEX_MODELS {
-        assert!(catalog_entry(&output, "CodexModel", id).contains("context_window: 272_000"), "{id}");
+        let codex_window = if id == "gpt-6.1-terra" { "context_window: 500_000" } else { "context_window: 272_000" };
+        assert!(catalog_entry(&output, "CodexModel", id).contains(codex_window), "{id}");
         assert!(catalog_entry(&output, "OpenaiModel", id).contains("context_window: 1_050_000"), "{id}");
     }
 }
@@ -226,6 +227,7 @@ fn generate_uses_codex_subscription_model_ids() {
         "openai",
         [
             Model::new("gpt-6.1-sol").name("GPT-6.1 Sol"),
+            Model::new("gpt-6.1-terra").name("GPT-6.1 Terra"),
             Model::new("gpt-5.1-codex").name("GPT-5.1 Codex"),
             Model::new("gpt-5.6").name("GPT-5.6 Sol"),
             Model::new("gpt-5.6-sol").name("GPT-5.6 Sol"),
@@ -240,6 +242,7 @@ fn generate_uses_codex_subscription_model_ids() {
     assert!(!codex_doc.contains("`gpt-5.6`"));
     assert!(!codex_doc.contains("`gpt-5.1-codex`"));
     assert!(codex_doc.contains("| `gpt-6.1-sol` | `GPT-6.1 Sol` | `272k` |"));
+    assert!(codex_doc.contains("| `gpt-6.1-terra` | `GPT-6.1 Terra` | `500k` |"));
     assert!(codex_doc.contains("| `gpt-5.6-sol` | `GPT-5.6 Sol` | `272k` |"));
     assert!(codex_doc.contains("| `gpt-5.6-terra` | `GPT-5.6 Terra` | `272k` |"));
     assert!(codex_doc.contains("| `gpt-5.6-luna` | `GPT-5.6 Luna` | `272k` |"));
@@ -364,7 +367,7 @@ fn generate_preserves_disabled_separately_from_default() {
     let mut data = Catalog::new();
     data.models(
         "openai",
-        [Model::new("gpt-5.4").reasoning(
+        [Model::new("gpt-5.5").reasoning(
             true,
             json!([
                 {"type": "effort", "values": [null, "default", "none", "low", "high"]}
@@ -485,6 +488,7 @@ impl Catalog {
 
 const CODEX_MODELS: &[&str] = &[
     "gpt-6.1-sol",
+    "gpt-6.1-terra",
     "gpt-6-sol",
     "gpt-6-astra",
     "gpt-6-luna",
@@ -492,9 +496,6 @@ const CODEX_MODELS: &[&str] = &[
     "gpt-5.6-terra",
     "gpt-5.6-luna",
     "gpt-5.5",
-    "gpt-5.4",
-    "gpt-5.4-mini",
-    "gpt-5.2",
 ];
 
 #[derive(Clone)]
