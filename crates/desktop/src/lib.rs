@@ -36,9 +36,11 @@ use clankerdiff_remote::CommandRemotes;
 use cli::Cli;
 use clock::SystemClock;
 use gpui::{App, AppContext, Bounds, Entity, Pixels, Size, TitlebarOptions, WindowBounds, WindowOptions, px, size};
+use gpui_base::input::CursorBlink;
 use registry::{Registry, default_state_file};
 use rustls::crypto::aws_lc_rs;
 use std::sync::Arc;
+use std::time::Duration;
 use target::ProcessTransport;
 
 pub fn run(cli: Cli) {
@@ -75,10 +77,14 @@ pub fn run(cli: Cli) {
 const APP_ID: &str = "aether-desktop";
 const DEFAULT_WINDOW_SIZE: Size<Pixels> = size(px(1280.0), px(840.0));
 const MIN_WINDOW_SIZE: Size<Pixels> = size(px(640.0), px(480.0));
+// Stop blinking after the user goes idle so a focused composer doesn't redraw the window forever.
+const CURSOR_BLINK: CursorBlink =
+    CursorBlink::blinking(Duration::from_millis(500)).with_idle_timeout(Duration::from_secs(5));
 
 fn init(cx: &mut App) {
     cx.set_app_identity(APP_ID, menus::APP_NAME);
     gpui_base::init(cx);
+    gpui_base::Theme::global_mut(cx).cursor_blink = CURSOR_BLINK;
     ui::InterfaceSize::init(ui::interface_size::DEFAULT_INTERFACE_SIZE, cx);
     DiffViewer::bind_keys(cx);
     MarkdownReviewer::bind_keys(cx);
