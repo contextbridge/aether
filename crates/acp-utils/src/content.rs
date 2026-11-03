@@ -1,4 +1,4 @@
-use agent_client_protocol::schema::v2 as acp;
+use agent_client_protocol::v2::schema as acp;
 #[cfg(not(target_family = "wasm"))]
 use llm::ContentBlock as LlmContentBlock;
 use std::borrow::Cow;

@@ -1,4 +1,4 @@
-use agent_client_protocol::schema::v2::{self as acp, AvailableCommandInput, TextCommandInput};
+use agent_client_protocol::v2::schema::{self as acp, AvailableCommandInput, TextCommandInput};
 use mcp_utils::gateway::ServerPrompt;
 
 pub(crate) fn available_commands(prompts: &[ServerPrompt]) -> Vec<acp::AvailableCommand> {
@@ -12,6 +12,7 @@ fn available_command(prompt: &mcp_utils::model::Prompt) -> acp::AvailableCommand
         .and_then(|args| args.iter().find(|a| a.name.as_str() == "ARGUMENTS").and_then(|a| a.description.as_deref()))
         .unwrap_or("optional arguments");
     let description = prompt.description.clone().unwrap_or_else(|| "No description available".to_string());
-    acp::AvailableCommand::new(&prompt.name, description)
-        .input(Some(AvailableCommandInput::Text(TextCommandInput::new(hint))))
+    acp::AvailableCommand::Command(
+        acp::Command::new(&prompt.name, description).input(AvailableCommandInput::Text(TextCommandInput::new(hint))),
+    )
 }

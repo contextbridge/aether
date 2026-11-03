@@ -1,4 +1,4 @@
-use agent_client_protocol::schema::v2::SessionId;
+use agent_client_protocol::v2::schema::SessionId;
 use clankerdiff_ui_core::ThemePreference;
 use gpui::{AppContext, Context, Entity, Pixels, Size, Subscription};
 use serde::{Deserialize, Serialize};

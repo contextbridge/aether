@@ -3,7 +3,7 @@ use acp_utils::notifications::RemoteServerInfo;
 use acp_utils::testing::{FakeAgent, FakeAgentRequests};
 use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder};
 use aether_desktop::threads::Thread;
-use agent_client_protocol::schema::v2 as acp;
+use agent_client_protocol::v2::schema as acp;
 use gpui::{
     ClipboardEntry, ClipboardItem, ClipboardString, Entity, ExternalPaths, FileDropEvent, Image, ImageFormat,
     TestAppContext,

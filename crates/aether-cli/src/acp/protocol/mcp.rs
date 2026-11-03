@@ -1,5 +1,5 @@
 use aether_core::mcp::http_transport;
-use agent_client_protocol::schema::v2::{HttpHeader, McpServer};
+use agent_client_protocol::v2::schema::{HttpHeader, McpServer};
 use mcp_utils::client::{HeaderMap, Transport};
 use mcp_utils::gateway::ServerSpec;
 use std::path::Path;
@@ -41,7 +41,7 @@ fn header_map(headers: &[HttpHeader]) -> Option<HeaderMap> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::schema::v2 as acp;
+    use agent_client_protocol::v2::schema as acp;
     use mcp_utils::client::HttpAuth;
 
     fn map(servers: Vec<acp::McpServer>) -> Vec<ServerSpec> {

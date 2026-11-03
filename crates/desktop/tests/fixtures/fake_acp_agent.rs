@@ -1,7 +1,7 @@
 use acp_utils::testing::FakeAgent;
 use aether_desktop::testing::FAKE_AGENT_LOCK_FILE;
 use agent_client_protocol::ByteStreams;
-use agent_client_protocol::schema::v2::NewSessionResponse;
+use agent_client_protocol::v2::schema::NewSessionResponse;
 use std::fs::File;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 

@@ -10,7 +10,7 @@ use acp_utils::content::first_line;
 use acp_utils::conversation::{
     ConversationItem, ConversationItemId, Revision, SubAgent, ToolCall, ToolStatus, diff_change_label,
 };
-use agent_client_protocol::schema::v2 as acp;
+use agent_client_protocol::v2::schema as acp;
 use clankerdiff_core::{DiffDocument, LineStat};
 use clankerdiff_gpui::PatchPreview;
 use clankerdiff_gpui::style::stat_badges;

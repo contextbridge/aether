@@ -5,7 +5,7 @@ use acp_utils::client::{AcpClientError, AcpClientHandle};
 use acp_utils::notifications::{
     McpRequest, SessionPreviewParams, WorkspaceListParams, WorkspaceMoveParams, WorkspaceStatusPayload,
 };
-use agent_client_protocol::schema::v2::{
+use agent_client_protocol::v2::schema::{
     CancelSessionNotification, ListSessionsRequest, LoginAuthRequest, NewSessionRequest, PromptRequest,
     SetSessionConfigOptionRequest,
 };
@@ -83,7 +83,7 @@ pub(super) fn execute(
 
 fn prompt_rejection(error: AcpClientError) -> PromptRejection {
     match error {
-        AcpClientError::Protocol(error) if error.code == ErrorCode::RequestCancelled => PromptRejection::Cancelled,
+        AcpClientError::Protocol(error) if error.code == ErrorCode::REQUEST_CANCELLED => PromptRejection::Cancelled,
         error => PromptRejection::Failed(error.to_string()),
     }
 }

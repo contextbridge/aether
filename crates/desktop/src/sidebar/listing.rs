@@ -6,7 +6,7 @@ use crate::remotes::{
     EXPIRY_WARNING, Fleet, Instance, InstanceState, Lifecycle, RemoteSpec, short_id, time_left, time_left_label,
 };
 use crate::threads::{Thread, ThreadManager, ThreadRef, ThreadStatus};
-use agent_client_protocol::schema::v2::SessionId;
+use agent_client_protocol::v2::schema::SessionId;
 use chrono::{DateTime, Duration, Utc};
 use gpui::{App, Entity};
 use gpui_base::input::InputState;

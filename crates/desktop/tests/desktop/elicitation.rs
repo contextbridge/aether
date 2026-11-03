@@ -2,7 +2,7 @@ use crate::support::{asked, asking_name, name_form, texts};
 use acp_utils::testing::{FakeAgent, Question};
 use aether_desktop::testing::DesktopHarness;
 use aether_desktop::threads::{Thread, ThreadStatus};
-use agent_client_protocol::schema::v2::{
+use agent_client_protocol::v2::schema::{
     BooleanPropertySchema, CreateElicitationRequest, ElicitationFormMode, ElicitationSchema, ElicitationSessionScope,
     EnumOption, StringPropertySchema,
 };

@@ -6,7 +6,7 @@ use crate::view::input::{Nav, UiEvent};
 use crate::view::wrap::truncate_to_width;
 use acp_utils::client::AcpClientError;
 use acp_utils::notifications::SessionPreviewResponse;
-use agent_client_protocol::schema::v2::{self as acp, SessionId};
+use agent_client_protocol::v2::schema::{self as acp, SessionId};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::Style;

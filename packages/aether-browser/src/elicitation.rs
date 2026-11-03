@@ -1,7 +1,7 @@
 use crate::ClientError;
 use crate::js::{from_js, to_js};
 use acp_utils::client::AcpClientError;
-use agent_client_protocol::schema::v2::{CreateElicitationRequest, CreateElicitationResponse, ElicitationAction};
+use agent_client_protocol::v2::schema::{CreateElicitationRequest, CreateElicitationResponse, ElicitationAction};
 use agent_client_protocol::{self as acp, Responder};
 use wasm_bindgen::prelude::*;
 

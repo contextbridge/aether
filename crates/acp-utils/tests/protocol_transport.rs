@@ -4,7 +4,7 @@ use acp_utils::testing::{
     test_connection,
 };
 use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::schema::v2::{
+use agent_client_protocol::v2::schema::{
     ContentBlock, ContentChunk, InitializeRequest, PlanEntry, PlanEntryPriority, PlanEntryStatus, SessionUpdate,
     StopReason, TextContent, UpdateSessionNotification,
 };

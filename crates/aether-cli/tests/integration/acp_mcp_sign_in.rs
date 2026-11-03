@@ -1,6 +1,6 @@
 use acp_utils::notifications::McpRequest;
 use aether_cli::acp::testing::AcpTestHarness;
-use agent_client_protocol::schema::v2::ElicitationMode;
+use agent_client_protocol::v2::schema::ElicitationMode;
 use mcp_utils::testing::{FakeAuthServer, FakeMcpServer, complete_authorization};
 use utils::mcp_status::{McpServerAuthCapability, McpServerStatus};
 

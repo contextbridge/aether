@@ -1,5 +1,5 @@
 use aether_cli::acp::testing::AcpTestHarness;
-use agent_client_protocol::schema::v2::{CancelSessionNotification, ContentBlock, SessionUpdate, StopReason};
+use agent_client_protocol::v2::schema::{CancelSessionNotification, ContentBlock, SessionUpdate, StopReason};
 use llm::testing::{FakeLlmProvider, llm_response};
 use std::sync::Arc;
 use tokio::sync::Notify;

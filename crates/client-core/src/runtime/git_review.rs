@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use acp_utils::client::AcpClientHandle;
 use acp_utils::notifications::{GitDiffClosePayload, GitDiffCommandPayload};
-use agent_client_protocol::schema::v2::SessionId;
+use agent_client_protocol::v2::schema::SessionId;
 use clankerdiff_client::protocol::client::ClientCommand;
 use clankerdiff_client::protocol::server::ServerMessage;
 use clankerdiff_client::transport::StreamTransport;

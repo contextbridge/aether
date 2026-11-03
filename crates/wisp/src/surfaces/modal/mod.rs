@@ -157,7 +157,7 @@ mod tests {
     use super::*;
     use crate::command::HostCommand;
     use crate::testing::buffer_text;
-    use agent_client_protocol::schema::v2::{ElicitationSchema, StringPropertySchema};
+    use agent_client_protocol::v2::schema::{ElicitationSchema, StringPropertySchema};
     use crossterm::event::{KeyCode, KeyModifiers};
 
     const LOGIN: &str = "https://github.com/login";

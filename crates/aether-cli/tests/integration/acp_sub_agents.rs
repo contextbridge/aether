@@ -2,7 +2,7 @@ use acp_utils::testing::{announced, idle_notification, idle_state, running_notif
 use aether_cli::acp::testing::{AcpTestHarness, FakeSubAgents};
 use aether_core::events::{AgentEvent, StreamState, SubAgentProgressPayload, ToolEvent, TurnEvent, TurnOutcome};
 use agent_client_protocol::schema::MaybeUndefined;
-use agent_client_protocol::schema::v2::{
+use agent_client_protocol::v2::schema::{
     self as acp, CancelSessionNotification, SessionId, SessionUpdate, StateUpdate, UpdateSessionNotification,
 };
 use llm::ToolCallRequest;

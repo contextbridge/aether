@@ -2,16 +2,14 @@ use super::error::AcpClientError;
 use super::event::AcpEvent;
 use crate::notifications::{AuthMethodsUpdatedParams, ContextClearedParams, GitDiffEventPayload, McpNotification};
 use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::schema::v2::{
-    AuthMethod, ClientCapabilities, CreateElicitationRequest, ElicitationCapabilities, ElicitationFormCapabilities,
-    ElicitationUrlCapabilities, Implementation, InitializeRequest, InitializeResponse, PermissionOptionId,
-    PermissionOptionKind, PromptCapabilities, RequestPermissionOutcome, RequestPermissionRequest,
+use agent_client_protocol::util::MatchDispatchFrom;
+use agent_client_protocol::v2::schema::{
+    AuthMethod, CancelledPermissionOutcome, ClientCapabilities, CreateElicitationRequest, ElicitationCapabilities,
+    ElicitationFormCapabilities, ElicitationUrlCapabilities, Implementation, InitializeRequest, InitializeResponse,
+    PermissionOptionId, PermissionOptionKind, PromptCapabilities, RequestPermissionOutcome, RequestPermissionRequest,
     RequestPermissionResponse, SelectedPermissionOutcome, SessionCapabilities, UpdateSessionNotification,
 };
-use agent_client_protocol::util::MatchDispatchFrom;
-use agent_client_protocol::{
-    self as acp, Client, ConnectTo, ConnectionTo, Dispatch, HandleDispatchFrom, Handled, V2ConnectionTo,
-};
+use agent_client_protocol::{self as acp, Client, ConnectTo, ConnectionTo, Dispatch, HandleDispatchFrom, Handled, v2};
 use futures::future::{AbortHandle, abortable};
 use std::future::Future;
 use std::sync::Arc;
@@ -21,7 +19,7 @@ use tracing::info;
 
 #[derive(Clone)]
 pub struct AcpClientHandle {
-    cx: V2ConnectionTo<acp::Agent>,
+    cx: v2::ConnectionTo<acp::Agent>,
     connection: Arc<ClientConnection>,
 }
 
@@ -122,14 +120,14 @@ impl Drop for ConnectionEvents {
 async fn run_client_connection(
     agent: impl ConnectTo<Client> + 'static,
     init_request: InitializeRequest,
-    init_tx: oneshot::Sender<Result<(InitializeResponse, V2ConnectionTo<acp::Agent>), AcpClientError>>,
+    init_tx: oneshot::Sender<Result<(InitializeResponse, v2::ConnectionTo<acp::Agent>), AcpClientError>>,
     events: ConnectionEvents,
 ) {
     let connection_result = Client
         .v2()
         .name(&init_request.info.name)
         .with_handler(ClientHandlers(events.event_tx.clone()))
-        .connect_with(agent, async move |cx: V2ConnectionTo<acp::Agent>| {
+        .connect_with(agent, async move |cx: v2::ConnectionTo<acp::Agent>| {
             let result = cx.send_request(init_request).block_task().await.map_err(AcpClientError::Protocol);
             let _ = init_tx.send(result.map(|response| {
                 info!("ACP initialized: protocol={:?}, agent_info={:?}", response.protocol_version, response.info);
@@ -162,9 +160,10 @@ impl HandleDispatchFrom<acp::Agent> for ClientHandlers {
         };
         MatchDispatchFrom::new(message, &cx)
             .if_request(async |request: RequestPermissionRequest, responder| {
-                let outcome = auto_approve_option(&request).map_or(RequestPermissionOutcome::Cancelled, |option| {
-                    RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option))
-                });
+                let outcome = auto_approve_option(&request).map_or_else(
+                    || RequestPermissionOutcome::Cancelled(CancelledPermissionOutcome::new()),
+                    |option| RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(option)),
+                );
                 let _ = responder.respond(RequestPermissionResponse::new(outcome));
                 Ok(())
             })

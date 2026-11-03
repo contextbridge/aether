@@ -7,7 +7,7 @@
 
 use super::support::*;
 use agent_client_protocol::schema::MaybeUndefined;
-use agent_client_protocol::schema::v2::{SessionUpdate, ToolCallUpdate};
+use agent_client_protocol::v2::schema::{SessionUpdate, ToolCallUpdate};
 use serde_json::json;
 
 /// The standard perf terminal: a typical modern window.

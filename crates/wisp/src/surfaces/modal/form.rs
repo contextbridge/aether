@@ -1,4 +1,4 @@
-use agent_client_protocol::schema::v2::ElicitationContentValue;
+use agent_client_protocol::v2::schema::ElicitationContentValue;
 use client_core::elicitation::{
     ElicitationAnswer, FieldError, FieldInput, FormError, FormField, SelectOption, accept_content,
 };
@@ -786,7 +786,7 @@ impl Question {
 mod tests {
     use super::*;
     use crate::testing::{buffer_text, row_containing, row_text};
-    use agent_client_protocol::schema::v2::{
+    use agent_client_protocol::v2::schema::{
         BooleanPropertySchema, ElicitationPropertySchema, ElicitationSchema, EnumOption, MultiSelectPropertySchema,
         StringPropertySchema,
     };

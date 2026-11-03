@@ -1,7 +1,7 @@
 use acp_utils::notifications::{GitDiffClosePayload, GitDiffCommandPayload, WorkspaceStatusPayload};
 use aether_cli::acp::testing::AcpTestHarness;
 use aether_cli::workspace::testing::init_repo;
-use agent_client_protocol::schema::v2::AbsolutePath;
+use agent_client_protocol::v2::schema::AbsolutePath;
 use clankerdiff_core::{DiffScope, RepositoryAction};
 use clankerdiff_protocol::client::ClientCommand;
 use clankerdiff_protocol::shared::{DocumentUpdate, Event, FileEntry, LIVE_PROTOCOL_VERSION};
@@ -139,7 +139,7 @@ async fn git_diff_commands_for_unknown_sessions_are_ignored() {
 }
 
 async fn live(harness: &AcpTestHarness, session_id: &str, cwd: &std::path::Path) {
-    use agent_client_protocol::schema::v2::ResumeSessionRequest;
+    use agent_client_protocol::v2::schema::ResumeSessionRequest;
     harness
         .client_cx
         .send_request(ResumeSessionRequest::new(session_id, AbsolutePath::new(cwd)))

@@ -2,7 +2,7 @@ use crate::theme::Theme;
 use crate::view::syntax::highlight;
 use crate::view::wrap::{as_u16, truncate_to_width, wrap_line};
 use acp_utils::conversation::{SubAgent, ToolCall, ToolStatus, diff_change_label};
-use agent_client_protocol::schema::v2 as acp;
+use agent_client_protocol::v2::schema as acp;
 use clankerdiff_core::parse_detached_git_diff;
 use clankerdiff_ratatui::{DiffPreviewOptions, render_diff_preview};
 use ratatui::style::Style;

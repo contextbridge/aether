@@ -1,4 +1,4 @@
-use acp::schema::v2::{
+use acp::v2::schema::{
     CreateElicitationRequest, ElicitationFormMode, ElicitationSchema, ElicitationSessionScope, InitializeRequest,
     PromptRequest,
 };
@@ -85,7 +85,7 @@ async fn initialization_failure_releases_the_connection_while_initialize_is_held
 
 #[tokio::test]
 async fn ordinary_requests_fail_on_disconnect_and_eof_even_with_retained_handles() {
-    use acp::schema::v2::ListSessionsRequest;
+    use acp::v2::schema::ListSessionsRequest;
 
     LocalSet::new()
         .run_until(async {

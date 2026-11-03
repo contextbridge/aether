@@ -1,7 +1,7 @@
 use aether_cli::acp::testing::AcpTestHarness;
 use agent_client_protocol::Error;
 use agent_client_protocol::schema::MaybeUndefined;
-use agent_client_protocol::schema::v2::{
+use agent_client_protocol::v2::schema::{
     AbsolutePath, CloseSessionRequest, CloseSessionResponse, ContentBlock, ListSessionsRequest, ListSessionsResponse,
     NewSessionRequest, ReplayFrom, ReplayFromStart, ResumeSessionRequest, SessionId, SessionUpdate, StopReason,
     ToolCallStatus,
@@ -202,7 +202,7 @@ async fn commands_are_advertised_while_another_mcp_server_is_still_connecting() 
 
         let advertises_plan = |update: &SessionUpdate| {
             matches!(update, SessionUpdate::AvailableCommandsUpdate(commands)
-                if commands.available_commands.iter().any(|command| command.name == "plan"))
+                if commands.available_commands.iter().any(|command| command.name() == "plan"))
         };
         harness.updates_until(session.session_id(), advertises_plan).await;
     })

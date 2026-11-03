@@ -5,7 +5,7 @@ use crate::js::to_js;
 use crate::types::AetherClientEvent;
 use crate::websocket::CloseStatus;
 use acp_utils::client::{AcpClientError, AcpClientHandle, AcpEvent};
-use agent_client_protocol::schema::v2::{
+use agent_client_protocol::v2::schema::{
     CancelSessionNotification, CloseSessionRequest, ContentBlock, NewSessionRequest, PromptRequest,
     ResumeSessionRequest, SessionId,
 };

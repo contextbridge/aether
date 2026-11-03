@@ -2,7 +2,7 @@ use acp_utils::config_meta::{ConfigOptionMeta, SelectOptionMeta};
 use acp_utils::config_option_id::ConfigOptionId;
 use aether_auth::OAuthCredentialStorage;
 use aether_core::agent_spec::AgentSpec;
-use agent_client_protocol::schema::v2::{self as acp, SessionConfigOption, SessionConfigOptionCategory};
+use agent_client_protocol::v2::schema::{self as acp, SessionConfigOption, SessionConfigOptionCategory};
 use llm::ReasoningEffort;
 use llm::catalog::{LlmModel, ModelSpec};
 use std::collections::BTreeMap;
@@ -225,7 +225,7 @@ mod tests {
     use super::*;
     use aether_auth::MemoryCredentialStore;
     use aether_core::agent_spec::AgentSpecExposure;
-    use agent_client_protocol::schema::v2::{SessionConfigKind, SessionConfigSelectOption, SessionConfigSelectOptions};
+    use agent_client_protocol::v2::schema::{SessionConfigKind, SessionConfigSelectOption, SessionConfigSelectOptions};
     use llm::catalog::{AnthropicModel, BedrockFoundationModel, BedrockModel, DeepSeekModel, GeminiModel};
 
     fn test_models() -> Vec<LlmModel> {

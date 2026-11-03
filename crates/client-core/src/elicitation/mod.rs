@@ -5,7 +5,7 @@ pub use form::{
 };
 
 use agent_client_protocol::Responder;
-use agent_client_protocol::schema::v2::{
+use agent_client_protocol::v2::schema::{
     CreateElicitationResponse, ElicitationAcceptAction, ElicitationAction, ElicitationContentValue,
 };
 use std::collections::BTreeMap;

@@ -3,7 +3,7 @@ use acp_utils::websocket::WebSocketTransport;
 use aether_desktop::agents::{AgentProfile, Agents, CommandLine, project_agents_file};
 use aether_desktop::testing::DesktopHarness;
 use aether_desktop::threads::{Thread, ThreadStatus};
-use agent_client_protocol::schema::v2::{ElicitationSchema, StringPropertySchema};
+use agent_client_protocol::v2::schema::{ElicitationSchema, StringPropertySchema};
 use clankerdiff_server::{DiffServer, ServerListener, ServerOptions};
 use gpui::{Entity, TestAppContext};
 use serde_json::json;

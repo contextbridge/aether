@@ -1,5 +1,5 @@
 use acp_utils::notifications::{AETHER_META_NAMESPACE, RemoteServerInfo};
-use agent_client_protocol::schema::v2::Meta;
+use agent_client_protocol::v2::schema::Meta;
 use serde_json::json;
 
 #[test]

@@ -2,7 +2,7 @@ use crate::support::{replying, texts};
 use acp_utils::testing::FakeAgent;
 use aether_desktop::testing::DesktopHarnessBuilder;
 use aether_desktop::threads::ThreadStatus;
-use agent_client_protocol::schema::v2::SessionId;
+use agent_client_protocol::v2::schema::SessionId;
 use gpui::TestAppContext;
 
 #[gpui::test]

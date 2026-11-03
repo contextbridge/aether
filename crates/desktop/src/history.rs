@@ -1,5 +1,5 @@
 use aether_sessions::{SessionStore, SessionSummary, SummaryCache};
-use agent_client_protocol::schema::v2::SessionId;
+use agent_client_protocol::v2::schema::SessionId;
 use chrono::{DateTime, Utc};
 use gpui::{AppContext, Context, Task};
 use std::collections::HashMap;

@@ -4,7 +4,7 @@ use aether_core::core::{AgentDeps, SubAgentSessions};
 use aether_core::events::DynObserverFactory;
 use aether_project::AgentCatalog;
 use aether_sessions::model::{SessionEvent, SessionMeta, last_agent_from_events};
-use agent_client_protocol::schema::v2::{self as acp, NewSessionRequest, ResumeSessionRequest, SessionId};
+use agent_client_protocol::v2::schema::{self as acp, NewSessionRequest, ResumeSessionRequest, SessionId};
 use agent_client_protocol::{Client, ConnectionTo, Error};
 use llm::catalog::{LlmModel, get_local_models};
 use llm::types::IsoString;

@@ -16,7 +16,7 @@ use crate::ui::{
     Typography, TypographyExt, UiTheme, icon_slot, in_top_bar, tagged, text_input, tokens, with_menu,
 };
 use crate::{OpenSettings, OpenThreadSwitcher};
-use agent_client_protocol::schema::v2::SessionId;
+use agent_client_protocol::v2::schema::SessionId;
 use gpui::{
     AnyElement, App, ClickEvent, Context, Div, Entity, MouseButton, PathPromptOptions, Rems, SharedString,
     StyleRefinement, Subscription, Window, actions, div, prelude::*, rems,

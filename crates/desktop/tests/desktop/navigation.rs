@@ -1,7 +1,7 @@
 use crate::support::replying;
 use acp_utils::testing::FakeAgent;
 use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder};
-use agent_client_protocol::schema::v2::SessionId;
+use agent_client_protocol::v2::schema::SessionId;
 use gpui::TestAppContext;
 
 #[gpui::test]

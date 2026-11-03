@@ -1,7 +1,7 @@
 use crate::acp::session::actor::SessionIo;
 use aether_core::events::{AgentEvent, CompactionId, ContextEvent};
 use aether_sessions::{SessionEvent, UserEvent};
-use agent_client_protocol::schema::v2::{CompactionStatus, CompactionUpdate, SessionUpdate};
+use agent_client_protocol::v2::schema::{CompactionStatus, CompactionUpdate, SessionUpdate};
 use std::collections::HashMap;
 
 use super::content::map_user_message;
@@ -62,7 +62,7 @@ fn compaction_id(event: &SessionEvent) -> Option<&CompactionId> {
 mod tests {
     use super::*;
     use aether_core::events::{AgentEvent, MessageEvent};
-    use agent_client_protocol::schema::v2::{self as acp, SessionId};
+    use agent_client_protocol::v2::schema::{self as acp, SessionId};
 
     #[tokio::test]
     async fn replay_preserves_message_identity_and_media_without_chunks_or_controls() {

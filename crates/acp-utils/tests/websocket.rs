@@ -4,13 +4,13 @@ use acp_utils::client::{AcpEvent, connect_acp_client};
 use acp_utils::testing::{idle_notification, initialize_request, initialize_response, running_notification};
 use acp_utils::websocket::WebSocketTransport;
 use agent_client_protocol::schema::ProtocolVersion;
-use agent_client_protocol::schema::v2::{
+use agent_client_protocol::v2::schema::{
     ContentBlock, ContentChunk, CreateElicitationRequest, CreateElicitationResponse, ElicitationAction,
     ElicitationFormMode, ElicitationSchema, ElicitationSessionScope, InitializeRequest, PromptRequest, PromptResponse,
     ReplayFrom, ReplayFromStart, ResumeSessionRequest, SessionUpdate, StateUpdate, StopReason, TextContent,
     UpdateSessionNotification,
 };
-use agent_client_protocol::{self as acp, Agent, Client, HandleDispatchFrom, NullRun, V2Builder};
+use agent_client_protocol::{self as acp, Agent, Client, HandleDispatchFrom, NullRun, v2};
 use futures::{FutureExt, SinkExt, StreamExt};
 use std::time::Duration;
 use tokio::io::{DuplexStream, duplex};
@@ -403,7 +403,7 @@ fn replaying(session_id: &str) -> ResumeSessionRequest {
     ResumeSessionRequest::new(session_id, "/tmp").replay_from(ReplayFrom::Start(ReplayFromStart::new()))
 }
 
-fn test_agent() -> V2Builder<Agent, impl HandleDispatchFrom<Client>, NullRun> {
+fn test_agent() -> v2::Builder<Agent, impl HandleDispatchFrom<Client>, NullRun> {
     Agent.v2().on_receive_request(
         async |_: InitializeRequest, responder, _cx| responder.respond(initialize_response()),
         acp::on_receive_request!(),
@@ -412,7 +412,7 @@ fn test_agent() -> V2Builder<Agent, impl HandleDispatchFrom<Client>, NullRun> {
 
 fn streaming_elicitation_agent(
     chunks: &'static [&'static str],
-) -> V2Builder<Agent, impl HandleDispatchFrom<Client>, NullRun> {
+) -> v2::Builder<Agent, impl HandleDispatchFrom<Client>, NullRun> {
     test_agent().on_receive_request(
         async move |request: PromptRequest, responder, cx| {
             responder.respond(PromptResponse::new("user-message"))?;

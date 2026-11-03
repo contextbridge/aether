@@ -1,5 +1,5 @@
 use acp_utils::websocket::{self, ConnectError};
-use agent_client_protocol::schema::v2::SessionId;
+use agent_client_protocol::v2::schema::SessionId;
 use std::path::PathBuf;
 use thiserror::Error;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;

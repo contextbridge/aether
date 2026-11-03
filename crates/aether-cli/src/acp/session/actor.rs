@@ -8,7 +8,7 @@ use aether_core::events::{AgentCommand, AgentEvent, Command, TurnEvent, TurnOutc
 use aether_core::mcp::McpCatalog;
 use aether_sessions::model::{SessionControlEvent, SessionEvent, last_session_usage};
 use aether_sessions::transcript::conversation_messages_from_events;
-use agent_client_protocol::schema::v2::{
+use agent_client_protocol::v2::schema::{
     self as acp, IdleStateUpdate, PromptResponse, RunningStateUpdate, SessionId, SessionUpdate,
     SetSessionConfigOptionResponse, StateUpdate, StopReason,
 };
