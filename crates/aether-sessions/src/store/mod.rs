@@ -163,6 +163,17 @@ impl SessionStore {
         Ok(())
     }
 
+    pub fn set_title(&self, session_id: &str, title: &str) -> Result<String, SessionStoreError> {
+        let title = title.trim();
+        if title.is_empty() {
+            return Err(SessionStoreError::InvalidTitle);
+        }
+        fs::metadata(self.session_path(session_id))?;
+        let title = truncate_for_preview(title);
+        write_atomic(&title_path(&self.session_path(session_id)), title.as_bytes())?;
+        Ok(title)
+    }
+
     pub fn rebuild_prompt_history(&self) -> Result<(), SessionStoreError> {
         let files = discover_session_files(&self.dir)?;
         self.prompt_history
@@ -186,7 +197,7 @@ impl SessionStore {
                 Some((fingerprint, summary)) if fingerprint == file.fingerprint => summary,
                 _ => read_session_summary(&file.path).ok(),
             };
-            summaries.extend(summary.clone());
+            summaries.extend(summary.clone().map(|summary| with_stored_title(summary, &file.path)));
             cache.summaries.insert(file.path, (file.fingerprint, summary));
         }
 
@@ -232,6 +243,17 @@ fn read_session_summary(path: &Path) -> Result<SessionSummary, SessionStoreError
         _ => None,
     });
     Ok(SessionSummary { meta: scan.meta, title })
+}
+
+fn with_stored_title(mut summary: SessionSummary, log_path: &Path) -> SessionSummary {
+    if let Ok(title) = fs::read_to_string(title_path(log_path)) {
+        summary.title = Some(title);
+    }
+    summary
+}
+
+fn title_path(log_path: &Path) -> PathBuf {
+    log_path.with_extension("title")
 }
 
 fn read_session_preview(path: &Path, limits: ScanLimits) -> Result<SessionPreviewResponse, SessionStoreError> {

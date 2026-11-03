@@ -5,10 +5,11 @@ use futures::future::Either;
 use futures::{Stream, StreamExt, stream};
 use rmcp::RoleClient;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, CallToolResult, ClientRequest, CreateTaskResult, DEFAULT_MRTR_MAX_ROUNDS,
-    InputRequests, InputRequiredResult, ProgressNotificationParam, Request, RequestMetaObject, ServerResult, Task,
+    CallToolRequestParams, CallToolResponse, CallToolResult, CancelledNotificationParam, ClientRequest,
+    CreateTaskResult, DEFAULT_MRTR_MAX_ROUNDS, InputRequests, InputRequiredResult, ProgressNotificationParam, Request,
+    RequestId, RequestMetaObject, ServerResult, Task,
 };
-use rmcp::service::{PeerRequestOptions, RequestHandle, ServiceError};
+use rmcp::service::{Peer, PeerRequestOptions, RequestHandle, ServiceError};
 use std::future::pending;
 use std::pin::{Pin, pin};
 use std::task::{Context, Poll};
@@ -198,6 +199,7 @@ fn stream_events(
             };
 
             let mut progress = client.handler.progress.subscribe(handle.progress_token.clone()).await;
+            let mut abandoned = AbandonedRequest::new(&client, &handle);
             let mut response = None;
             {
                 let mut awaited = pin!(with_progress(&mut progress, stream::once(await_tool_response(handle))));
@@ -208,6 +210,7 @@ fn stream_events(
                     }
                 }
             }
+            abandoned.disarm();
 
             match response.unwrap_or(Err(ServiceError::UnexpectedResponse)) {
                 Ok(CallToolResponse::Complete(result)) => {
@@ -277,6 +280,35 @@ async fn await_tool_response(handle: RequestHandle<RoleClient>) -> Result<CallTo
         ServerResult::InputRequiredResult(result) => Ok(CallToolResponse::InputRequired(result)),
         ServerResult::CreateTaskResult(result) => Ok(CallToolResponse::Task(result)),
         _ => Err(ServiceError::UnexpectedResponse),
+    }
+}
+
+/// Sends `notifications/cancelled` when a `tools/call` is dropped before its response
+/// arrives (timeout or user cancellation), so the server stops working on it.
+struct AbandonedRequest {
+    peer: Peer<RoleClient>,
+    id: Option<RequestId>,
+}
+
+impl AbandonedRequest {
+    fn new(client: &McpClient, handle: &RequestHandle<RoleClient>) -> Self {
+        Self { peer: client.peer.clone(), id: Some(handle.id.clone()) }
+    }
+
+    fn disarm(&mut self) {
+        self.id = None;
+    }
+}
+
+impl Drop for AbandonedRequest {
+    fn drop(&mut self) {
+        let Some(id) = self.id.take() else { return };
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else { return };
+        let peer = self.peer.clone();
+        runtime.spawn(async move {
+            let params = CancelledNotificationParam::new(Some(id), Some("tool call abandoned by the client".into()));
+            let _ = peer.notify_cancelled(params).await;
+        });
     }
 }
 

@@ -1,7 +1,7 @@
 use acp_utils::notifications::{AetherCapabilities, AetherMeta};
 use aether_auth::OAuthCredentialStorage;
 use aether_cli::acp::testing::AcpTestHarness;
-use agent_client_protocol::schema::{ProtocolVersion, v2 as acp};
+use agent_client_protocol::{schema::ProtocolVersion, v2::schema as acp};
 use serde_json::json;
 
 #[tokio::test(flavor = "current_thread")]
@@ -134,4 +134,48 @@ async fn next_config(harness: &mut AcpTestHarness, session_id: &acp::SessionId) 
             return update.config_options;
         }
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn initialize_advertises_session_titles() {
+    AcpTestHarness::run(|harness| async move {
+        let session = harness.initialize_response.capabilities.session.unwrap();
+        assert!(session.title.is_some());
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn set_title_renames_a_stored_session_in_the_session_list() {
+    AcpTestHarness::run(|harness| async move {
+        harness.append_stored_session("saved", "2026-05-01T00:00:00Z");
+        harness.append_stored_prompt("saved", "first prompt");
+
+        let response = harness
+            .client_cx
+            .send_request(acp::SetSessionTitleRequest::new("saved", "  Release notes  "))
+            .block_task()
+            .await
+            .unwrap();
+        let listed = harness.client_cx.send_request(acp::ListSessionsRequest::new()).block_task().await.unwrap();
+
+        assert_eq!(response.title, "Release notes");
+        assert_eq!(listed.sessions[0].title.as_deref(), Some("Release notes"));
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn set_title_rejects_blank_titles_and_unknown_sessions() {
+    AcpTestHarness::run(|harness| async move {
+        harness.append_stored_session("saved", "2026-05-01T00:00:00Z");
+
+        let blank = harness.client_cx.send_request(acp::SetSessionTitleRequest::new("saved", " ")).block_task().await;
+        let unknown =
+            harness.client_cx.send_request(acp::SetSessionTitleRequest::new("missing", "Title")).block_task().await;
+
+        assert_eq!(blank.unwrap_err().code, acp::ErrorCode::InvalidParams);
+        assert_eq!(unknown.unwrap_err().code, acp::ErrorCode::ResourceNotFound);
+    })
+    .await;
 }

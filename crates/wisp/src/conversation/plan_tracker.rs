@@ -1,5 +1,5 @@
 use acp_utils::conversation::is_plan_entry_finished;
-use agent_client_protocol::schema::v2::{self as acp};
+use agent_client_protocol::v2::schema::{self as acp};
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
@@ -104,7 +104,7 @@ impl PlanTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::schema::v2::{PlanEntryPriority, PlanEntryStatus};
+    use agent_client_protocol::v2::schema::{PlanEntryPriority, PlanEntryStatus};
     use std::time::{Duration, Instant};
 
     fn entry(content: &str, status: PlanEntryStatus) -> acp::PlanEntry {

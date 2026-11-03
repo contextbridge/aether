@@ -5,7 +5,7 @@ use crate::ui::{
     Icon, IconName, SurfaceExt, Tooltip, Typography, TypographyExt, UiTheme, Waveform, text_selector, with_middots,
 };
 use acp_utils::conversation::{Activity, Conversation, is_plan_entry_finished};
-use agent_client_protocol::schema::v2 as acp;
+use agent_client_protocol::v2::schema as acp;
 use client_core::format::token_count;
 use client_core::session_core::SessionCore;
 use gpui::{

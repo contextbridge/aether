@@ -11,7 +11,7 @@ use crate::surfaces::composer::Composer;
 use crate::theme::Theme;
 use crate::view::generation::Generation;
 use acp_utils::conversation::Activity;
-use agent_client_protocol::schema::v2::PlanEntry;
+use agent_client_protocol::v2::schema::PlanEntry;
 use client_core::session_core::{ForegroundOperation, SessionCore, SessionCoreConfig};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;

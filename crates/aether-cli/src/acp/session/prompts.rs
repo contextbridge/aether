@@ -2,7 +2,7 @@ use super::actor::ClientConnection;
 use crate::acp::protocol::content::map_user_message;
 use aether_sessions::model::{SessionEvent, UserEvent};
 use agent_client_protocol::Error;
-use agent_client_protocol::schema::v2 as acp;
+use agent_client_protocol::v2::schema as acp;
 use futures::future::BoxFuture;
 use futures::stream::FuturesOrdered;
 use futures::{FutureExt, StreamExt};

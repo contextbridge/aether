@@ -4,7 +4,7 @@ use acp_utils::notifications::{
 use aether_cli::acp::testing::AcpTestHarness;
 use aether_cli::workspace::DirectoryCloner;
 use aether_cli::workspace::testing::{StdCopyCloner, init_repo};
-use agent_client_protocol::schema::v2::{AbsolutePath, ListSessionsRequest, ResumeSessionRequest, StopReason};
+use agent_client_protocol::v2::schema::{AbsolutePath, ListSessionsRequest, ResumeSessionRequest, StopReason};
 use std::fs;
 use utils::testing::{git, git_commit};
 

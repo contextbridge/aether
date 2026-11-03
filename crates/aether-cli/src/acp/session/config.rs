@@ -1,6 +1,6 @@
 use aether_auth::OAuthCredentialStorage;
 use agent_client_protocol::Error;
-use agent_client_protocol::schema::v2::SessionConfigOption;
+use agent_client_protocol::v2::schema::SessionConfigOption;
 use llm::ReasoningEffort;
 use llm::catalog::{LlmModel, validate_reasoning_effort};
 use tracing::error;

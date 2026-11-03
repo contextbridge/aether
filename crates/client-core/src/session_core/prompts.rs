@@ -4,7 +4,7 @@ use crate::command::{AgentCommand, Command, PromptRejection};
 use crate::composer::attachment::AttachmentOutcome;
 use crate::composer::submission::Submission;
 use acp_utils::notifications::PromptSearchParams;
-use agent_client_protocol::schema::v2 as acp;
+use agent_client_protocol::v2::schema as acp;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueuedPrompt {

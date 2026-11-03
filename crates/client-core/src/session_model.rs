@@ -2,7 +2,7 @@ use crate::session_config_view::{LocalConfigKind, LocalConfigOption, LocalConfig
 use crate::session_core::SessionCoreConfig;
 use acp_utils::config_option_id::ConfigOptionId;
 use acp_utils::notifications::{AetherCapabilities, McpServerStatus, McpServerStatusEntry};
-use agent_client_protocol::schema::v2 as acp;
+use agent_client_protocol::v2::schema as acp;
 use std::path::{Path, PathBuf};
 
 pub use acp_utils::notifications::WorkspaceStatusResponse as WorkspaceStatus;

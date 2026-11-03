@@ -1,6 +1,6 @@
 use acp_utils::conversation::{Activity, ConversationItem, TurnPhase};
 use acp_utils::notifications::{AuthMethodsUpdatedParams, ContextClearedParams, GitDiffEventPayload, McpNotification};
-use agent_client_protocol::schema::v2::{PlanItems, SessionId, UpdateSessionNotification, UsageUpdate};
+use agent_client_protocol::v2::schema::{PlanItems, SessionId, UpdateSessionNotification, UsageUpdate};
 use js_sys::Array;
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};

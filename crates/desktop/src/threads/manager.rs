@@ -5,7 +5,7 @@ use crate::clock::Clock;
 use crate::history::git_root;
 use crate::remotes::RemoteSpec;
 use crate::target::{AgentConnector, SessionTarget};
-use agent_client_protocol::schema::v2::SessionId;
+use agent_client_protocol::v2::schema::SessionId;
 use gpui::{App, AppContext, Context, Entity, EntityId, EventEmitter, Subscription};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};

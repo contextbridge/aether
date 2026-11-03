@@ -1,6 +1,6 @@
 use crate::agents::{AgentProfile, AgentTransport, CommandLine, Endpoint, EndpointSource};
 use acp_utils::websocket;
-use agent_client_protocol::schema::v2::{Implementation, SessionId};
+use agent_client_protocol::v2::schema::{Implementation, SessionId};
 use agent_client_protocol::{self as acp, Agent, ByteStreams, Client, ConnectTo};
 use clankerdiff_client::ConnectionHeader;
 use clankerdiff_remote::{AcpTarget, Channel, Invocation, RemoteError, RemoteSpec, Remotes};

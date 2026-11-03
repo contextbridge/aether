@@ -1,5 +1,5 @@
 use acp_utils::testing::FakeAgent;
-use agent_client_protocol::schema::v2::PromptRequest;
+use agent_client_protocol::v2::schema::PromptRequest;
 use client_core::testing::SessionCoreConfigBuilder;
 use wisp::error::AppError;
 use wisp::testing::TestUiBuilder;

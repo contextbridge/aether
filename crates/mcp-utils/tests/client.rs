@@ -1,8 +1,8 @@
 use futures::StreamExt;
 use futures::future::Either;
 use mcp_utils::client::{
-    CancellationToken, ClientError, ClientOptions, Elicitation, ElicitationSink, TaskErrorReason, ToolCallError,
-    ToolCallEvent, ToolCallOptions,
+    CancellationToken, ClientError, ClientOptions, Elicitation, ElicitationSink, McpClient, TaskErrorReason,
+    ToolCallError, ToolCallEvent, ToolCallOptions,
 };
 use mcp_utils::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, CustomNotification, DEFAULT_MRTR_MAX_ROUNDS, DetailedTask,
@@ -483,6 +483,39 @@ async fn call_tool_cancellation_cancels_server_task_and_ends_stream() {
     assert_eq!(state.task_cancel_ids(), [TASK]);
 }
 
+#[tokio::test]
+async fn cancelling_a_tool_call_cancels_the_server_request() {
+    let cancel = CancellationToken::new();
+    let options = ToolCallOptions { cancel: cancel.clone(), ..ToolCallOptions::default() };
+
+    let (events, state, _client) = abandon_slow_call(options, || cancel.cancel()).await;
+
+    assert!(matches!(events.last(), Some(ToolCallEvent::Done(Err(ToolCallError::Cancelled)))));
+    state.wait_until(|state| state.cancelled_calls() == ["slow"]).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_timed_out_tool_call_cancels_the_server_request() {
+    let options = ToolCallOptions::with_timeout(Duration::from_millis(25));
+
+    let (events, state, _client) = abandon_slow_call(options, || {}).await;
+
+    assert!(matches!(events.last(), Some(ToolCallEvent::Done(Err(ToolCallError::TimedOut(_))))));
+    state.wait_until(|state| state.cancelled_calls() == ["slow"]).await;
+}
+
+#[tokio::test]
+async fn a_completed_tool_call_is_not_cancelled() {
+    let server = FakeMcpServer::new().with_tool(FakeTool::new("quick").responds(FakeToolResponse::text("done")));
+    let state = server.state();
+    let client = connect("fake", server, &ClientOptions::default()).await;
+
+    client.call_tool("quick", Map::new(), ToolCallOptions::default()).result().await.unwrap();
+    client.list_tools().await.unwrap();
+
+    assert_eq!(state.cancelled_calls(), Vec::<String>::new());
+}
+
 #[tokio::test(start_paused = true)]
 async fn call_tool_deadline_includes_task_elicitation() {
     let result = task_test([input_required_task(TASK, &["name"])]).with_timeout(Duration::from_millis(25)).run().await;
@@ -506,6 +539,21 @@ async fn a_round_repeating_any_answered_key_is_abandoned_without_a_partial_updat
 
 const TASK: &str = "task-1";
 const TRICKY_STATE: &str = "st.ate/with+special=chars and spaces \"quotes\"\n\ttab";
+
+async fn abandon_slow_call(
+    options: ToolCallOptions,
+    abandon: impl FnOnce(),
+) -> (Vec<ToolCallEvent>, FakeMcpState, McpClient) {
+    let server = FakeMcpServer::new().with_tool(FakeTool::new("slow").responds(FakeToolResponse::pending()));
+    let state = server.state();
+    let client = connect("fake", server, &ClientOptions::default()).await;
+    let events = tokio::spawn(client.call_tool("slow", Map::new(), options).collect::<Vec<_>>());
+
+    state.wait_until(|state| !state.calls_for("slow").is_empty()).await;
+    abandon();
+
+    (events.await.unwrap(), state, client)
+}
 
 fn asking(response: impl Into<FakeToolResponse>) -> FakeMcpServer {
     FakeMcpServer::new().with_tool(FakeTool::new("ask").responds(response))

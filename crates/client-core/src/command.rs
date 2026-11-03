@@ -6,7 +6,7 @@ use acp_utils::notifications::{
     PromptSearchParams, PromptSearchResponse, SessionPreviewResponse, WorkspaceListResponse, WorkspaceMoveResponse,
     WorkspaceMoveTarget,
 };
-use agent_client_protocol::schema::v2::{
+use agent_client_protocol::v2::schema::{
     ContentBlock, ListSessionsResponse, LoginAuthResponse, NewSessionResponse, ResumeSessionResponse,
     SessionConfigOptionValue, SessionId, SessionInfo, SetSessionConfigOptionResponse,
 };

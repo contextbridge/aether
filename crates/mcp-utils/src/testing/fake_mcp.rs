@@ -163,6 +163,10 @@ impl FakeMcpState {
         self.lock().task_cancel_ids.clone()
     }
 
+    pub fn cancelled_calls(&self) -> Vec<String> {
+        self.lock().cancelled_calls.clone()
+    }
+
     pub fn client_capabilities(&self) -> Option<ClientCapabilities> {
         self.lock().client_capabilities.clone()
     }
@@ -276,6 +280,10 @@ impl FakeMcpState {
 
     fn record_task_cancel(&self, request: CancelTaskParams) {
         self.record(|inner| inner.task_cancel_ids.push(request.task_id));
+    }
+
+    fn record_cancelled_call(&self, tool: &str) {
+        self.record(|inner| inner.cancelled_calls.push(tool.to_string()));
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, FakeMcpStateInner> {
@@ -537,7 +545,13 @@ impl ServerHandler for FakeMcpServer {
         };
 
         if let Some(gate) = &response.gate {
-            gate.pass().await;
+            tokio::select! {
+                () = gate.pass() => {}
+                () = context.ct.cancelled() => {
+                    self.state.record_cancelled_call(&request.name);
+                    return Err(McpError::internal_error("tool call cancelled by the client", None));
+                }
+            }
         }
         if let Some(token) = context.meta.get_progress_token() {
             let notifications = std::mem::take(&mut response.progress);
@@ -577,6 +591,7 @@ struct FakeMcpStateInner {
     task_get_ids: Vec<String>,
     task_updates: Vec<CapturedTaskUpdate>,
     task_cancel_ids: Vec<String>,
+    cancelled_calls: Vec<String>,
     task_get_failures: usize,
     task_update_failures: usize,
     tool_list_requests: usize,

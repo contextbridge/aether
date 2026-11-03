@@ -25,7 +25,7 @@ use acp_utils::testing::{
     Channel, FakeAgent, FakeAgentRequests, announced, idle_state, initialize_request, message_chunk, on_session,
     running_state,
 };
-use agent_client_protocol::schema::v2::{self as acp, CreateElicitationRequest, CreateElicitationResponse, SessionId};
+use agent_client_protocol::v2::schema::{self as acp, CreateElicitationRequest, CreateElicitationResponse, SessionId};
 use agent_client_protocol::{Error, JsonRpcRequest, JsonRpcResponse, Responder};
 use clankerdiff_core::git_patch_from_texts;
 use clankerdiff_ratatui::ThemeChoice;

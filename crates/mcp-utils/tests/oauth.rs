@@ -6,8 +6,8 @@ use mcp_utils::client::{
 use mcp_utils::gateway::{GatewayError, McpGateway};
 use mcp_utils::model::{ElicitResult, ElicitationAction, ElicitationCapability, FormElicitationCapability};
 use mcp_utils::testing::{
-    ACCESS_TOKEN, CLIENT_METADATA_URL, FakeAuthServer, FakeMcpServer, OAuthPrompt, REGISTERED_CLIENT_ID,
-    client_metadata, elicitation_host, wait_until,
+    ACCESS_TOKEN, CHALLENGED_SCOPE, CLIENT_METADATA_URL, FakeAuthServer, FakeMcpServer, OAuthPrompt,
+    REGISTERED_CLIENT_ID, client_metadata, elicitation_host, wait_until,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -239,6 +239,18 @@ async fn gateway_authentication_reconnects_the_server_once_authorized() {
     assert!(gateway.statuses()[0].can_authenticate());
     assert!(gateway.servers()[0].tools().iter().any(|tool| tool.name == "add_numbers"));
     assert!(matches!(host.recv().await, Some(Elicitation::Complete { server, .. }) if server == "linear"));
+}
+
+#[tokio::test]
+async fn gateway_authentication_requests_only_the_challenged_scope() {
+    let server = math_auth_server().await;
+    let (gateway, mut host) = oauth_gateway(&server);
+    gateway.ready().await;
+
+    let _authentication = authenticate(&gateway, "linear");
+    let prompt = next_prompt(&mut host).await;
+
+    assert_eq!(prompt.query("scope"), CHALLENGED_SCOPE);
 }
 
 #[tokio::test]

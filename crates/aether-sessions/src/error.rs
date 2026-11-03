@@ -32,4 +32,6 @@ pub enum SessionStoreError {
     Serialization(#[from] serde_json::Error),
     #[error("prompt history index failed: {0}")]
     PromptHistory(#[source] std::io::Error),
+    #[error("session titles must not be blank")]
+    InvalidTitle,
 }

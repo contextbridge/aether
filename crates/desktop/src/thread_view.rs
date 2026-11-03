@@ -8,7 +8,7 @@ use crate::theme::DesktopTheme;
 use crate::threads::{Thread, ThreadEvent, ThreadStatus, observe_changes, observe_thread};
 use crate::ui::tokens::{GROUP_HEIGHT, ICON_SIZE_SMALL, RADIUS_CONTROL, RADIUS_INNER, ROW_HEIGHT, rem};
 use crate::ui::{Icon, IconName, StyledExt, Typography, TypographyExt, UiTheme, WindowDragExt, tagged, text_selector};
-use agent_client_protocol::schema::v2 as acp;
+use agent_client_protocol::v2::schema as acp;
 use clankerdiff_core::RepoPath;
 use gpui::{
     AnyElement, AnyView, App, AppContext, Context, Div, Entity, ExternalPaths, Hsla, Role, Stateful, StyleRefinement,
@@ -129,7 +129,7 @@ impl ThreadView {
             let message = format!("Can't open {}: it isn't in this thread's repository", path.display());
             return self.thread.update(cx, |thread, cx| thread.report_error(&message, cx));
         };
-        self.open_file(file, location.line, window, cx);
+        self.open_file(file, location.line.map(std::num::NonZeroU32::get), window, cx);
     }
 
     pub(crate) fn focus(&self, window: &mut Window, cx: &mut App) {

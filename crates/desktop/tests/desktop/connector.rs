@@ -6,7 +6,7 @@ use aether_desktop::agents::AgentProfile;
 use aether_desktop::remotes::{Acp, Channel, InstanceState, RemoteSpec};
 use aether_desktop::target::{AgentConnector, ConnectError, ProcessTransport, SessionTarget};
 use aether_desktop::testing::{FAKE_AGENT_LOCK_FILE, launching_remote};
-use agent_client_protocol::schema::v2::SessionId;
+use agent_client_protocol::v2::schema::SessionId;
 use clankerdiff_remote::Invocation;
 use clankerdiff_remote::testing::FakeRemotes;
 use client_core::command::ReviewSource;

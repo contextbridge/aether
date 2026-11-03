@@ -2,7 +2,7 @@ use crate::ClientError;
 use crate::js::to_js;
 use crate::types::ConversationSnapshot;
 use acp_utils::conversation::{Conversation, ConversationItemId, Revision};
-use agent_client_protocol::schema::v2::SessionId;
+use agent_client_protocol::v2::schema::SessionId;
 use js_sys::Array;
 use wasm_bindgen::JsValue;
 

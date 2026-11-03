@@ -1,4 +1,4 @@
-use acp::schema::v2::{
+use acp::v2::schema::{
     CreateElicitationRequest, ElicitationFormMode, ElicitationSchema, ElicitationSessionScope, InitializeRequest,
     PromptRequest,
 };
@@ -85,7 +85,7 @@ async fn initialization_failure_releases_the_connection_while_initialize_is_held
 
 #[tokio::test]
 async fn ordinary_requests_fail_on_disconnect_and_eof_even_with_retained_handles() {
-    use acp::schema::v2::ListSessionsRequest;
+    use acp::v2::schema::ListSessionsRequest;
 
     LocalSet::new()
         .run_until(async {
@@ -157,6 +157,29 @@ async fn disconnect_drops_connection_before_the_ui_releases_a_pending_approval()
             let _ = server.await.expect("agent connection task must not panic");
             assert!(requests.cancel.try_recv().is_err(), "disconnect must not send session/cancel");
             assert!(requests.close_session.try_recv().is_err(), "disconnect must not send session/close");
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn disconnect_delivers_notifications_sent_before_it() {
+    use acp::v2::schema::CancelSessionNotification;
+
+    LocalSet::new()
+        .run_until(async {
+            let (agent_transport, client_transport) = Channel::duplex();
+            let (agent, mut requests) = FakeAgent::default().capture();
+            let server = spawn_local(agent.agent().connect_to(agent_transport));
+            let client = connect_acp_client(client_transport, initialize_request()).await.unwrap();
+
+            client.handle.notify(CancelSessionNotification::new("live")).unwrap();
+            client.handle.disconnect().await;
+
+            assert_eq!(
+                requests.cancel.recv().await.map(|cancel| cancel.session_id.to_string()).as_deref(),
+                Some("live")
+            );
+            let _ = server.await;
         })
         .await;
 }

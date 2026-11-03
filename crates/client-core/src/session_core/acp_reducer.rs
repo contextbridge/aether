@@ -5,7 +5,7 @@ use acp_utils::client::AcpEvent;
 use acp_utils::conversation::TurnFinished;
 use acp_utils::elicitation::source_mcp_server_name;
 use acp_utils::notifications::McpNotification;
-use agent_client_protocol::schema::v2::{
+use agent_client_protocol::v2::schema::{
     self as acp, CreateElicitationRequest, CreateElicitationResponse, ElicitationAction, ElicitationMode, SessionUpdate,
 };
 use utils::artifact_review::ArtifactReviewElicitationMeta;
@@ -91,11 +91,15 @@ fn classify(request: CreateElicitationRequest) -> Option<Elicitation> {
 }
 
 fn command_entry(command: &acp::AvailableCommand) -> CommandEntry {
+    let input = match command {
+        acp::AvailableCommand::Command(command) => command.input.as_ref(),
+        _ => None,
+    };
     CommandEntry {
-        name: command.name.clone(),
-        description: command.description.clone(),
-        has_input: command.input.is_some(),
-        hint: match &command.input {
+        name: command.name().to_string(),
+        description: command.description().to_string(),
+        has_input: input.is_some(),
+        hint: match input {
             Some(acp::AvailableCommandInput::Text(input)) => Some(input.hint.clone()),
             _ => None,
         },

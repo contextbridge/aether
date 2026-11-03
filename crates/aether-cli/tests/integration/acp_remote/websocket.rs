@@ -8,7 +8,7 @@ use aether_cli::acp::{IdleHook, SessionHooks};
 use aether_cli::output::OutputFormat;
 use aether_core::events::{AgentEvent, MessageEvent, TurnEvent, TurnOutcome};
 use aether_sessions::{SessionEvent, UserEvent};
-use agent_client_protocol::schema::v2::{
+use agent_client_protocol::v2::schema::{
     AbsolutePath, CancelSessionNotification, CloseSessionRequest, ContentBlock, NewSessionRequest, PromptRequest,
     ReplayFrom, ReplayFromStart, ResumeSessionRequest, SessionId, SessionUpdate, StateUpdate, StopReason,
 };

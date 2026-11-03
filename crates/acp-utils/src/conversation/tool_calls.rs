@@ -1,7 +1,7 @@
 use super::{Conversation, ConversationContent, ConversationItem};
 use crate::client::AcpEvent;
 use crate::content::first_line;
-use agent_client_protocol::schema::{MaybeUndefined, v2 as acp};
+use agent_client_protocol::{schema::MaybeUndefined, v2::schema as acp};
 use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Serialize, Serializer};
 use std::borrow::Cow;

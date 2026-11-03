@@ -2,7 +2,7 @@ use crate::support::{asked, replying};
 use acp_utils::testing::{FakeAgent, Question, announced, idle_state, running_state};
 use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder};
 use aether_desktop::threads::{Thread, ThreadStatus};
-use agent_client_protocol::schema::v2::{
+use agent_client_protocol::v2::schema::{
     ElicitationSchema, SessionUpdate, StopReason, SubagentUpdate, ToolCallStatus, ToolCallUpdate,
 };
 use gpui::{Entity, SystemNotification, TestAppContext};

@@ -8,7 +8,7 @@ use acp_utils::testing::{
     self, announced, idle_notification, idle_state, message_chunk, on_session, plan_notification, running_notification,
     running_state, sub_agent_tool_update,
 };
-use agent_client_protocol::schema::{MaybeUndefined, v2 as acp};
+use agent_client_protocol::{schema::MaybeUndefined, v2::schema as acp};
 use serde_json::json;
 use std::collections::BTreeMap;
 

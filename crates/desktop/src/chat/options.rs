@@ -6,7 +6,7 @@ use crate::ui::{
     Icon, IconName, PickerItem, SearchPicker, SearchPickerEvent, Typography, TypographyExt, picker_closed,
     text_selector, with_middots,
 };
-use agent_client_protocol::schema::v2 as acp;
+use agent_client_protocol::v2::schema as acp;
 use client_core::session_config_view::LocalConfigOption;
 use gpui::{
     Anchor, AnyElement, App, Context, Entity, EventEmitter, SharedString, Subscription, Window, div, prelude::*,

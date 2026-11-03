@@ -5,7 +5,7 @@ use crate::types::AetherClientOptions;
 use crate::websocket::connect_websocket;
 use acp_utils::client::{connect_acp_client, initialize_request};
 use acp_utils::notifications::RemoteServerInfo;
-use agent_client_protocol::schema::v2::Implementation;
+use agent_client_protocol::v2::schema::Implementation;
 use js_sys::{Function, Promise};
 use serde::de::DeserializeOwned;
 use tokio::sync::mpsc;

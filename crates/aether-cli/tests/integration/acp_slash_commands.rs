@@ -1,5 +1,5 @@
 use aether_cli::acp::testing::{AcpTestHarness, FakeAgentSwitchingSession};
-use agent_client_protocol::schema::v2::{AvailableCommand, AvailableCommandInput, StopReason};
+use agent_client_protocol::v2::schema::{AvailableCommand, AvailableCommandInput, Command, StopReason};
 use mcp_utils::gateway::ServerSpec;
 use mcp_utils::model::{Prompt, PromptArgument};
 use mcp_utils::testing::FakeMcpServer;
@@ -64,7 +64,7 @@ async fn the_first_server_offering_a_prompt_name_owns_the_command() {
         let commands = harness.next_available_commands().await;
         send(&mut harness, &session, "/plan").await;
 
-        assert_eq!(commands.iter().filter(|command| command.name == "plan").count(), 1);
+        assert_eq!(commands.iter().filter(|command| command.name() == "plan").count(), 1);
         session.planner().assert_saw(&["expanded plan"]);
     })
     .await;
@@ -83,7 +83,7 @@ async fn commands_carry_the_prompt_description_and_argument_hint() {
 
         let commands = harness.next_available_commands().await;
 
-        assert_eq!(command(&commands, "search").description, "Search code");
+        assert_eq!(command(&commands, "search").description(), "Search code");
         assert_eq!(hint(&commands, "search"), "[query]");
         assert_eq!(hint(&commands, "plan"), "optional arguments");
     })
@@ -96,12 +96,14 @@ async fn send(harness: &mut AcpTestHarness, session: &FakeAgentSwitchingSession,
 }
 
 fn command<'a>(commands: &'a [AvailableCommand], name: &str) -> &'a AvailableCommand {
-    commands.iter().find(|command| command.name == name).unwrap_or_else(|| panic!("expected /{name} in {commands:?}"))
+    commands.iter().find(|command| command.name() == name).unwrap_or_else(|| panic!("expected /{name} in {commands:?}"))
 }
 
 fn hint(commands: &[AvailableCommand], name: &str) -> String {
-    match &command(commands, name).input {
-        Some(AvailableCommandInput::Text(input)) => input.hint.clone(),
+    match command(commands, name) {
+        AvailableCommand::Command(Command { input: Some(AvailableCommandInput::Text(input)), .. }) => {
+            input.hint.clone()
+        }
         other => panic!("expected /{name} to take text input, got {other:?}"),
     }
 }

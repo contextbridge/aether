@@ -3,7 +3,7 @@ use acp_utils::notifications::RemoteServerInfo;
 use acp_utils::testing::FakeAgent;
 use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder, static_remote};
 use aether_desktop::threads::Thread;
-use agent_client_protocol::schema::v2 as acp;
+use agent_client_protocol::v2::schema as acp;
 use client_core::testing::FakeGit;
 use gpui::{Entity, TestAppContext};
 use serde_json::json;

@@ -13,7 +13,7 @@ use crate::runtime::Input;
 use crate::session_model::{SessionModel, SessionSetting, WorkspaceAccess, WorkspaceStatus};
 use acp_utils::conversation::{Conversation, NoticeLevel};
 use acp_utils::notifications::WorkspaceEntry;
-use agent_client_protocol::schema::v2 as acp;
+use agent_client_protocol::v2::schema as acp;
 use clankerdiff_client::{ClientState, DiffReviewEvent};
 use std::path::PathBuf;
 use std::sync::Arc;

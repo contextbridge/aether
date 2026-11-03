@@ -1,5 +1,5 @@
 use super::ElicitationAnswer;
-use agent_client_protocol::schema::v2::{
+use agent_client_protocol::v2::schema::{
     ElicitationContentValue, ElicitationPropertySchema, ElicitationSchema, EnumOption, MultiSelectItems,
     MultiSelectPropertySchema, StringPropertySchema,
 };

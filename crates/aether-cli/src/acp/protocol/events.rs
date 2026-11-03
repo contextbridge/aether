@@ -6,7 +6,7 @@ use aether_core::events::{
     TurnEvent, TurnOutcome, humanize_tool_name,
 };
 use agent_client_protocol::schema::MaybeUndefined;
-use agent_client_protocol::schema::v2::{
+use agent_client_protocol::v2::schema::{
     self as acp, ContentBlock, ContentChunk, IdleStateUpdate, MessageId, PlanEntry, PlanEntryPriority, PlanEntryStatus,
     RunningStateUpdate, SessionUpdate, StateUpdate, ToolCallContent, ToolCallStatus, ToolCallUpdate, UsageUpdate,
 };
@@ -360,7 +360,7 @@ fn report_sub_agent_state(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::schema::v2::TextContent;
+    use agent_client_protocol::v2::schema::TextContent;
     use agent_client_protocol::{Client, JsonRpcNotification};
     use llm::ContextUsage;
     use serde_json::json;

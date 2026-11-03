@@ -4,7 +4,7 @@ mod websocket;
 use aether_cli::acp::testing::AcpTestHarness;
 use aether_core::events::{AgentEvent, AgentObserver, MessageEvent, TurnEvent, TurnOutcome};
 use aether_sessions::{SessionEvent, UserEvent};
-use agent_client_protocol::schema::v2::{
+use agent_client_protocol::v2::schema::{
     AbsolutePath, CloseSessionRequest, ContentBlock, ElicitationMode, ElicitationScope, NewSessionRequest, ReplayFrom,
     ReplayFromStart, ResumeSessionRequest, SessionId, SessionUpdate, SetSessionConfigOptionRequest, StateUpdate,
     StopReason,

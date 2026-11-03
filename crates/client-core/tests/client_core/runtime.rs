@@ -1,7 +1,7 @@
 use crate::support::{TestError, next_document, next_review_state, run_local};
 use acp_utils::client::{AcpClientError, AcpEvent, connect_acp_client};
 use acp_utils::testing::{Channel, FakeAgent, initialize_request};
-use agent_client_protocol::schema::v2::SessionId;
+use agent_client_protocol::v2::schema::SessionId;
 use clankerdiff_remote::Invocation;
 use client_core::command::{AgentCommand, Command, CommandResult, GitReviewCommand, ReviewSource};
 use client_core::runtime::{Input, SessionRuntime};

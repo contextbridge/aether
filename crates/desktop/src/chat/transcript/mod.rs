@@ -17,7 +17,7 @@ use acp_utils::conversation::{
     Conversation, ConversationContent, ConversationId, ConversationItem, ConversationItemId, Notice, NoticeLevel,
     Revision,
 };
-use agent_client_protocol::schema::v2 as acp;
+use agent_client_protocol::v2::schema as acp;
 use clankerdiff_core::DiffDocument;
 use clankerdiff_gpui::{DiffViewer, DiffViewerEvent, DiffViewerOptions};
 use client_core::session_core::SessionCore;

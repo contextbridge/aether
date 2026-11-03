@@ -16,7 +16,7 @@ use crate::surfaces::modal::{ElicitationModal, frame::ModalFrame};
 use crate::theme::Theme;
 use crate::view::input::{Nav, UiEvent};
 use crate::view::widgets::key_hints;
-use agent_client_protocol::schema::v2::AuthMethod;
+use agent_client_protocol::v2::schema::AuthMethod;
 use client_core::elicitation::ElicitationId;
 use client_core::session_config_view::{LocalConfigOption, LocalConfigSelect, LocalConfigValue, LocalConfigView};
 use client_core::session_model::{SessionModel, SessionSetting};

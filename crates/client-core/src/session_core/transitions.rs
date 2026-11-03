@@ -3,7 +3,7 @@ use crate::command::AgentCommand;
 use crate::session_model::SessionSetting;
 use acp_utils::client::AcpClientError;
 use acp_utils::notifications::WorkspaceMoveTarget;
-use agent_client_protocol::schema::v2::{self as acp, SessionId};
+use agent_client_protocol::v2::schema::{self as acp, SessionId};
 use std::path::{Path, PathBuf};
 
 impl SessionCore {

@@ -4,7 +4,7 @@ use crate::conversation::status_line::StatusLine;
 use crate::surfaces::composer::{ComposerLayout, QueuedPromptsView};
 use crate::surfaces::prompt_search::PromptSearchPicker;
 use crate::view::wrap::as_u16;
-use agent_client_protocol::schema::v2::PlanEntry;
+use agent_client_protocol::v2::schema::PlanEntry;
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
 
 use super::Renderer;

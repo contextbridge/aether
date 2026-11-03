@@ -1,4 +1,4 @@
-use agent_client_protocol::schema::{MaybeUndefined, v2 as acp};
+use agent_client_protocol::{schema::MaybeUndefined, v2::schema as acp};
 use schemars::JsonSchema;
 use serde::Serialize;
 

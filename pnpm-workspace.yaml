@@ -1,7 +1,15 @@
 packages:
   - "packages/*"
 
-onlyBuiltDependencies:
-  - "@aether-agent/cli"
-  - esbuild
-  - sharp
+catalogPrune: true
+minimumReleaseAgeExcludePrune: true
+
+minimumReleaseAgeExclude:
+  - "@aether-agent/*"
+
+allowBuilds:
+  "@aether-agent/cli": true
+  esbuild: true
+  cpu-features: false
+  protobufjs: false
+  ssh2: false

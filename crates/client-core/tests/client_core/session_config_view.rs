@@ -1,7 +1,7 @@
 use acp_utils::config_meta::SelectOptionMeta;
 use acp_utils::config_option_id::ConfigOptionId;
 use acp_utils::testing::{model_choice, option_group, select};
-use agent_client_protocol::schema::v2::SessionConfigOption;
+use agent_client_protocol::v2::schema::SessionConfigOption;
 use client_core::session_config_view::{LocalConfigOption, LocalConfigView};
 use utils::ReasoningEffort;
 

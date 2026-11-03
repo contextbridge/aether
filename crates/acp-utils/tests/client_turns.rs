@@ -1,4 +1,4 @@
-use acp::schema::v2::{
+use acp::v2::schema::{
     CloseSessionRequest, ListSessionsRequest, PromptRequest, PromptResponse, ReplayFrom, ReplayFromStart,
     ResumeSessionRequest, ResumeSessionResponse, SessionId, UpdateSessionNotification,
 };
