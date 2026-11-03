@@ -1,6 +1,6 @@
 use futures::future::BoxFuture;
 use rmcp::service::{DynService, ServerInitializeError, serve_server_with_ct};
-use rmcp::transport::{IntoTransport, stdio};
+use rmcp::transport::{IntoTransport, stdio_pipes};
 use rmcp::{RoleServer, ServerHandler, Service};
 use std::env::{temp_dir, var_os};
 use std::fs::{Permissions, create_dir_all, remove_dir, remove_file, set_permissions};
@@ -60,7 +60,7 @@ impl McpServer {
     }
 
     pub async fn serve_stdio(self) -> Result<(), ServeError> {
-        host(self.service(), stdio(), CancellationToken::new()).await
+        host(self.service(), stdio_pipes(), CancellationToken::new()).await
     }
 
     pub fn serve_unix(self, socket: UnixSocket) -> ServerHandle {
