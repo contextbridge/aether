@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.35](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.34...aether-llm-codegen-v0.2.35) - 2026-11-03
+
+### Added
+
+- add gpt-6.1-terra to codex subscription models ([#642](https://github.com/contextbridge/aether/pull/642))
+
 ## [0.2.34](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.33...aether-llm-codegen-v0.2.34) - 2026-10-20
 
 ### Fixed
