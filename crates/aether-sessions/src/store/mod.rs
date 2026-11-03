@@ -7,7 +7,6 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::UNIX_EPOCH;
 use tracing::warn;
 use utils::fs::{append_line, write_atomic};
@@ -84,7 +83,6 @@ pub fn discover_session_files(sessions_dir: impl AsRef<Path>) -> std::io::Result
 pub struct SessionStore {
     dir: PathBuf,
     prompt_history: PromptHistoryIndex,
-    writes: Mutex<()>,
 }
 
 #[derive(Debug, Default)]
@@ -111,7 +109,7 @@ impl SessionStore {
 
     pub fn from_path(dir: PathBuf) -> Self {
         let prompt_history = PromptHistoryIndex::new(dir.join(PROMPT_HISTORY_FILE));
-        Self { dir, prompt_history, writes: Mutex::new(()) }
+        Self { dir, prompt_history }
     }
 
     pub fn append_meta(&self, session_id: &str, meta: &SessionMeta) -> Result<(), SessionStoreError> {
@@ -145,7 +143,22 @@ impl SessionStore {
     /// metadata line and any matching prompt-history entries. Event lines are left
     /// unchanged.
     pub fn relocate(&self, session_id: &str, new_cwd: &Path) -> Result<(), SessionStoreError> {
-        self.rewrite_meta(session_id, |meta| meta.cwd = new_cwd.to_path_buf())?;
+        let path = self.session_path(session_id);
+        let content = fs::read_to_string(&path)?;
+        let mut lines = content.lines();
+        let first = lines.next().ok_or(SessionStoreError::MissingMetadata)?;
+
+        let mut meta: SessionMeta = serde_json::from_str(first.trim())
+            .map_err(|source| SessionStoreError::InvalidMetadata { line_number: 1, source })?;
+        meta.cwd = new_cwd.to_path_buf();
+        let mut rewritten = serde_json::to_string(&meta)?;
+        rewritten.push('\n');
+        for line in lines {
+            rewritten.push_str(line);
+            rewritten.push('\n');
+        }
+        write_atomic(&path, rewritten.as_bytes())?;
+
         let _ = self.prompt_history.relocate_session(session_id, new_cwd);
         Ok(())
     }
@@ -155,8 +168,9 @@ impl SessionStore {
         if title.is_empty() {
             return Err(SessionStoreError::InvalidTitle);
         }
+        fs::metadata(self.session_path(session_id))?;
         let title = truncate_for_preview(title);
-        self.rewrite_meta(session_id, |meta| meta.title = Some(title.clone()))?;
+        write_atomic(&title_path(&self.session_path(session_id)), title.as_bytes())?;
         Ok(title)
     }
 
@@ -183,7 +197,7 @@ impl SessionStore {
                 Some((fingerprint, summary)) if fingerprint == file.fingerprint => summary,
                 _ => read_session_summary(&file.path).ok(),
             };
-            summaries.extend(summary.clone());
+            summaries.extend(summary.clone().map(|summary| with_stored_title(summary, &file.path)));
             cache.summaries.insert(file.path, (file.fingerprint, summary));
         }
 
@@ -201,38 +215,12 @@ impl SessionStore {
         self.prompt_history.search(query, limit).map_err(SessionStoreError::PromptHistory)
     }
 
-    fn rewrite_meta(&self, session_id: &str, update: impl FnOnce(&mut SessionMeta)) -> Result<(), SessionStoreError> {
-        // Held from the read to the atomic replace so a concurrent append can't land in the replaced file.
-        let _writes = self.lock_writes();
-        let path = self.session_path(session_id);
-        let content = fs::read_to_string(&path)?;
-        let mut lines = content.lines();
-        let first = lines.next().ok_or(SessionStoreError::MissingMetadata)?;
-
-        let mut meta: SessionMeta = serde_json::from_str(first.trim())
-            .map_err(|source| SessionStoreError::InvalidMetadata { line_number: 1, source })?;
-        update(&mut meta);
-        let mut rewritten = serde_json::to_string(&meta)?;
-        rewritten.push('\n');
-        for line in lines {
-            rewritten.push_str(line);
-            rewritten.push('\n');
-        }
-        Ok(write_atomic(&path, rewritten.as_bytes())?)
-    }
-
     fn session_meta(&self, session_id: &str) -> Option<SessionMeta> {
         SessionLog::open(self.session_path(session_id)).ok().map(|log| log.meta)
     }
 
     fn append_json<T: Serialize>(&self, session_id: &str, value: &T) -> Result<(), SessionStoreError> {
-        let line = serde_json::to_string(value)?;
-        let _writes = self.lock_writes();
-        Ok(append_line(&self.session_path(session_id), &line)?)
-    }
-
-    fn lock_writes(&self) -> MutexGuard<'_, ()> {
-        self.writes.lock().unwrap_or_else(PoisonError::into_inner)
+        Ok(append_line(&self.session_path(session_id), &serde_json::to_string(value)?)?)
     }
 
     fn session_path(&self, session_id: &str) -> PathBuf {
@@ -248,15 +236,24 @@ struct SessionLogScan {
 
 fn read_session_summary(path: &Path) -> Result<SessionSummary, SessionStoreError> {
     let scan = read_bounded_session(path, ScanLimits::SUMMARY)?;
-    let title = scan.meta.title.clone().or_else(|| {
-        scan.events.iter().find_map(|event| match event {
-            SessionEvent::User(UserEvent::Message { content, display_content, .. }) => {
-                Some(extract_title(display_content.as_deref().unwrap_or(content)))
-            }
-            _ => None,
-        })
+    let title = scan.events.iter().find_map(|event| match event {
+        SessionEvent::User(UserEvent::Message { content, display_content, .. }) => {
+            Some(extract_title(display_content.as_deref().unwrap_or(content)))
+        }
+        _ => None,
     });
     Ok(SessionSummary { meta: scan.meta, title })
+}
+
+fn with_stored_title(mut summary: SessionSummary, log_path: &Path) -> SessionSummary {
+    if let Ok(title) = fs::read_to_string(title_path(log_path)) {
+        summary.title = Some(title);
+    }
+    summary
+}
+
+fn title_path(log_path: &Path) -> PathBuf {
+    log_path.with_extension("title")
 }
 
 fn read_session_preview(path: &Path, limits: ScanLimits) -> Result<SessionPreviewResponse, SessionStoreError> {

@@ -12,8 +12,6 @@ pub struct SessionMeta {
     #[serde(default)]
     pub selected_mode: Option<String>,
     pub created_at: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

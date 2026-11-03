@@ -166,24 +166,28 @@ fn a_set_title_replaces_the_prompt_title_and_survives_later_prompts() {
 
 #[test]
 fn retitling_while_events_are_appended_keeps_every_event() {
-    const ROUNDS: usize = 100;
     let store = TestStore::new().session("session-1", &[user_message("first prompt")]);
 
-    std::thread::scope(|scope| {
-        scope.spawn(|| {
-            for round in 0..ROUNDS {
-                store.append("session-1", &assistant_text(&format!("message-{round}"), "reply"));
-            }
-        });
-        scope.spawn(|| {
-            for round in 0..ROUNDS {
-                store.store().set_title("session-1", &format!("Title {round}")).expect("retitling succeeds");
-            }
-        });
-    });
+    assert_eq!(appended_while_retitling(&store, store.store()), RETITLE_ROUNDS + 1);
+}
 
-    let (_, events) = store.store().load("session-1").expect("the session loads");
-    assert_eq!(events.len(), ROUNDS + 1, "an append raced with a title rewrite and was lost");
+#[test]
+fn retitling_from_another_process_while_events_are_appended_keeps_every_event() {
+    let store = TestStore::new().session("session-1", &[user_message("first prompt")]);
+    let other_process = SessionStore::from_path(store.path().to_path_buf());
+
+    assert_eq!(appended_while_retitling(&store, &other_process), RETITLE_ROUNDS + 1);
+}
+
+#[test]
+fn a_cached_list_shows_a_title_set_after_it_was_cached() {
+    let store = TestStore::new().session("session-1", &[user_message("first prompt")]);
+    let mut cache = SummaryCache::default();
+    store.store().list_cached(&mut cache);
+
+    store.store().set_title("session-1", "Renamed").expect("retitling succeeds");
+
+    assert_eq!(store.store().list_cached(&mut cache)[0].title.as_deref(), Some("Renamed"));
 }
 
 #[test]
@@ -331,4 +335,22 @@ fn empty_and_missing_stores_have_no_sessions_or_prompts() {
 
     let missing = SessionStore::from_path(store.path().join("missing"));
     assert_eq!(missing.list().len(), 0);
+}
+
+const RETITLE_ROUNDS: usize = 100;
+
+fn appended_while_retitling(store: &TestStore, retitler: &SessionStore) -> usize {
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            for round in 0..RETITLE_ROUNDS {
+                store.append("session-1", &assistant_text(&format!("message-{round}"), "reply"));
+            }
+        });
+        scope.spawn(|| {
+            for round in 0..RETITLE_ROUNDS {
+                retitler.set_title("session-1", &format!("Title {round}")).expect("retitling succeeds");
+            }
+        });
+    });
+    store.store().load("session-1").expect("the session loads").1.len()
 }
