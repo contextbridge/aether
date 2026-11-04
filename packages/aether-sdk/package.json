@@ -29,17 +29,17 @@
   "dependencies": {
     "@aether-agent/cli": "^0.9.21",
     "@agentclientprotocol/sdk": "^2.0.1",
-    "@modelcontextprotocol/sdk": "^1.30.0",
-    "express": "^5.1.0",
-    "zod": "^4.4.3"
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "express": "^5.3.0",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@aether-agent/schema-codegen": "workspace:*",
-    "@types/express": "^5.0.0",
-    "@types/node": "^26.4.0",
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.6.6",
     "fishery": "^2.4.0",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   },
   "engines": {
     "node": ">=24"
