@@ -183,10 +183,10 @@ export class AetherSession {
     )
       return;
     const update = notification.update;
-    if (
-      acp.SessionUpdate.isStateUpdate(update) &&
-      acp.StateUpdate.isIdle(update)
-    ) {
+    if (!acp.SessionUpdate.isStateUpdate(update)) return;
+    if (!acp.StateUpdate.isIdle(update)) {
+      this.turn.started = true;
+    } else if (this.turn.started) {
       this.turn.stopReason ??= update.stopReason ?? "end_turn";
       this.completeTurn();
     }
@@ -225,7 +225,7 @@ export class AetherSession {
       );
     }
 
-    const turn: Turn = { accepted: false, completed: false };
+    const turn: Turn = { accepted: false, started: false, completed: false };
     this.turn = turn;
     let rejection: Extract<AetherMessage, { type: "error" }> | undefined;
     const promptPromise = this.connection.agent
@@ -276,6 +276,7 @@ export class AetherSession {
 
 type Turn = {
   accepted: boolean;
+  started: boolean;
   stopReason?: StopReason;
   completed: boolean;
 };

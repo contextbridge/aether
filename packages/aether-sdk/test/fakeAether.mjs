@@ -186,6 +186,8 @@ async function sendIdle(sessionId, stopReason) {
 
 async function runTurn(params, turn) {
   try {
+    if (process.env.FAKE_AETHER_IDLE_BEFORE_RUNNING)
+      await sendIdle(params.sessionId, "cancelled");
     await notifyUpdate(params.sessionId, {
       sessionUpdate: "user_message",
       messageId: `user-${turn.messageId}`,
