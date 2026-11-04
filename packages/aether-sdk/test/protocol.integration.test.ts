@@ -8,10 +8,14 @@ const binaryPath = fileURLToPath(new URL("./fakeAether.mjs", import.meta.url));
 it("exposes v2 auth and plain/replay resume over the public process transport", async () => {
   await using process = startAetherAcpAgentProcess({ binaryPath });
   const updates: acp.UpdateSessionNotification[] = [];
+  const snapshotReceived = Promise.withResolvers<void>();
   const connection = acp
     .client()
     .onNotification("session/update", ({ params }) => {
       updates.push(params);
+      if (params.update.sessionUpdate === "state_update") {
+        snapshotReceived.resolve();
+      }
     })
     .connect(process.stream);
   try {
@@ -32,6 +36,7 @@ it("exposes v2 auth and plain/replay resume over the public process transport", 
       ...request,
       replayFrom: { type: "start" },
     });
+    await snapshotReceived.promise;
     expect(updates.map((n) => n.update.sessionUpdate)).toEqual([
       "user_message",
       "state_update",

@@ -186,8 +186,8 @@ importers:
         specifier: workspace:*
         version: link:../schema-codegen
       '@agentclientprotocol/sdk':
-        specifier: ^2.0.1
-        version: 2.0.1(zod@4.6.7)
+        specifier: ^2.4.0
+        version: 2.4.0(zod@4.6.7)
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
@@ -223,8 +223,8 @@ importers:
         specifier: ^0.9.21
         version: 0.9.21
       '@agentclientprotocol/sdk':
-        specifier: ^2.0.1
-        version: 2.0.1(zod@4.6.7)
+        specifier: ^2.4.0
+        version: 2.4.0(zod@4.6.7)
       '@modelcontextprotocol/sdk':
         specifier: ^1.32.2
         version: 1.32.2(zod@4.6.7)
@@ -340,10 +340,14 @@ packages:
     engines: {node: '>=14.18', npm: '>=6'}
     hasBin: true
 
-  '@agentclientprotocol/sdk@2.0.1':
-    resolution: {integrity: sha512-v4E/NcBTGFEKmorGso8ysAjJTkNh5UMJPP4aDznyMNmnP9t10g/aCCo/Djy7RYaYZy5ZROFK3G5cEj9tDgGOTQ==}
+  '@agentclientprotocol/sdk@2.4.0':
+    resolution: {integrity: sha512-7qJ8nnyj7WesC5ve185ioTpB2/svQoeGV4HA4nLEhgDUrcmBe54/08VcXc/oL4p14tDbxxECZzdYmUYQ+4l+Wg==}
     peerDependencies:
+      '@modelcontextprotocol/server': ^2.4.0
       zod: ^3.25.76 || ^4.0.0
+    peerDependenciesMeta:
+      '@modelcontextprotocol/server':
+        optional: true
 
   '@antfu/install-pkg@2.1.0':
     resolution: {integrity: sha512-sdg9NxU3zR4Mnawfbc/x6GB5Wf17WYud5qOuEuxXjaKpYpMkISSJEjItGebXJ2bQ4DIcly4NYH23mtkGJjvKUw==}
@@ -4671,7 +4675,7 @@ snapshots:
     dependencies:
       detect-libc: 2.1.2
 
-  '@agentclientprotocol/sdk@2.0.1(zod@4.6.7)':
+  '@agentclientprotocol/sdk@2.4.0(zod@4.6.7)':
     dependencies:
       zod: 4.6.7
 
