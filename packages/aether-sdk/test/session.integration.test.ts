@@ -59,6 +59,7 @@ describe("AetherSession with a fake ACP agent", () => {
   it.each([
     { FAKE_AETHER_IDLE_BEFORE_ACK: "1" },
     { FAKE_AETHER_NO_STOP_REASON: "1" },
+    { FAKE_AETHER_IDLE_BEFORE_RUNNING: "1" },
     {
       FAKE_AETHER_READY_IDLE: "1",
       FAKE_AETHER_UNRELATED_IDLE: "1",

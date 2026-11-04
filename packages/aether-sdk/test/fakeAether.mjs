@@ -21,7 +21,6 @@ import { Readable, Writable } from "node:stream";
 import {
   agent as createAgent,
   ndJsonStream,
-  batchNotification,
 } from "@agentclientprotocol/sdk/experimental/v2/unstable";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -186,6 +185,8 @@ async function sendIdle(sessionId, stopReason) {
 
 async function runTurn(params, turn) {
   try {
+    if (process.env.FAKE_AETHER_IDLE_BEFORE_RUNNING)
+      await sendIdle(params.sessionId, "cancelled");
     await notifyUpdate(params.sessionId, {
       sessionUpdate: "user_message",
       messageId: `user-${turn.messageId}`,
@@ -314,21 +315,9 @@ async function runTurn(params, turn) {
       : process.env.FAKE_AETHER_NO_STOP_REASON
         ? undefined
         : "end_turn";
+    await sendIdle(params.sessionId, stopReason);
     if (process.env.FAKE_AETHER_DUPLICATE_IDLE) {
-      await conn.batch(
-        [stopReason, "cancelled"].map((reason) =>
-          batchNotification("session/update", {
-            sessionId: params.sessionId,
-            update: {
-              sessionUpdate: "state_update",
-              state: "idle",
-              stopReason: reason,
-            },
-          }),
-        ),
-      );
-    } else {
-      await sendIdle(params.sessionId, stopReason);
+      await sendIdle(params.sessionId, "cancelled");
     }
   }
 }
