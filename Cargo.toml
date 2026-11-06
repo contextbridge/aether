@@ -96,6 +96,7 @@ libc = "0.2"
 # File system and pattern matching
 glob = "0.3"
 globset = "0.4"
+walkdir = "2.5"
 
 # Terminal UI
 clankerdiff-core = { version = "0.10.0" }
