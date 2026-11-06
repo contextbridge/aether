@@ -45,6 +45,7 @@ skills = ["dep:aether-project", "dep:regex", "dep:walkdir"]
 tasks = [
     "dep:chrono",
     "dep:tempfile",
+    "dep:uuid",
 ]
 review = ["dep:axum", "dep:uuid", "dep:reqwest", "dep:tokio-util", "dep:tower-http", "tokio/net"]
 subagents = [

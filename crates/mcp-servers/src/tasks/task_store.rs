@@ -5,6 +5,7 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 use utils::fs::{append_line, write_atomic};
+use uuid::Uuid;
 
 /// Errors that can occur during task store operations
 #[derive(Debug, Error)]
@@ -88,7 +89,7 @@ impl TaskStore {
             let id = TaskId::new_subtask(parent, self.next_subtask_index(&parent.root()));
             Task::new_subtask(id, parent.clone(), title.to_string())
         } else {
-            let id = TaskId::new_root(&self.generate_hash());
+            let id = TaskId::new_root(&Self::generate_hash());
             if self.tasks.contains_key(&id) {
                 return Err(TaskStoreError::AlreadyExists { id: id.to_string() });
             }
@@ -154,18 +155,8 @@ impl TaskStore {
         }
     }
 
-    fn generate_hash(&self) -> String {
-        use std::time::{SystemTime, UNIX_EPOCH};
-
-        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-
-        let pid = u128::from(std::process::id());
-        let count = self.tasks.len() as u128;
-        let mixed = now.wrapping_add(pid << 16).wrapping_add(count);
-        // Intentional truncation: value is masked to 32 bits for ID generation
-        #[allow(clippy::cast_possible_truncation)]
-        let truncated = mixed as u64;
-        format!("{:08x}", truncated & 0xFFFF_FFFF)
+    fn generate_hash() -> String {
+        format!("{:08x}", Uuid::new_v4().as_fields().0)
     }
 
     fn load_tree_file(&mut self, path: &Path) -> Result<(), TaskStoreError> {
