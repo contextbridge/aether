@@ -68,10 +68,9 @@ struct ExtractedContent {
 }
 
 fn extract_content(html: &str, url: &str) -> ExtractedContent {
-    let article = Readability::new(html, Some(url), None)
-        .ok()
-        .and_then(|mut reader| reader.parse().ok())
-        .filter(|article| !article.content.is_empty());
+    let mut reader = Readability::new(html, Some(url), None).ok();
+    let title = reader.as_ref().and_then(|reader| non_empty(reader.get_article_title().to_string()));
+    let article = reader.as_mut().and_then(|reader| reader.parse().ok()).filter(|article| !article.content.is_empty());
 
     match article {
         Some(article) => ExtractedContent {
@@ -79,11 +78,7 @@ fn extract_content(html: &str, url: &str) -> ExtractedContent {
             title: non_empty(article.title),
             byline: article.byline,
         },
-        None => ExtractedContent {
-            title: extract_title(html),
-            markdown: convert(html).unwrap_or_else(|_| html.to_string()),
-            byline: None,
-        },
+        None => ExtractedContent { title, markdown: convert(html).unwrap_or_else(|_| html.to_string()), byline: None },
     }
 }
 
@@ -97,16 +92,6 @@ fn normalize_url(url: &str) -> Result<String, WebFetchError> {
     };
 
     Url::parse(&url).map(|u| u.to_string()).map_err(WebFetchError::InvalidUrl)
-}
-
-fn extract_title(html: &str) -> Option<String> {
-    let lower = html.to_lowercase();
-    let start = lower.find("<title>")?;
-    let end = lower.find("</title>")?;
-    if start >= end {
-        return None;
-    }
-    non_empty(html[start + 7..end].trim().to_string())
 }
 
 fn non_empty(s: String) -> Option<String> {
@@ -131,10 +116,12 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_title() {
-        assert_eq!(extract_title("<html><head><title>Test Page</title></head></html>"), Some("Test Page".to_string()));
-        assert_eq!(extract_title("<html><head></head><body></body></html>"), None);
-        assert_eq!(extract_title("<html><head><title>  </title></head></html>"), None);
+    fn title_comes_from_the_page_when_it_has_no_article() {
+        let title = |html| extract_content(html, "https://example.com/").title;
+
+        assert_eq!(title("<html><head><title>Test Page</title></head></html>"), Some("Test Page".to_string()));
+        assert_eq!(title("<html><head></head><body></body></html>"), None);
+        assert_eq!(title("<html><head><title>  </title></head></html>"), None);
     }
 
     fn article_html(body: &str) -> String {
@@ -174,6 +161,15 @@ mod tests {
         let result = extract_content(&html, "https://example.com/article");
 
         assert!(result.title.is_some());
+    }
+
+    #[test]
+    fn title_survives_text_whose_lowercase_form_has_a_different_byte_length() {
+        let html = "<!-- \u{130} --><html><head><title>Sparse</title></head><body></body></html>";
+
+        let result = extract_content(html, "https://example.com/sparse");
+
+        assert_eq!(result.title, Some("Sparse".to_string()));
     }
 
     #[test]
