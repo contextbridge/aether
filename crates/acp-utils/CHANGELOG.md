@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.5.19...aether-acp-utils-v0.6.0) - 2026-11-06
+
+### Other
+
+- *(deps)* [**breaking**] upgrade rmcp to 3.8 and agent-client-protocol to 5.0 ([#648](https://github.com/contextbridge/aether/pull/648))
+
 ## [0.5.19](https://github.com/contextbridge/aether/compare/aether-acp-utils-v0.5.18...aether-acp-utils-v0.5.19) - 2026-11-03
 
 ### Added
