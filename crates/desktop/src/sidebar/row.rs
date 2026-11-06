@@ -2,8 +2,8 @@ use super::Sidebar;
 use super::listing::{Row, RowKind};
 use crate::registry::Registry;
 use crate::remotes::{InstanceState, Lifecycle};
-use crate::theme::DesktopTheme;
 use crate::threads::{Thread, ThreadManager, ThreadStatus};
+use crate::ui::ActiveTheme;
 use crate::ui::tokens::{RADIUS_INNER, UNREAD_DOT_SIZE, rem};
 use crate::ui::{
     Icon, IconButton, IconName, ListRow, MenuItem, StyledExt, Typography, TypographyExt, UiTheme, Waveform, hint,
@@ -48,7 +48,7 @@ impl SidebarRow {
 
 impl Render for SidebarRow {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = DesktopTheme::global(cx).ui();
+        let theme = ActiveTheme::global(cx).ui();
         let colors = theme.colors;
         let row = &self.row;
         let Row { icon, unread, selected, actions, kind, .. } = row;

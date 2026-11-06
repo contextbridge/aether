@@ -4,8 +4,8 @@ use crate::elicitation::{ElicitationCard, OpenReview};
 use crate::files::{Dismissed, Files};
 use crate::registry::Registry;
 use crate::sidebar;
-use crate::theme::DesktopTheme;
 use crate::threads::{Thread, ThreadEvent, ThreadStatus, observe_changes, observe_thread};
+use crate::ui::ActiveTheme;
 use crate::ui::tokens::{GROUP_HEIGHT, ICON_SIZE_SMALL, RADIUS_CONTROL, RADIUS_INNER, ROW_HEIGHT, rem};
 use crate::ui::{Icon, IconName, StyledExt, Typography, TypographyExt, UiTheme, WindowDragExt, tagged, text_selector};
 use agent_client_protocol::v2::schema as acp;
@@ -146,7 +146,7 @@ impl ThreadView {
     }
 
     fn render_switch(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = DesktopTheme::global(cx).ui();
+        let theme = ActiveTheme::global(cx).ui();
         let colors = theme.colors;
         let thread = self.thread.read(cx);
         let files = changed_files(thread);
@@ -203,7 +203,7 @@ impl ThreadView {
         if self.tab != ThreadTab::Files || comments == 0 {
             return None;
         }
-        let theme = DesktopTheme::global(cx).ui();
+        let theme = ActiveTheme::global(cx).ui();
         let colors = theme.colors;
         let copy = pill_button("review-copy", "Copy", false, &theme).on_click(cx.listener(|this, _, window, cx| {
             this.files.update(cx, |files, cx| files.copy(window, cx));
@@ -243,7 +243,7 @@ impl ThreadView {
 
 impl Render for ThreadView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = DesktopTheme::global(cx).ui();
+        let theme = ActiveTheme::global(cx).ui();
         let state = self.registry.read(cx).state();
         let thread = self.thread.read(cx);
         let (title, sidebar_collapsed) = (state.title(thread.session_id(), thread.title()), state.sidebar_collapsed);

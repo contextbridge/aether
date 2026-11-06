@@ -1,5 +1,5 @@
-use crate::theme::DesktopTheme;
 use crate::threads::{Thread, ThreadStatus};
+use crate::ui::ActiveTheme;
 use crate::ui::tokens::{ICON_SIZE, ICON_SIZE_SMALL, ROW_HEIGHT, UNREAD_DOT_SIZE, rem};
 use crate::ui::{
     Icon, IconName, SurfaceExt, Tooltip, Typography, TypographyExt, UiTheme, Waveform, text_selector, with_middots,
@@ -64,7 +64,7 @@ impl StatusLine {
 
 impl Render for StatusLine {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = DesktopTheme::global(cx).ui();
+        let theme = ActiveTheme::global(cx).ui();
         let colors = theme.colors;
         let conversation = self.thread.read(cx).core().map(SessionCore::conversation);
         let plan = conversation.and_then(visible_plan);

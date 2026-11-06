@@ -8,8 +8,8 @@ use crate::clock::Clock;
 use crate::history::{History, git_root};
 use crate::registry::{Collapsed, Registry};
 use crate::remotes::{Action, Fleet, RemoteSpec};
-use crate::theme::DesktopTheme;
 use crate::threads::{Thread, ThreadManager};
+use crate::ui::ActiveTheme;
 use crate::ui::tokens::{ROW_HEIGHT, TWO_LINE_ROW_HEIGHT, rem};
 use crate::ui::{
     Icon, IconButton, IconName, ListRow, MenuItem, PanelSide, ResizablePanel, SectionHeader, StyledExt, TreeRow,
@@ -526,7 +526,7 @@ impl Sidebar {
 
 impl Render for Sidebar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = DesktopTheme::global(cx).ui();
+        let theme = ActiveTheme::global(cx).ui();
         let sidebar = cx.entity().downgrade();
         let reset = sidebar.clone();
         let local = self.render_local(&theme, cx);

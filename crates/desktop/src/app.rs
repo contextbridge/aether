@@ -9,9 +9,10 @@ use crate::remotes::Fleet;
 use crate::settings::{self, Settings};
 use crate::sidebar::{self, NewCloudThread, NewThread, Sidebar, ToggleSidebar};
 use crate::target::{AgentConnector, Transport};
-use crate::theme::{self, DesktopTheme};
+use crate::theme;
 use crate::thread_view::{ThreadTab, ThreadView};
 use crate::threads::{Attention, Thread, ThreadEvent, ThreadManager};
+use crate::ui::ActiveTheme;
 use crate::ui::interface_size::DEFAULT_INTERFACE_SIZE;
 use crate::ui::tokens::{MODAL_WIDTH, PICKER_LIST_HEIGHT, rem};
 use crate::ui::window_chrome;
@@ -260,7 +261,7 @@ impl DesktopApp {
             .iter()
             .map(|entry| PickerItem::new(entry.key.selector(), entry.title.clone()).detail(entry.project.clone()))
             .collect();
-        let theme = DesktopTheme::global(cx).ui();
+        let theme = ActiveTheme::global(cx).ui();
         let switcher = cx.new(|cx| {
             SearchPicker::new("switcher", items, theme, cx)
                 .searchable("Search threads…", window, cx)
@@ -422,7 +423,7 @@ impl Render for DesktopApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         InterfaceSize::apply(window, cx);
         place_window_buttons(window);
-        let theme = DesktopTheme::global(cx).ui();
+        let theme = ActiveTheme::global(cx).ui();
         let shown = self.sidebar.read(cx);
         let sidebar_panel = (!shown.collapsed(cx)).then(|| {
             let width = shown.width(cx);

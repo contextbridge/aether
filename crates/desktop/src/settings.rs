@@ -1,5 +1,6 @@
 use crate::registry::Registry;
-use crate::theme::{self, DesktopTheme};
+use crate::theme;
+use crate::ui::ActiveTheme;
 use crate::ui::{
     Button, ButtonVariant, ControlSize, Modal, ModalSize, ThemePicker, ThemePickerEvent, Typography, TypographyExt,
     UiTheme,
@@ -49,7 +50,7 @@ impl Settings {
     fn open_picker(&mut self, appearance: Appearance, window: &mut Window, cx: &mut Context<Self>) {
         let id = self.preference(cx).pair.id(appearance).to_owned();
         let current = ReviewTheme::builtin(&id).unwrap_or_default();
-        let ui = DesktopTheme::global(cx).ui();
+        let ui = ActiveTheme::global(cx).ui();
         let picker = cx.new(|cx| {
             let themes = ThemeChoice::catalog_for(appearance);
             ThemePicker::new(format!("{}-themes", key(appearance)), &current, themes, ui, window, cx)
@@ -141,7 +142,7 @@ impl EventEmitter<Closed> for Settings {}
 
 impl Render for Settings {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = DesktopTheme::global(cx).ui();
+        let theme = ActiveTheme::global(cx).ui();
         let settings = cx.entity().downgrade();
         let modal = Modal::new("settings", "Settings", theme)
             .hint("Esc to close")

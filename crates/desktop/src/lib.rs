@@ -26,7 +26,7 @@ pub use app::{
     ShowChat, ShowFiles,
 };
 pub use clankerdiff_ui_core::{AppearanceMode, ThemePreference};
-pub use theme::DesktopTheme;
+pub use ui::ActiveTheme;
 
 use aether_sessions::SessionStore;
 use agents::{Agents, default_agents_file};

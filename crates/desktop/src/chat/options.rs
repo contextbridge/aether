@@ -1,5 +1,5 @@
-use crate::theme::DesktopTheme;
 use crate::threads::{Thread, observe_thread};
+use crate::ui::ActiveTheme;
 use crate::ui::UiTheme;
 use crate::ui::tokens::{COMPOSER_POPUP_HEIGHT, ICON_SIZE_SMALL, RADIUS_INNER, ROW_HEIGHT, rem};
 use crate::ui::{
@@ -56,7 +56,7 @@ impl SessionOptions {
                 if value.is_disabled { item.detail("unavailable") } else { item }
             })
             .collect();
-        let theme = DesktopTheme::global(cx).ui();
+        let theme = ActiveTheme::global(cx).ui();
         let picker = cx.new(|cx| {
             let picker = SearchPicker::new(format!("config-{}-picker", option.id), items, theme, cx)
                 .title(option.name.clone())
@@ -94,7 +94,7 @@ impl EventEmitter<PickerClosed> for SessionOptions {}
 
 impl Render for SessionOptions {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = DesktopTheme::global(cx).ui();
+        let theme = ActiveTheme::global(cx).ui();
         let options = self.thread.read(cx).connected_core().map_or(&[][..], |core| core.session().config_options());
         let selectors = options.iter().filter_map(|option| {
             let picker = self.open.as_ref().filter(|open| open.option_id == option.id).map(|open| open.picker.clone());
