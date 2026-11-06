@@ -85,14 +85,8 @@ impl Transport {
 
 fn client_lifecycle_mode() -> ClientLifecycleMode {
     ClientLifecycleMode::Auto {
-        preferred_versions: vec![
-            ProtocolVersion::V_2026_07_28,
-            ProtocolVersion::V_2025_11_25,
-            ProtocolVersion::V_2025_06_18,
-            ProtocolVersion::V_2025_03_26,
-            ProtocolVersion::V_2024_11_05,
-        ],
-        legacy_version: Some(ProtocolVersion::V_2025_11_25),
+        preferred_versions: ProtocolVersion::KNOWN_VERSIONS.iter().rev().cloned().collect(),
+        legacy_version: Some(ProtocolVersion::LATEST_WITH_INITIALIZE),
     }
 }
 
