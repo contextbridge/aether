@@ -68,7 +68,7 @@ impl CodexProvider {
         build_request(identity.as_ref(), wire_model, context, &ResponsesRequestPolicy::CODEX)
     }
 
-    async fn build_headers(&self) -> Result<HeaderMap> {
+    async fn build_headers(&self, session_affinity_key: Option<&str>) -> Result<HeaderMap> {
         let (access_token, account_id) = self.token_manager.get_valid_token().await?;
 
         let mut authorization = HeaderValue::from_str(&format!("Bearer {access_token}"))?;
@@ -79,6 +79,10 @@ impl CodexProvider {
         headers.insert("chatgpt-account-id", HeaderValue::from_str(&account_id)?);
         headers.insert("originator", HeaderValue::from_static("codex_cli_rs"));
         headers.insert("version", HeaderValue::from_static(CODEX_CLIENT_VERSION));
+        // ChatGPT's backend derives prompt cache affinity from this header, not from the request body.
+        if let Some(key) = session_affinity_key {
+            headers.insert("session-id", HeaderValue::from_str(key)?);
+        }
 
         Ok(headers)
     }
@@ -118,7 +122,7 @@ impl StreamingModelProvider for CodexProvider {
         response_stream(
             async move {
                 let request = provider.build_wire_request(&context)?;
-                let headers = provider.build_headers().await?;
+                let headers = provider.build_headers(context.session_affinity_key()).await?;
                 provider.send_request(request, headers).await
             },
             decode_responses(),
@@ -181,7 +185,7 @@ mod tests {
             )],
         );
         context.set_reasoning_effort(crate::ReasoningEffort::Max);
-        context.set_prompt_cache_key(Some("session-abc".to_string()));
+        context.set_session_affinity_key(Some("session-abc".to_string()));
 
         let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
         let captured = server.captured().await;
@@ -203,6 +207,37 @@ mod tests {
         assert_eq!(captured.headers["accept"], "text/event-stream");
         assert!(captured.headers.get("x-openai-internal-codex-responses-lite").is_none());
         assert!(captured.headers.get("OpenAI-Beta").is_none());
+    }
+
+    #[tokio::test]
+    async fn session_affinity_routes_the_request_instead_of_the_prefix_key() {
+        let mut server = CaptureServer::start_responses().await;
+        let provider = server_backed_provider(&server);
+        let mut context = hello_context();
+        context.set_prompt_cache_key(Some("prefix-abc".to_string()));
+        context.set_session_affinity_key(Some("session-abc".to_string()));
+
+        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+        let captured = server.captured().await;
+
+        assert!(responses.iter().all(Result::is_ok), "{responses:?}");
+        assert_eq!(captured.headers["session-id"], "session-abc");
+        assert_eq!(captured.body["prompt_cache_key"], "session-abc");
+    }
+
+    #[tokio::test]
+    async fn requests_without_session_affinity_send_no_routing_identity() {
+        let mut server = CaptureServer::start_responses().await;
+        let provider = server_backed_provider(&server);
+        let mut context = hello_context();
+        context.set_prompt_cache_key(Some("prefix-abc".to_string()));
+
+        let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+        let captured = server.captured().await;
+
+        assert!(responses.iter().all(Result::is_ok), "{responses:?}");
+        assert!(captured.headers.get("session-id").is_none());
+        assert!(captured.body.get("prompt_cache_key").is_none());
     }
 
     #[tokio::test]
