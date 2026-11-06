@@ -6,12 +6,12 @@ use crate::surfaces::composer::ComposerOutcome;
 use crate::surfaces::dropped_files::parse_dropped_file_paths;
 use crate::surfaces::input::{UiOutput, one};
 use crate::surfaces::picker::{Builtin, SlashCommand};
-use crate::view::input::{MouseAction, UiEvent};
+use crate::view::input::UiEvent;
 use acp_utils::config_option_id::THEME_CONFIG_ID;
 use client_core::composer::attachment::classify_paths;
 use client_core::session_config_view::LocalConfigView;
 use client_core::session_core::SessionCore;
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind};
 use std::time::{Duration, Instant};
 
 pub(super) const CTRL_C_CONFIRM_WINDOW: Duration = Duration::from_secs(1);
@@ -21,10 +21,13 @@ impl App {
         let event = match event {
             Event::Key(key) => UiEvent::Key(key),
             Event::Paste(text) => UiEvent::Paste(text),
-            Event::Mouse(mouse) => {
-                let Some(action) = MouseAction::from_event(mouse.kind) else { return };
-                UiEvent::Mouse(action, (mouse.column, mouse.row), mouse.modifiers)
-            }
+            Event::Mouse(mouse) => match mouse.kind {
+                MouseEventKind::ScrollUp
+                | MouseEventKind::ScrollDown
+                | MouseEventKind::Down(_)
+                | MouseEventKind::Moved => UiEvent::Mouse(mouse),
+                _ => return,
+            },
             Event::FocusLost => {
                 self.swallow_next_click = true;
                 return;
@@ -43,7 +46,9 @@ impl App {
 
     fn is_refocusing_click(&mut self, event: &UiEvent) -> bool {
         match event {
-            UiEvent::Mouse(MouseAction::Click, ..) => std::mem::take(&mut self.swallow_next_click),
+            UiEvent::Mouse(MouseEvent { kind: MouseEventKind::Down(_), .. }) => {
+                std::mem::take(&mut self.swallow_next_click)
+            }
             UiEvent::Key(_) | UiEvent::Paste(_) => {
                 self.swallow_next_click = false;
                 false

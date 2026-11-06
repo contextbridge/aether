@@ -18,41 +18,11 @@ pub struct FormattedDiagnostic {
     /// The column number (1-indexed for display)
     pub column: u32,
     /// The severity level
-    pub severity: Severity,
+    pub severity: DiagnosticSeverity,
     /// The diagnostic message
     pub message: String,
     /// The diagnostic code
     pub code: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Severity {
-    Error,
-    Warning,
-    Info,
-    Hint,
-}
-
-impl From<Option<DiagnosticSeverity>> for Severity {
-    fn from(severity: Option<DiagnosticSeverity>) -> Self {
-        match severity {
-            Some(DiagnosticSeverity::ERROR) | None => Severity::Error,
-            Some(DiagnosticSeverity::WARNING) => Severity::Warning,
-            Some(DiagnosticSeverity::HINT) => Severity::Hint,
-            _ => Severity::Info, // INFORMATION or unknown severity
-        }
-    }
-}
-
-impl fmt::Display for Severity {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Severity::Error => write!(f, "error"),
-            Severity::Warning => write!(f, "warning"),
-            Severity::Info => write!(f, "info"),
-            Severity::Hint => write!(f, "hint"),
-        }
-    }
 }
 
 impl FormattedDiagnostic {
@@ -67,7 +37,7 @@ impl FormattedDiagnostic {
             file: uri_display(uri),
             line: diagnostic.range.start.line + 1,
             column: diagnostic.range.start.character + 1,
-            severity: diagnostic.severity.into(),
+            severity: diagnostic.severity.unwrap_or(DiagnosticSeverity::ERROR),
             message: diagnostic.message.clone(),
             code,
         }
@@ -76,7 +46,7 @@ impl FormattedDiagnostic {
 
 impl fmt::Display for FormattedDiagnostic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:{} {}", self.line, self.column, self.severity)?;
+        write!(f, "{}:{} {}", self.line, self.column, severity_label(self.severity))?;
         if let Some(code) = &self.code {
             write!(f, "[{code}]")?;
         }
@@ -89,10 +59,10 @@ pub fn count_by_severity(diagnostics: &[FormattedDiagnostic]) -> DiagnosticCount
     let mut counts = DiagnosticCounts::default();
     for d in diagnostics {
         match d.severity {
-            Severity::Error => counts.errors += 1,
-            Severity::Warning => counts.warnings += 1,
-            Severity::Info => counts.infos += 1,
-            Severity::Hint => counts.hints += 1,
+            DiagnosticSeverity::ERROR => counts.errors += 1,
+            DiagnosticSeverity::WARNING => counts.warnings += 1,
+            DiagnosticSeverity::HINT => counts.hints += 1,
+            _ => counts.infos += 1,
         }
     }
     counts.total = counts.errors + counts.warnings + counts.infos + counts.hints;
@@ -116,18 +86,27 @@ impl fmt::Display for DiagnosticCounts {
     }
 }
 
+fn severity_label(severity: DiagnosticSeverity) -> &'static str {
+    match severity {
+        DiagnosticSeverity::ERROR => "error",
+        DiagnosticSeverity::WARNING => "warning",
+        DiagnosticSeverity::HINT => "hint",
+        _ => "info",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::lsp::test_fixtures::{diagnostic, uri};
 
     #[test]
-    fn test_severity_conversion() {
-        assert_eq!(Severity::from(Some(DiagnosticSeverity::ERROR)), Severity::Error);
-        assert_eq!(Severity::from(Some(DiagnosticSeverity::WARNING)), Severity::Warning);
-        assert_eq!(Severity::from(Some(DiagnosticSeverity::INFORMATION)), Severity::Info);
-        assert_eq!(Severity::from(Some(DiagnosticSeverity::HINT)), Severity::Hint);
-        assert_eq!(Severity::from(None), Severity::Error);
+    fn a_diagnostic_without_a_severity_counts_as_an_error() {
+        let unspecified = Diagnostic { severity: None, ..diagnostic(DiagnosticSeverity::HINT, "no severity", 0) };
+
+        let formatted = FormattedDiagnostic::from_diagnostic(&uri("/path/to/file.rs"), &unspecified);
+
+        assert_eq!(formatted.severity, DiagnosticSeverity::ERROR);
     }
 
     #[test]
@@ -140,16 +119,9 @@ mod tests {
         assert_eq!(formatted.file, "/path/to/file.rs");
         assert_eq!(formatted.line, 6); // 1-indexed
         assert_eq!(formatted.column, 1);
-        assert_eq!(formatted.severity, Severity::Error);
+        assert_eq!(formatted.severity, DiagnosticSeverity::ERROR);
         assert_eq!(formatted.message, "test error");
         assert_eq!(formatted.to_string(), "6:1 error[E0308]: test error");
-    }
-
-    #[test]
-    fn severities_are_ordered_from_most_severe() {
-        assert!(Severity::Error < Severity::Warning);
-        assert!(Severity::Warning < Severity::Info);
-        assert!(Severity::Info < Severity::Hint);
     }
 
     #[test]

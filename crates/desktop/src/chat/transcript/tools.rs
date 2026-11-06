@@ -1,6 +1,6 @@
 use super::code::highlights;
 use super::groups::{GroupKind, Work};
-use crate::theme::DesktopTheme;
+use crate::ui::ActiveTheme;
 use crate::ui::tokens::{ICON_SIZE_SMALL, ROW_HEIGHT, rem};
 use crate::ui::{
     Button, ButtonVariant, CODE_FONT, ControlSize, Disclosure, Icon, IconName, Tooltip, Typography, TypographyExt,
@@ -159,7 +159,7 @@ pub(crate) fn fold_header(
 }
 
 impl<'a> ToolRenderer<'a> {
-    pub(crate) fn new(theme: &'a DesktopTheme, preview: &'a ToolPreview, actions: ToolActions) -> Self {
+    pub(crate) fn new(theme: &'a ActiveTheme, preview: &'a ToolPreview, actions: ToolActions) -> Self {
         Self { review: theme.review(), theme: theme.ui(), preview, actions }
     }
 

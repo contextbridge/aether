@@ -29,6 +29,7 @@ use crate::Displayed;
 use crate::workspace_paths::resolve_path;
 use aether_project::{PromptCatalog, PromptFile, SKILL_FILENAME};
 use utils::display_meta::ToolDisplayMeta;
+use walkdir::WalkDir;
 
 /// CLI arguments for `SkillsMcp` server
 #[derive(Debug, Clone, Parser)]
@@ -293,35 +294,15 @@ fn validate_path(skill_dir: &Path, relative_path: &str) -> Result<PathBuf, Skill
 }
 
 fn list_available_files(skill_dir: &Path) -> Vec<String> {
-    fn collect_files(dir: &Path, base: &Path, files: &mut Vec<String>) {
-        if let Ok(entries) = fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let name = entry.file_name();
-                let name_str = name.to_string_lossy();
-                if name_str.starts_with('.') {
-                    continue;
-                }
-
-                let path = entry.path();
-                if path.is_dir() {
-                    collect_files(&path, base, files);
-                } else if path.is_file() {
-                    if name_str == SKILL_FILENAME {
-                        continue;
-                    }
-
-                    if let Ok(relative) = path.strip_prefix(base) {
-                        files.push(relative.to_string_lossy().to_string());
-                    }
-                }
-            }
-        }
-    }
-
-    let mut files = Vec::new();
-    if skill_dir.is_dir() {
-        collect_files(skill_dir, skill_dir, &mut files);
-        files.sort();
-    }
+    let mut files: Vec<String> = WalkDir::new(skill_dir)
+        .follow_links(true)
+        .min_depth(1)
+        .into_iter()
+        .filter_entry(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
+        .flatten()
+        .filter(|entry| entry.file_type().is_file() && entry.file_name() != SKILL_FILENAME)
+        .filter_map(|entry| Some(entry.path().strip_prefix(skill_dir).ok()?.to_string_lossy().into_owned()))
+        .collect();
+    files.sort();
     files
 }

@@ -1,4 +1,4 @@
-use crate::agents::{AgentProfile, AgentTransport, CommandLine, Endpoint, EndpointSource};
+use crate::agents::{AgentProfile, AgentTransport, CommandLine, Endpoint, EndpointSource, expand_command_line};
 use acp_utils::websocket;
 use agent_client_protocol::v2::schema::{Implementation, SessionId};
 use agent_client_protocol::{self as acp, Agent, ByteStreams, Client, ConnectTo};
@@ -156,7 +156,7 @@ impl AgentConnector {
             SessionTarget::Agent { agent, cwd } => {
                 let connection = match &agent.config.transport {
                     AgentTransport::Stdio(command) => {
-                        self.transport.stdio(&command.expand(&agent.vars())?, cwd).await?
+                        self.transport.stdio(&expand_command_line(command, &agent.vars())?, cwd).await?
                     }
                     AgentTransport::WebSocket(source) => {
                         self.transport.websocket(&self.resolve(source, agent).await?, Duration::ZERO).await?
@@ -207,7 +207,9 @@ impl AgentConnector {
     async fn resolve(&self, source: &EndpointSource, agent: &AgentProfile) -> Result<Endpoint, ConnectError> {
         match source {
             EndpointSource::Fixed(endpoint) => Ok(endpoint.expand(&agent.vars())?),
-            EndpointSource::Command(line) => self.run_for_json(&line.expand(&agent.vars())?, &agent.workspace).await,
+            EndpointSource::Command(line) => {
+                self.run_for_json(&expand_command_line(line, &agent.vars())?, &agent.workspace).await
+            }
         }
     }
 
@@ -218,7 +220,7 @@ impl AgentConnector {
     async fn run_for_json<T: DeserializeOwned>(&self, line: &CommandLine, dir: &Path) -> Result<T, ConnectError> {
         let output = self.transport.run(line, dir).await?;
         serde_json::from_slice(&output)
-            .map_err(|source| ConnectError::CommandOutput { program: line.command.clone(), source })
+            .map_err(|source| ConnectError::CommandOutput { program: line.command().display().to_string(), source })
     }
 }
 
@@ -230,7 +232,7 @@ impl Transport for ProcessTransport {
                 .stdout(Stdio::piped())
                 .stderr(Stdio::inherit())
                 .spawn()
-                .map_err(|source| ConnectError::Spawn { program: line.command.clone(), source })?;
+                .map_err(|source| ConnectError::Spawn { program: line.command().display().to_string(), source })?;
             let (Some(stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
                 unreachable!("both pipes were requested at spawn");
             };
@@ -263,12 +265,12 @@ impl Transport for ProcessTransport {
                 .stdin(Stdio::null())
                 .output()
                 .await
-                .map_err(|source| ConnectError::Spawn { program: line.command.clone(), source })?;
+                .map_err(|source| ConnectError::Spawn { program: line.command().display().to_string(), source })?;
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 let last_line = stderr.lines().map(str::trim).rfind(|line| !line.is_empty()).unwrap_or_default();
                 return Err(ConnectError::CommandFailed {
-                    program: line.command.clone(),
+                    program: line.command().display().to_string(),
                     status: output.status,
                     stderr: last_line.to_owned(),
                 });
@@ -315,12 +317,12 @@ impl ConnectTo<Client> for AgentProcess {
 }
 
 fn command_line(invocation: &Invocation) -> CommandLine {
-    CommandLine { command: invocation.program.clone(), args: invocation.args.clone(), env: invocation.env.clone() }
+    CommandLine::new(&invocation.program).args(&invocation.args).envs(&invocation.env)
 }
 
 fn command(line: &CommandLine, dir: &Path) -> Command {
-    let mut command = Command::new(&line.command);
-    command.args(&line.args).envs(&line.env).current_dir(dir).kill_on_drop(true);
+    let mut command = Command::new(line.command());
+    command.args(line.arguments()).envs(line.environment()).current_dir(dir).kill_on_drop(true);
     command
 }
 

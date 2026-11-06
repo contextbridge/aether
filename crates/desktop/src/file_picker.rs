@@ -1,5 +1,5 @@
-use crate::theme::DesktopTheme;
 use crate::threads::{Thread, observe_thread};
+use crate::ui::ActiveTheme;
 use crate::ui::tokens::{MODAL_WIDTH, PICKER_LIST_HEIGHT, rem};
 use crate::ui::{PickerItem, SearchPicker, SearchPickerEvent};
 use clankerdiff_core::RepoPath;
@@ -13,7 +13,7 @@ pub(crate) struct FilePicker {
 
 impl FilePicker {
     pub(crate) fn new(thread: Entity<Thread>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let theme = DesktopTheme::global(cx).ui();
+        let theme = ActiveTheme::global(cx).ui();
         let picker = cx.new(|cx| {
             SearchPicker::new("file-picker", Vec::new(), theme, cx)
                 .max_matches(MAX_MATCHES)

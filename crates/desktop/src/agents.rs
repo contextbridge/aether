@@ -1,3 +1,5 @@
+pub use agent_client_protocol::AcpAgentConfig as CommandLine;
+
 use agent_client_protocol::AcpAgent;
 use gpui::Context;
 use serde::Deserialize;
@@ -44,16 +46,6 @@ pub struct AgentConfig {
 pub enum AgentTransport {
     Stdio(CommandLine),
     WebSocket(EndpointSource),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CommandLine {
-    pub command: String,
-    #[serde(default)]
-    pub args: Vec<String>,
-    #[serde(default)]
-    pub env: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -132,33 +124,14 @@ impl AgentProfile {
     }
 }
 
-impl CommandLine {
-    pub fn new(command: impl Into<String>) -> Self {
-        Self { command: command.into(), args: Vec::new(), env: BTreeMap::new() }
-    }
+pub fn parse_command_line(command_line: &str) -> Result<CommandLine, agent_client_protocol::Error> {
+    Ok(AcpAgent::from_str(command_line)?.into_config())
+}
 
-    #[must_use]
-    pub fn args(mut self, args: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        self.args.extend(args.into_iter().map(Into::into));
-        self
-    }
-
-    pub fn parse(command_line: &str) -> Result<Self, agent_client_protocol::Error> {
-        let config = AcpAgent::from_str(command_line)?.into_config();
-        Ok(Self {
-            command: config.command().to_string_lossy().into_owned(),
-            args: config.arguments().to_vec(),
-            env: config.environment().clone(),
-        })
-    }
-
-    pub(crate) fn expand(&self, vars: &Vars) -> Result<Self, VarError> {
-        Ok(Self {
-            command: vars.expand(&self.command)?,
-            args: self.args.iter().map(|arg| vars.expand(arg)).collect::<Result<_, _>>()?,
-            env: expand_values(&self.env, vars)?,
-        })
-    }
+pub(crate) fn expand_command_line(line: &CommandLine, vars: &Vars) -> Result<CommandLine, VarError> {
+    let command = vars.expand(&line.command().to_string_lossy())?;
+    let args = line.arguments().iter().map(|arg| vars.expand(arg)).collect::<Result<Vec<_>, _>>()?;
+    Ok(CommandLine::new(command).args(args).envs(expand_values(line.environment(), vars)?))
 }
 
 impl Endpoint {

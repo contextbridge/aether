@@ -1,6 +1,6 @@
 use crate::files::Dismissed;
-use crate::theme::DesktopTheme;
 use crate::threads::Thread;
+use crate::ui::ActiveTheme;
 use clankerdiff_core::ReviewCapabilities;
 use clankerdiff_gpui::{MarkdownReviewer, MarkdownReviewerOptions};
 use clankerdiff_markdown::{MarkdownDocument, MarkdownReviewDecision, MarkdownReviewEvent, MarkdownReviewSubmission};
@@ -25,8 +25,8 @@ impl ArtifactReview {
     pub(crate) fn new(thread: Entity<Thread>, cx: &mut Context<Self>) -> Self {
         let subscriptions = vec![
             cx.observe(&thread, |this, _, cx| this.sync(cx)),
-            cx.observe_global::<DesktopTheme>(|this, cx| {
-                let theme = DesktopTheme::global(cx).review().clone();
+            cx.observe_global::<ActiveTheme>(|this, cx| {
+                let theme = ActiveTheme::global(cx).review().clone();
                 if let Some(reviewer) = &this.reviewer {
                     reviewer.view.update(cx, |view, cx| view.set_theme(theme, cx));
                 }
@@ -78,7 +78,7 @@ impl Reviewer {
         let ArtifactReviewElicitationMeta { path, title, markdown, .. } = meta;
         let document =
             MarkdownDocument::parse_with_metadata(path.map(|path| path.display().to_string()), Some(title), markdown);
-        let theme = DesktopTheme::global(cx).review().clone();
+        let theme = ActiveTheme::global(cx).review().clone();
         let view = cx.new(|cx| {
             let options = MarkdownReviewerOptions { themes: false, ..MarkdownReviewerOptions::default() };
             let mut reviewer = MarkdownReviewer::with_options(Arc::new(document), theme, options);

@@ -1,6 +1,6 @@
 use crate::theme::Theme;
 use crate::view::selection::{SelectionState, scroll_into_view};
-use crate::view::widgets::{render_vertical_scrollbar, row_area, rows_and_track};
+use crate::view::widgets::{render_vertical_scrollbar, rows_and_track};
 use crate::view::wrap::{as_u16, fit_line};
 use clankerdiff_ratatui::theme::SelectionState as ThemeSelectionState;
 use ratatui::buffer::Buffer;
@@ -142,10 +142,7 @@ impl StatefulWidget for ListView<'_> {
         let content_width = usize::from(rows_area.width.saturating_sub(symbol_width));
         let highlight = highlight.unwrap_or_else(|| theme.selection_style(ThemeSelectionState::Selected));
 
-        for (drawn, index) in (offset..rows.len.min(offset + height)).enumerate() {
-            let Some(whole) = row_area(rows_area, drawn) else {
-                break;
-            };
+        for (index, whole) in (offset..rows.len.min(offset + height)).zip(rows_area.rows()) {
             let content = Rect { x: whole.x + symbol_width, width: whole.width.saturating_sub(symbol_width), ..whole };
             fit_line(rows.build(index), content_width, Style::default()).render(content, buf);
             if selected == Some(index) {

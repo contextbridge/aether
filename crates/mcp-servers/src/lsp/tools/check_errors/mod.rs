@@ -5,11 +5,11 @@
 
 use crate::Displayed;
 use crate::lsp::common::truncate_results;
-use crate::lsp::diagnostics::{DiagnosticCounts, FormattedDiagnostic, Severity, count_by_severity};
+use crate::lsp::diagnostics::{DiagnosticCounts, FormattedDiagnostic, count_by_severity};
 use crate::lsp::error::LspError;
 use crate::lsp::registry::LspRegistry;
 use crate::workspace_paths::relative_path;
-use lsp_types::Diagnostic;
+use lsp_types::{Diagnostic, DiagnosticSeverity};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -67,7 +67,7 @@ impl LspDiagnosticsOutput {
             .collect();
 
         let summary = count_by_severity(&diagnostics);
-        diagnostics.retain(|diagnostic| diagnostic.severity <= Severity::Warning);
+        diagnostics.retain(|diagnostic| diagnostic.severity <= DiagnosticSeverity::WARNING);
         diagnostics
             .sort_by(|a, b| (a.severity, &a.file, a.line, a.column).cmp(&(b.severity, &b.file, b.line, b.column)));
 
@@ -120,7 +120,6 @@ pub async fn execute_lsp_diagnostics(
 mod tests {
     use super::*;
     use crate::lsp::test_fixtures::{diagnostic, uri};
-    use lsp_types::DiagnosticSeverity;
     use tempfile::TempDir;
 
     fn workspace_request() -> LspDiagnosticsRequest {

@@ -679,7 +679,20 @@ fn page_down_scrolls_the_patch_view() {
 mod screen_mouse {
     use super::*;
     use clankerdiff_ratatui::diff::FileDiff;
-    use wisp::view::input::MouseAction;
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+    fn click(column: u16, row: u16) -> UiEvent {
+        UiEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        })
+    }
+
+    fn hover(column: u16, row: u16, modifiers: KeyModifiers) -> UiEvent {
+        UiEvent::Mouse(MouseEvent { kind: MouseEventKind::Moved, column, row, modifiers })
+    }
 
     fn open_screen() -> GitDiffScreen {
         git_diff_screen(vec![
@@ -718,7 +731,7 @@ mod screen_mouse {
         let before = render_git_diff(&mut screen, 120, 40);
         assert_drawer_focus(&before, false);
 
-        assert!(screen.on_ui_event(&UiEvent::Mouse(MouseAction::Click, (20, 3), KeyModifiers::NONE)).is_empty());
+        assert!(screen.on_ui_event(&click(20, 3)).is_empty());
 
         let buffer = render_git_diff(&mut screen, 120, 40);
         assert_drawer_focus(&buffer, true);
@@ -731,7 +744,7 @@ mod screen_mouse {
         let before = render_git_diff(&mut screen, 120, 40);
         assert_drawer_focus(&before, true);
 
-        assert!(screen.on_ui_event(&UiEvent::Mouse(MouseAction::Click, (60, 3), KeyModifiers::NONE)).is_empty());
+        assert!(screen.on_ui_event(&click(60, 3)).is_empty());
 
         let buffer = render_git_diff(&mut screen, 120, 40);
         assert_drawer_focus(&buffer, false);
@@ -744,13 +757,11 @@ mod screen_mouse {
         let before = render_git_diff(&mut screen, 60, 40);
         let (column, code_row) = position_of(&before, "pub fn library").expect("diff line");
 
-        assert!(
-            screen.on_ui_event(&UiEvent::Mouse(MouseAction::Click, (column, code_row), KeyModifiers::NONE)).is_empty()
-        );
+        assert!(screen.on_ui_event(&click(column, code_row)).is_empty());
         let selected = render_git_diff(&mut screen, 60, 40);
         assert!(!buffer_text(&selected).contains("save"), "a click on a line selects it without drafting");
 
-        assert!(screen.on_ui_event(&UiEvent::Mouse(MouseAction::Click, (2, code_row), KeyModifiers::NONE)).is_empty());
+        assert!(screen.on_ui_event(&click(2, code_row)).is_empty());
         let buffer = render_git_diff(&mut screen, 60, 40);
         assert!(buffer_text(&buffer).contains("save"), "a click in a line's gutter drafts a comment");
     }
@@ -762,7 +773,7 @@ mod screen_mouse {
         let before = render_git_diff(&mut screen, 120, 40);
 
         // Click at y=0 (top border) — should be ignored
-        assert!(screen.on_ui_event(&UiEvent::Mouse(MouseAction::Click, (40, 0), KeyModifiers::NONE)).is_empty());
+        assert!(screen.on_ui_event(&click(40, 0)).is_empty());
 
         let buffer = render_git_diff(&mut screen, 120, 40);
         assert_eq!(buffer, before, "border clicks must not alter selection or focus");
@@ -777,7 +788,7 @@ mod screen_mouse {
         let before = render_git_diff(&mut screen, 120, 40);
         let (column, row) = position_of(&before, "double(1)").expect("call site is visible");
 
-        screen.on_ui_event(&UiEvent::Mouse(MouseAction::Moved, (column, row), KeyModifiers::NONE));
+        screen.on_ui_event(&hover(column, row, KeyModifiers::NONE));
         let plain = render_git_diff(&mut screen, 120, 40);
         assert!(
             !buffer_text(&plain).contains("1 use in this diff"),
@@ -785,7 +796,7 @@ mod screen_mouse {
             buffer_text(&plain)
         );
 
-        screen.on_ui_event(&UiEvent::Mouse(MouseAction::Moved, (column + 1, row), KeyModifiers::CONTROL));
+        screen.on_ui_event(&hover(column + 1, row, KeyModifiers::CONTROL));
         let held = render_git_diff(&mut screen, 120, 40);
         assert!(
             buffer_text(&held).contains("1 use in this diff"),
@@ -799,7 +810,7 @@ mod screen_mouse {
         let mut screen = open_screen();
 
         render_git_diff(&mut screen, 60, 40);
-        assert!(screen.on_ui_event(&UiEvent::Mouse(MouseAction::Click, (20, 3), KeyModifiers::NONE)).is_empty());
+        assert!(screen.on_ui_event(&click(20, 3)).is_empty());
         screen.on_ui_event(&UiEvent::Key(key(KeyCode::Char('c'))));
         let draft = render_git_diff(&mut screen, 60, 40);
         assert!(buffer_text(&draft).contains("save"));
@@ -807,7 +818,7 @@ mod screen_mouse {
 
         let before = render_git_diff(&mut screen, 120, 40);
         assert_drawer_focus(&before, false);
-        assert!(screen.on_ui_event(&UiEvent::Mouse(MouseAction::Click, (20, 3), KeyModifiers::NONE)).is_empty());
+        assert!(screen.on_ui_event(&click(20, 3)).is_empty());
         let after = render_git_diff(&mut screen, 120, 40);
         assert_drawer_focus(&after, true);
     }

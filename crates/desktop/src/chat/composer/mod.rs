@@ -3,8 +3,8 @@ mod pasted;
 mod queued;
 
 use super::attachment::{chip, preview};
-use crate::theme::DesktopTheme;
 use crate::threads::{Thread, ThreadEvent, ThreadStatus, observe_thread};
+use crate::ui::ActiveTheme;
 use crate::ui::tokens::{COMPOSER_POPUP_HEIGHT, ICON_SIZE, ROW_HEIGHT, rem};
 use crate::ui::{
     Icon, IconButton, IconName, PickerItem, SearchPicker, SearchPickerEvent, SurfaceExt, Tooltip, Typography,
@@ -47,7 +47,7 @@ pub(crate) struct Composer {
 
 impl Composer {
     pub(crate) fn new(thread: Entity<Thread>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let style = editor_style(&DesktopTheme::global(cx).ui());
+        let style = editor_style(&ActiveTheme::global(cx).ui());
         let input = cx.new(|cx| {
             let mut input = TextareaState::new(window, cx)
                 .auto_grow(MIN_ROWS, MAX_ROWS)
@@ -88,8 +88,8 @@ impl Composer {
                     this.refresh_completion(cx);
                 }
             }),
-            cx.observe_global::<DesktopTheme>(|this, cx| {
-                let style = editor_style(&DesktopTheme::global(cx).ui());
+            cx.observe_global::<ActiveTheme>(|this, cx| {
+                let style = editor_style(&ActiveTheme::global(cx).ui());
                 this.input.update(cx, |input, cx| {
                     input.set_editor_style(style);
                     cx.notify();
@@ -328,7 +328,7 @@ impl Composer {
         if matches!(self.popup, Some(Popup::Search { .. })) || !self.thread.read(cx).can_search_prompts() {
             return;
         }
-        let theme = DesktopTheme::global(cx).ui();
+        let theme = ActiveTheme::global(cx).ui();
         let picker = cx.new(|cx| {
             SearchPicker::new("prompt-search", Vec::new(), theme, cx)
                 .unfiltered()
@@ -460,7 +460,7 @@ impl Composer {
     }
 
     fn render_actions(&self, cx: &mut Context<Self>) -> Div {
-        let theme = DesktopTheme::global(cx).ui();
+        let theme = ActiveTheme::global(cx).ui();
         let attach = IconButton::new("attach-files", IconName::Paperclip, "Attach files", theme)
             .on_click(cx.listener(|_, _: &ClickEvent, window, cx| Self::pick_files(window, cx)));
         let empty = self.text(cx).trim().is_empty() && self.media.is_empty();
@@ -477,7 +477,7 @@ impl Composer {
 
 impl Render for Composer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = DesktopTheme::global(cx).ui();
+        let theme = ActiveTheme::global(cx).ui();
         let focused = self.input.focus_handle(cx).is_focused(window);
         let queued = self
             .thread

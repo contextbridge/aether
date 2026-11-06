@@ -1,6 +1,6 @@
 use super::tokens::{BAR_HEIGHT, CONTENT_MAX_WIDTH, ICON_SIZE, RADIUS_CONTROL, rem};
 use super::{SearchPickerEvent, Tooltip, Typography, TypographyExt, UiTheme, WindowDragExt};
-use crate::theme::DesktopTheme;
+use crate::ui::ActiveTheme;
 #[cfg(target_os = "macos")]
 use gpui::point;
 use gpui::{
@@ -49,13 +49,13 @@ pub(crate) fn in_top_bar(child: impl IntoElement) -> Div {
 pub(crate) fn text_input(value: impl Into<SharedString>, window: &mut Window, cx: &mut App) -> Entity<InputState> {
     let value = value.into();
     cx.new(|cx| {
-        cx.observe_global::<DesktopTheme>(|input: &mut InputState, cx| {
-            input.set_editor_style(DesktopTheme::global(cx).ui().editor_style());
+        cx.observe_global::<ActiveTheme>(|input: &mut InputState, cx| {
+            input.set_editor_style(ActiveTheme::global(cx).ui().editor_style());
             cx.notify();
         })
         .detach();
         let mut input = InputState::new(window, cx).default_value(value);
-        input.set_editor_style(DesktopTheme::global(cx).ui().editor_style());
+        input.set_editor_style(ActiveTheme::global(cx).ui().editor_style());
         input
     })
 }

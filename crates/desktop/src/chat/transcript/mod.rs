@@ -8,8 +8,8 @@ pub(crate) use markdown::install as install_markdown;
 pub(crate) use message::reconnect_banner;
 
 use super::attachment::Attachment;
-use crate::theme::DesktopTheme;
 use crate::threads::{Thread, ThreadStatus};
+use crate::ui::ActiveTheme;
 use crate::ui::tokens::{ROW_HEIGHT, rem};
 use crate::ui::{EmptyState, Icon, IconName, ListScrollbar, NoticeTone, StyledExt, Tooltip, UiTheme};
 use crate::ui::{Typography, TypographyExt};
@@ -144,7 +144,7 @@ impl Transcript {
     }
 
     fn open_full_diff(&mut self, document: &Arc<DiffDocument>, window: &mut Window, cx: &mut Context<Self>) {
-        let theme = DesktopTheme::global(cx).review().clone();
+        let theme = ActiveTheme::global(cx).review().clone();
         let options = DiffViewerOptions { themes: false, review_bar: false, ..DiffViewerOptions::default() };
         let viewer = cx.new(|_| DiffViewer::with_options(document.clone(), theme, options));
         let cancelled = cx.subscribe(&viewer, |this, _, event: &DiffViewerEvent, cx| {
@@ -168,7 +168,7 @@ impl Transcript {
     }
 
     fn render_row(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
-        let desktop_theme = DesktopTheme::global(cx);
+        let desktop_theme = ActiveTheme::global(cx);
         let theme = desktop_theme.ui();
         let thread = self.thread.clone();
         let Some(items) = thread.read(cx).core().map(|core| core.conversation().items()) else {
@@ -294,7 +294,7 @@ impl Transcript {
                         cx.emit(location.clone());
                     })),
                 };
-                ToolRenderer::new(DesktopTheme::global(cx), self.tools.get(item, tool), actions)
+                ToolRenderer::new(ActiveTheme::global(cx), self.tools.get(item, tool), actions)
                     .render(tool, index, fold, toggle, show_all)
             }
             ConversationContent::Notice(Notice { level: NoticeLevel::Info, text }) => notice(text, theme),
@@ -310,7 +310,7 @@ impl Render for Transcript {
         for (index, id, text) in self.sync(cx) {
             self.update_reply(index, id, text, cx);
         }
-        let theme = DesktopTheme::global(cx).ui();
+        let theme = ActiveTheme::global(cx).ui();
         let thread = self.thread.clone();
         let thread = thread.read(cx);
         let status = thread.status();

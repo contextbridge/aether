@@ -1,6 +1,6 @@
 use aether_desktop::registry::STATE_FILE;
 use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder};
-use aether_desktop::{AppearanceMode, DesktopTheme};
+use aether_desktop::{ActiveTheme, AppearanceMode};
 use gpui::{TestAppContext, point, px};
 use std::fs;
 
@@ -129,7 +129,7 @@ fn the_app_starts_with_the_saved_theme(cx: &mut TestAppContext) {
 }
 
 fn theme_id(cx: &TestAppContext) -> String {
-    cx.read(|cx| DesktopTheme::global(cx).review().id().to_string())
+    cx.read(|cx| ActiveTheme::global(cx).review().id().to_string())
 }
 
 fn saved_mode(harness: &DesktopHarness, cx: &TestAppContext) -> AppearanceMode {

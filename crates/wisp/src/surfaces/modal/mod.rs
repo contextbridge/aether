@@ -4,7 +4,7 @@ mod url;
 
 use crate::renderer::DrawContext;
 use client_core::elicitation::{ElicitationAnswer, ElicitationId, FormField};
-use crossterm::event::KeyEvent;
+use crossterm::event::{KeyEvent, MouseEvent, MouseEventKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Position, Rect};
 use ratatui::text::Text;
@@ -15,7 +15,7 @@ use self::frame::{MODAL_HORIZONTAL_PADDING, MODAL_VERTICAL_CHROME, ModalFrame};
 use self::url::UrlModal;
 use crate::surfaces::input::UiOutput;
 use crate::theme::Theme;
-use crate::view::input::{MouseAction, UiEvent};
+use crate::view::input::{UiEvent, scroll_direction};
 use crate::view::widgets::{KeyHint, SCROLLBAR_WIDTH, key_hints};
 use crate::view::wrap::as_u16;
 
@@ -78,14 +78,14 @@ impl ElicitationModal {
                 }
                 None
             }
-            UiEvent::Mouse(MouseAction::Moved, ..) => None,
-            UiEvent::Mouse(action, (column, row), _) => {
-                if let Some(direction) = action.direction() {
+            UiEvent::Mouse(MouseEvent { kind: MouseEventKind::Moved, .. }) => None,
+            UiEvent::Mouse(mouse) => {
+                if let Some(direction) = scroll_direction(mouse.kind) {
                     if let ModalKind::Form(form) = &mut self.kind {
                         form.vertical(direction);
                     }
                 } else if let ModalKind::Form(form) = &mut self.kind {
-                    form.click(*column, *row);
+                    form.click(mouse.column, mouse.row);
                 }
                 None
             }

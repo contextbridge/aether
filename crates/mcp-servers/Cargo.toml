@@ -41,10 +41,11 @@ coding = [
     "dep:dom_smoothie",
     "dep:url",
 ]
-skills = ["dep:aether-project", "dep:regex"]
+skills = ["dep:aether-project", "dep:regex", "dep:walkdir"]
 tasks = [
     "dep:chrono",
     "dep:tempfile",
+    "dep:uuid",
 ]
 review = ["dep:axum", "dep:uuid", "dep:reqwest", "dep:tokio-util", "dep:tower-http", "tokio/net"]
 subagents = [
@@ -87,6 +88,7 @@ tower-http = { workspace = true, optional = true, features = ["fs"] }
 
 # skills feature
 regex = { workspace = true, optional = true }
+walkdir = { workspace = true, optional = true }
 
 # tasks feature
 tempfile = { workspace = true, optional = true }

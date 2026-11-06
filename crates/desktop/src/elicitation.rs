@@ -1,5 +1,5 @@
-use crate::theme::DesktopTheme;
 use crate::threads::Thread;
+use crate::ui::ActiveTheme;
 use crate::ui::UiTheme;
 use crate::ui::{Button, ButtonVariant, StyledExt, SurfaceExt, Typography, TypographyExt, text_field, text_input};
 use client_core::elicitation::{
@@ -174,7 +174,7 @@ impl Render for ElicitationCard {
         let Some((_, elicitation)) = self.thread.read(cx).elicitation() else {
             return div().into_any_element();
         };
-        let theme = DesktopTheme::global(cx).ui();
+        let theme = ActiveTheme::global(cx).ui();
         let message = elicitation.question();
         let (primary_id, primary_label) = primary(elicitation);
         let body = match elicitation {

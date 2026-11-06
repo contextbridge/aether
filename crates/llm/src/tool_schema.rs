@@ -1,5 +1,5 @@
 use schemars::Schema;
-use schemars::transform::{RemoveRefSiblings, Transform, transform_subschemas};
+use schemars::transform::{RecursiveTransform, RemoveRefSiblings, Transform};
 use serde_json::{Map, Value, json};
 
 use crate::{LlmError, ToolDefinition};
@@ -20,7 +20,7 @@ impl ToolDefinition {
 
 pub(crate) fn normalize_for_moonshot(schema: &mut Schema) {
     RemoveRefSiblings::default().transform(schema);
-    MoonshotMfjsTransformer.transform(schema);
+    RecursiveTransform(to_moonshot_mfjs).transform(schema);
 }
 
 /// Drops the `null` alternative from properties that are not `required`.
@@ -29,46 +29,34 @@ pub(crate) fn normalize_for_moonshot(schema: &mut Schema) {
 /// Xiaomi `MiMo`'s server-side tool-call parser corrupts streamed tool calls and leaks
 /// them into text when a parameter's type is a union.
 pub(crate) fn normalize_for_xiaomi(schema: &mut Schema) {
-    OptionalNullStripper.transform(schema);
+    RecursiveTransform(strip_optional_nulls).transform(schema);
 }
 
-struct OptionalNullStripper;
-
-impl Transform for OptionalNullStripper {
-    fn transform(&mut self, schema: &mut Schema) {
-        if let Some(obj) = schema.as_object_mut() {
-            let required = obj.get("required").and_then(Value::as_array).cloned().unwrap_or_default();
-            if let Some(Value::Object(properties)) = obj.get_mut("properties") {
-                properties
-                    .iter_mut()
-                    .filter(|(name, _)| !required.iter().any(|r| *r == name.as_str()))
-                    .filter_map(|(_, property)| property.as_object_mut())
-                    .for_each(remove_null_alternative);
-            }
+fn strip_optional_nulls(schema: &mut Schema) {
+    if let Some(obj) = schema.as_object_mut() {
+        let required = obj.get("required").and_then(Value::as_array).cloned().unwrap_or_default();
+        if let Some(Value::Object(properties)) = obj.get_mut("properties") {
+            properties
+                .iter_mut()
+                .filter(|(name, _)| !required.iter().any(|r| *r == name.as_str()))
+                .filter_map(|(_, property)| property.as_object_mut())
+                .for_each(remove_null_alternative);
         }
-
-        transform_subschemas(self, schema);
     }
 }
 
-struct MoonshotMfjsTransformer;
+fn to_moonshot_mfjs(schema: &mut Schema) {
+    if let Some(obj) = schema.as_object_mut() {
+        obj.remove("$schema");
+        obj.remove("title");
+        obj.remove("format");
+        obj.remove("$comment");
 
-impl Transform for MoonshotMfjsTransformer {
-    fn transform(&mut self, schema: &mut Schema) {
-        if let Some(obj) = schema.as_object_mut() {
-            obj.remove("$schema");
-            obj.remove("title");
-            obj.remove("format");
-            obj.remove("$comment");
-
-            if matches!(obj.get("type"), Some(Value::Array(_))) {
-                let Some(Value::Array(types)) = obj.remove("type") else { unreachable!() };
-                let any_of: Vec<Value> = types.into_iter().map(|t| json!({ "type": t })).collect();
-                obj.insert("anyOf".to_string(), Value::Array(any_of));
-            }
+        if matches!(obj.get("type"), Some(Value::Array(_))) {
+            let Some(Value::Array(types)) = obj.remove("type") else { unreachable!() };
+            let any_of: Vec<Value> = types.into_iter().map(|t| json!({ "type": t })).collect();
+            obj.insert("anyOf".to_string(), Value::Array(any_of));
         }
-
-        transform_subschemas(self, schema);
     }
 }
 
@@ -180,7 +168,7 @@ mod tests {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "type": "string"
         }));
-        MoonshotMfjsTransformer.transform(&mut schema);
+        RecursiveTransform(to_moonshot_mfjs).transform(&mut schema);
         assert_eq!(schema_to_value(&schema), json!({"type": "string"}));
     }
 
@@ -192,7 +180,7 @@ mod tests {
             "format": "uri",
             "$comment": "internal note"
         }));
-        MoonshotMfjsTransformer.transform(&mut schema);
+        RecursiveTransform(to_moonshot_mfjs).transform(&mut schema);
         assert_eq!(schema_to_value(&schema), json!({"type": "string"}));
     }
 
@@ -202,7 +190,7 @@ mod tests {
             "type": "string",
             "description": "A useful field"
         }));
-        MoonshotMfjsTransformer.transform(&mut schema);
+        RecursiveTransform(to_moonshot_mfjs).transform(&mut schema);
         assert_eq!(schema_to_value(&schema), json!({"type": "string", "description": "A useful field"}));
     }
 
@@ -218,7 +206,7 @@ mod tests {
                 }
             }
         }));
-        MoonshotMfjsTransformer.transform(&mut schema);
+        RecursiveTransform(to_moonshot_mfjs).transform(&mut schema);
         assert_eq!(
             schema_to_value(&schema),
             json!({
@@ -233,14 +221,14 @@ mod tests {
     #[test]
     fn sanitize_rewrites_nullable_type_array_to_anyof() {
         let mut schema = schema_from_value(json!({"type": ["string", "null"]}));
-        MoonshotMfjsTransformer.transform(&mut schema);
+        RecursiveTransform(to_moonshot_mfjs).transform(&mut schema);
         assert_eq!(schema_to_value(&schema), json!({"anyOf": [{"type": "string"}, {"type": "null"}]}));
     }
 
     #[test]
     fn sanitize_preserves_scalar_type() {
         let mut schema = schema_from_value(json!({"type": "string"}));
-        MoonshotMfjsTransformer.transform(&mut schema);
+        RecursiveTransform(to_moonshot_mfjs).transform(&mut schema);
         assert_eq!(schema_to_value(&schema), json!({"type": "string"}));
     }
 
@@ -252,7 +240,7 @@ mod tests {
             },
             "type": "object"
         }));
-        MoonshotMfjsTransformer.transform(&mut schema);
+        RecursiveTransform(to_moonshot_mfjs).transform(&mut schema);
         assert_eq!(
             schema_to_value(&schema),
             json!({

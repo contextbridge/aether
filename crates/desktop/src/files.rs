@@ -1,5 +1,5 @@
-use crate::theme::DesktopTheme;
 use crate::threads::{Thread, ThreadEvent, observe_thread};
+use crate::ui::ActiveTheme;
 use crate::ui::{EmptyState, NoticeTone};
 use clankerdiff_core::{DiffReviewCommand, DiffReviewEvent, DiffSide, FilesMode, RepoPath, SourcePath, TargetLocation};
 use clankerdiff_gpui::{DiffClientEvent, DiffClientView, DiffViewerOptions};
@@ -28,8 +28,8 @@ impl Files {
                 },
             ),
             cx.subscribe(&thread, |this, _, event: &ThreadEvent, cx| this.on_thread_event(event, cx)),
-            cx.observe_global::<DesktopTheme>(|this, cx| {
-                let theme = DesktopTheme::global(cx).review().clone();
+            cx.observe_global::<ActiveTheme>(|this, cx| {
+                let theme = ActiveTheme::global(cx).review().clone();
                 if let Some((view, _)) = &this.view {
                     view.update(cx, |view, cx| view.set_theme(theme, cx));
                 }
@@ -72,7 +72,7 @@ impl Files {
             return;
         };
         let (view, _) = self.view.get_or_insert_with(|| {
-            let theme = DesktopTheme::global(cx).review().clone();
+            let theme = ActiveTheme::global(cx).review().clone();
             let options = DiffViewerOptions { themes: false, review_bar: false, ..DiffViewerOptions::default() };
             let view = cx.new(|_| DiffClientView::with_options(theme, options));
             let subscription =
@@ -126,7 +126,7 @@ impl Render for Files {
         div()
             .debug_selector(|| "files-status".to_owned())
             .size_full()
-            .child(EmptyState::new(title, detail, NoticeTone::Neutral, DesktopTheme::global(cx).ui()))
+            .child(EmptyState::new(title, detail, NoticeTone::Neutral, ActiveTheme::global(cx).ui()))
             .into_any_element()
     }
 }

@@ -2,15 +2,15 @@ use super::Sidebar;
 use super::listing::{Row, RowKind};
 use crate::registry::Registry;
 use crate::remotes::{InstanceState, Lifecycle};
-use crate::theme::DesktopTheme;
 use crate::threads::{Thread, ThreadManager, ThreadStatus};
-use crate::ui::tokens::{RADIUS_INNER, UNREAD_DOT_SIZE, rem};
+use crate::ui::ActiveTheme;
+use crate::ui::tokens::{UNREAD_DOT_SIZE, rem};
 use crate::ui::{
-    Icon, IconButton, IconName, ListRow, MenuItem, StyledExt, Typography, TypographyExt, UiTheme, Waveform, hint,
-    icon_slot, tagged, text_selector, with_menu,
+    Icon, IconButton, IconName, InlineEdit, ListRow, MenuItem, StyledExt, Typography, TypographyExt, UiTheme, Waveform,
+    hint, icon_slot, tagged, text_selector, with_menu,
 };
 use gpui::{AnyElement, App, ClickEvent, Context, Div, Entity, MouseButton, WeakEntity, Window, div, prelude::*};
-use gpui_base::input::{Enter, Escape, Input, InputState};
+use gpui_base::input::InputState;
 
 pub(super) struct SidebarRow {
     sidebar: WeakEntity<Sidebar>,
@@ -48,7 +48,7 @@ impl SidebarRow {
 
 impl Render for SidebarRow {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = DesktopTheme::global(cx).ui();
+        let theme = ActiveTheme::global(cx).ui();
         let colors = theme.colors;
         let row = &self.row;
         let Row { icon, unread, selected, actions, kind, .. } = row;
@@ -255,23 +255,14 @@ fn trailing(
 
 fn editor(input: &Entity<InputState>, sidebar: &WeakEntity<Sidebar>, theme: &UiTheme) -> AnyElement {
     let (commit, cancel) = (sidebar.clone(), sidebar.clone());
-    div()
-        .debug_selector(|| "rename-input".to_owned())
-        .w_full()
-        .min_w_0()
-        .px_1()
-        .rounded(rem(RADIUS_INNER))
-        .border_1()
-        .border_color(theme.colors.accent)
-        .bg(theme.colors.canvas)
-        .on_action(move |_: &Enter, _, cx| {
+    let edit = InlineEdit::new(input, *theme)
+        .on_commit(move |_, cx| {
             let _ = commit.update(cx, Sidebar::commit_rename);
         })
-        .on_action(move |_: &Escape, _, cx| {
+        .on_cancel(move |_, cx| {
             let _ = cancel.update(cx, Sidebar::cancel_rename);
-        })
-        .child(Input::new(input))
-        .into_any_element()
+        });
+    div().debug_selector(|| "rename-input".to_owned()).w_full().min_w_0().child(edit).into_any_element()
 }
 
 fn status_icon(row: &str, status: ThreadStatus, theme: &UiTheme) -> AnyElement {
