@@ -148,7 +148,7 @@ impl PromptFile {
         };
 
         let yaml = noyalib::to_string(&frontmatter)?;
-        let yaml = normalize_frontmatter_yaml(&yaml);
+        let yaml = yaml.trim();
 
         let file_content = if self.body.is_empty() {
             format!("---\n{yaml}\n---\n")
@@ -241,12 +241,6 @@ fn split_frontmatter(content: &str) -> Option<(&str, &str)> {
     let rest = content.strip_prefix("---")?;
     let end_pos = rest.find("\n---")?;
     Some((&rest[..end_pos], rest[end_pos + 4..].trim()))
-}
-
-fn normalize_frontmatter_yaml(yaml: &str) -> &str {
-    let yaml = yaml.trim();
-    let yaml = yaml.strip_prefix("---\n").unwrap_or(yaml);
-    yaml.strip_suffix("\n...").unwrap_or(yaml).trim()
 }
 
 #[expect(clippy::trivially_copy_pass_by_ref)]
