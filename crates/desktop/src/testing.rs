@@ -169,12 +169,10 @@ impl DesktopHarnessBuilder {
             init(cx);
         });
         let registry = cx.new(|cx| Registry::load(self.state_dir.map(|dir| dir.join(STATE_FILE)), cx));
-        cx.update(|cx| {
-            Registry::update(&registry, cx, |state| {
-                for root in self.projects {
-                    state.add_project(root);
-                }
-            });
+        Registry::update(&registry, cx, |state| {
+            for root in self.projects {
+                state.add_project(root);
+            }
         });
         let window_size = self.window_size.unwrap_or_else(|| cx.read(|cx| window_size(&registry, cx)));
         let bounds = Bounds::new(point(px(0.0), px(0.0)), window_size);
