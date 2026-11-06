@@ -1,6 +1,6 @@
 use super::{Composer, ComposerLayout};
 use crate::theme::Theme;
-use crate::view::widgets::RowsView;
+use crate::view::widgets::render_rows;
 use crate::view::wrap::{fit_prefix, wrap_text_char};
 use client_core::composer::attachment::{AttachmentKind, classify_attachment};
 use ratatui::buffer::Buffer;
@@ -85,7 +85,7 @@ impl<'a> ComposerBodyView<'a> {
 
 impl Widget for ComposerBodyView<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        RowsView::new(&self.layout.lines[self.first_row.min(self.layout.lines.len())..]).render(area, buf);
+        render_rows(&self.layout.lines[self.first_row.min(self.layout.lines.len())..], area, buf);
     }
 }
 

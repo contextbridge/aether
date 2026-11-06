@@ -5,7 +5,7 @@ use crate::conversation::plan_view::PlanView;
 use crate::conversation::progress_indicator::{ProgressIndicator, ProgressIndicatorView};
 use crate::surfaces::composer::{ComposerBodyView, QueuedPromptsView};
 use crate::theme::Theme;
-use crate::view::widgets::RowsView;
+use crate::view::widgets::render_rows;
 use crate::view::wrap::as_u16;
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
@@ -66,7 +66,7 @@ fn draw_transcript(
     let [live_area, progress_area] =
         Layout::vertical([Constraint::Length(as_u16(live.len())), Constraint::Length(as_u16(progress_height))])
             .areas(area);
-    RowsView::new(live).render(live_area, buf);
+    render_rows(live, live_area, buf);
     ProgressIndicatorView::new(progress, theme, spinner_tick).render(layout.indent(progress_area), buf);
 }
 

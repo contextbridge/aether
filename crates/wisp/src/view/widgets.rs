@@ -1,6 +1,6 @@
 use crate::theme::Theme;
 use crate::view::edit_buffer::EditBuffer;
-use crate::view::wrap::{as_u16, fit_prefix};
+use crate::view::wrap::fit_prefix;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
@@ -27,37 +27,10 @@ pub fn rows_and_track(area: Rect, scrollbar: bool) -> (Rect, Rect) {
     (rows, track)
 }
 
-/// The full-width, one-row `Rect` for the `index`-th visible row of `area`, or
-/// nothing once `index` falls past the bottom.
-pub fn row_area(area: Rect, index: usize) -> Option<Rect> {
-    let offset = as_u16(index);
-    (offset < area.height).then(|| Rect { y: area.y + offset, height: 1, ..area })
-}
-
-/// Draws already-built rows directly into a buffer area.
-#[derive(Clone)]
-pub struct RowsView<'a> {
-    lines: Cow<'a, [Line<'static>]>,
-}
-
-impl<'a> RowsView<'a> {
-    pub fn new(lines: &'a [Line<'static>]) -> Self {
-        Self { lines: Cow::Borrowed(lines) }
-    }
-
-    pub fn from_lines(lines: impl IntoIterator<Item = Line<'static>>) -> Self {
-        Self { lines: Cow::Owned(lines.into_iter().collect()) }
-    }
-}
-
-impl Widget for RowsView<'_> {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        for (index, line) in self.lines.iter().enumerate() {
-            let Some(row) = row_area(area, index) else {
-                return;
-            };
-            line.render(row, buf);
-        }
+/// Draws already-built rows directly into a buffer area, stopping at its bottom.
+pub fn render_rows<'a>(lines: impl IntoIterator<Item = &'a Line<'a>>, area: Rect, buf: &mut Buffer) {
+    for (line, row) in lines.into_iter().zip(area.rows()) {
+        line.render(row, buf);
     }
 }
 

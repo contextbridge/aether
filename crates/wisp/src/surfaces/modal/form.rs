@@ -7,14 +7,13 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthStr;
 
 use crate::theme::Theme;
 use crate::view::edit_buffer::is_composed_char;
 use crate::view::edit_buffer::{EditBuffer, apply_edit_key};
 use crate::view::selection::{Direction, scroll_into_view, step_clamped};
-use crate::view::widgets::{KeyHint, RowsView, render_vertical_scrollbar, rows_and_track, visible_window};
+use crate::view::widgets::{KeyHint, render_rows, render_vertical_scrollbar, rows_and_track, visible_window};
 use crate::view::wrap::{as_u16, fit_line, wrap_line};
 
 /// One question per page, with a tab strip tracking progress and a review
@@ -535,7 +534,7 @@ impl FormModal {
                 .collect();
         }
 
-        RowsView::from_lines(page.lines.iter().skip(scroll).cloned()).render(rows_area, buf);
+        render_rows(page.lines.iter().skip(scroll), rows_area, buf);
         if page.lines.len() > height {
             render_vertical_scrollbar(track_area, buf, page.lines.len(), scroll);
         }
