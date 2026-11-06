@@ -3,9 +3,8 @@ use crate::view::edit_buffer::is_composed_char;
 use crate::view::input::{Nav, UiEvent};
 use crate::view::list_view::ListView;
 use crate::view::selection::{Direction, SelectionState};
+use clankerdiff_ui_core::{PickerOption, PickerState};
 use crossterm::event::KeyCode;
-use nucleo::pattern::{CaseMatching, Normalization, Pattern};
-use nucleo::{Config, Matcher, Utf32Str};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
@@ -19,7 +18,7 @@ use ratatui::widgets::StatefulWidget;
 #[derive(Clone, Debug)]
 pub struct FilterableList<T> {
     entries: Vec<T>,
-    match_keys: Vec<String>,
+    picker: PickerState,
     query: String,
     filtered_indices: Vec<usize>,
     selection: SelectionState,
@@ -30,12 +29,12 @@ pub struct FilterableList<T> {
 
 impl<T> FilterableList<T> {
     pub fn new(entries: Vec<T>, match_key: impl Fn(&T) -> String) -> Self {
-        let match_keys = entries.iter().map(&match_key).collect();
-        let filtered_indices = (0..entries.len()).collect();
+        let picker = PickerState::new(entries.iter().map(|entry| PickerOption::new(match_key(entry))).collect());
+        let filtered_indices = picker.matches().to_vec();
         let selection = SelectionState::new(entries.len());
         Self {
             entries,
-            match_keys,
+            picker,
             query: String::new(),
             filtered_indices,
             selection,
@@ -199,13 +198,10 @@ impl<T> FilterableList<T> {
     }
 
     fn refilter(&mut self) {
-        if self.query.is_empty() {
-            self.filtered_indices = (0..self.entries.len()).collect();
-        } else {
-            self.filtered_indices = fuzzy_filter(&self.query, &self.match_keys);
-            if self.preserve_order {
-                self.filtered_indices.sort_unstable();
-            }
+        self.picker.set_query(self.query.as_str());
+        self.filtered_indices = self.picker.matches().to_vec();
+        if self.preserve_order {
+            self.filtered_indices.sort_unstable();
         }
         self.selection.select_first(self.filtered_len());
         self.normalize_selection();
@@ -224,51 +220,5 @@ impl<T> FilterableList<T> {
         if self.filtered_indices.is_empty() {
             self.selection.set_offset(0);
         }
-    }
-}
-
-/// Fuzzy-filters `haystacks` against `query` using nucleo, returning matching
-/// indices sorted by match quality (best first).
-fn fuzzy_filter(query: &str, haystacks: &[String]) -> Vec<usize> {
-    let mut matcher = Matcher::new(Config::DEFAULT);
-    let pattern = Pattern::parse(query, CaseMatching::Smart, Normalization::Smart);
-    let mut buf = Vec::new();
-    let mut scored: Vec<(u32, usize)> = haystacks
-        .iter()
-        .enumerate()
-        .filter_map(|(index, haystack)| {
-            let utf32 = Utf32Str::new(haystack, &mut buf);
-            pattern.score(utf32, &mut matcher).map(|score| (score, index))
-        })
-        .collect();
-    scored.sort_by_key(|&(score, _)| std::cmp::Reverse(score));
-    scored.into_iter().map(|(_, index)| index).collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn fuzzy_filter_ranks_by_match_quality() {
-        let haystacks = vec!["alphabet".to_string(), "alpha".to_string(), "gamma".to_string()];
-        let result = fuzzy_filter("alp", &haystacks);
-        assert!(result.contains(&0));
-        assert!(result.contains(&1));
-        assert!(!result.contains(&2));
-    }
-
-    #[test]
-    fn fuzzy_filter_empty_query_returns_all() {
-        let haystacks = vec!["a".to_string(), "b".to_string()];
-        let result = fuzzy_filter("", &haystacks);
-        assert_eq!(result, vec![0, 1]);
-    }
-
-    #[test]
-    fn fuzzy_filter_case_insensitive() {
-        let haystacks = vec!["Alpha".to_string(), "beta".to_string()];
-        let result = fuzzy_filter("alp", &haystacks);
-        assert_eq!(result, vec![0]);
     }
 }
