@@ -63,28 +63,20 @@ struct ProviderData {
 struct ModelData {
     id: String,
     name: String,
-    #[serde(default)]
     tool_call: Option<bool>,
-    #[serde(default)]
     reasoning: Option<bool>,
     #[serde(default)]
     reasoning_options: Vec<ReasoningOption>,
-    #[serde(default)]
     cost: Option<CostData>,
-    #[serde(default)]
     limit: Option<LimitData>,
-    #[serde(default)]
     modalities: Option<ModalitiesData>,
-    #[serde(default)]
     provider: Option<ModelProviderData>,
 }
 
 /// Per-model transport override.
 #[derive(Debug, Deserialize)]
 struct ModelProviderData {
-    #[serde(default)]
     api: Option<String>,
-    #[serde(default)]
     shape: Option<String>,
 }
 
@@ -108,9 +100,7 @@ struct CostData {
     input: f64,
     #[serde(default)]
     output: f64,
-    #[serde(default)]
     cache_read: Option<f64>,
-    #[serde(default)]
     cache_write: Option<f64>,
 }
 

@@ -45,7 +45,6 @@ pub(crate) struct ResponsesFailedEvent {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct ResponsesFailed {
-    #[serde(default)]
     pub error: Option<ResponsesErrorEvent>,
 }
 
@@ -90,9 +89,7 @@ pub(crate) struct ResponsesCompletedEvent {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct ResponsesCompleted {
-    #[serde(default)]
     pub usage: Option<Usage>,
-    #[serde(default)]
     pub status: Option<Status>,
 }
 
@@ -107,7 +104,6 @@ pub(crate) enum Status {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct ResponsesErrorEvent {
-    #[serde(default)]
     pub code: Option<String>,
     #[serde(default)]
     pub message: String,
