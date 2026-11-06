@@ -1,5 +1,5 @@
-use crate::view::input::{MouseAction, Nav, UiEvent};
-use crossterm::event::KeyCode;
+use crate::view::input::{Nav, UiEvent, scroll_direction};
+use crossterm::event::{KeyCode, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 
 /// Cursor and scroll offset for a list of `len` items.
@@ -126,10 +126,12 @@ impl SelectionState {
                 KeyCode::Down => Direction::Forward,
                 _ => return Nav::Unhandled,
             },
-            UiEvent::Paste(_) | UiEvent::Mouse(MouseAction::Moved, ..) => return Nav::Unhandled,
-            UiEvent::Mouse(action, (_, row), _) => match action.direction() {
+            UiEvent::Paste(_) | UiEvent::Mouse(MouseEvent { kind: MouseEventKind::Moved, .. }) => {
+                return Nav::Unhandled;
+            }
+            UiEvent::Mouse(mouse) => match scroll_direction(mouse.kind) {
                 Some(direction) => direction,
-                None if self.select_at(*row, len, selectable) => return Nav::Clicked,
+                None if self.select_at(mouse.row, len, selectable) => return Nav::Clicked,
                 None => return Nav::Unhandled,
             },
         };
