@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.2](https://github.com/contextbridge/aether/compare/aether-utils-v0.3.1...aether-utils-v0.3.2) - 2026-11-06
+
+### Other
+
+- replace hand-rolled code with existing dependencies ([#652](https://github.com/contextbridge/aether/pull/652))
+
 ## [0.3.1](https://github.com/contextbridge/aether/compare/aether-utils-v0.3.0...aether-utils-v0.3.1) - 2026-11-03
 
 ### Added

@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.0](https://github.com/contextbridge/aether/compare/aether-wisp-v0.7.20...aether-wisp-v0.8.0) - 2026-11-06
+
+### Other
+
+- replace hand-rolled code with existing dependencies ([#652](https://github.com/contextbridge/aether/pull/652))
+- *(deps)* [**breaking**] upgrade rmcp to 3.8 and agent-client-protocol to 5.0 ([#648](https://github.com/contextbridge/aether/pull/648))
+- *(deps)* bump clankerdiff to 0.10 and gpui-pre to 0.3.11 ([#646](https://github.com/contextbridge/aether/pull/646))
+
 ## [0.7.20](https://github.com/contextbridge/aether/compare/aether-wisp-v0.7.19...aether-wisp-v0.7.20) - 2026-11-03
 
 ### Added

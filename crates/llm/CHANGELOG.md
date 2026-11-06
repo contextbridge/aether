@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.20](https://github.com/contextbridge/aether/compare/aether-llm-v0.9.19...aether-llm-v0.9.20) - 2026-11-06
+
+### Fixed
+
+- *(llm)* route codex prompt cache by session ([#653](https://github.com/contextbridge/aether/pull/653))
+
+### Other
+
+- replace hand-rolled code with existing dependencies ([#652](https://github.com/contextbridge/aether/pull/652))
+
 ## [0.9.19](https://github.com/contextbridge/aether/compare/aether-llm-v0.9.18...aether-llm-v0.9.19) - 2026-11-03
 
 ### Added

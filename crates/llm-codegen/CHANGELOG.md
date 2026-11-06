@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.36](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.35...aether-llm-codegen-v0.2.36) - 2026-11-06
+
+### Other
+
+- replace hand-rolled code with existing dependencies ([#652](https://github.com/contextbridge/aether/pull/652))
+
 ## [0.2.35](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.2.34...aether-llm-codegen-v0.2.35) - 2026-11-03
 
 ### Added

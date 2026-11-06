@@ -1,6 +1,6 @@
 [package]
 name = "aether-mcp-utils"
-version = "0.7.17"
+version = "0.8.0"
 edition = "2024"
 description = "MCP client and server utilities for the Aether AI agent framework"
 license = "MIT"
@@ -54,7 +54,7 @@ uuid = { workspace = true }
 
 # client-only deps
 axum = { workspace = true, optional = true }
-aether-auth = { path = "../aether-auth", version = "0.1.21", optional = true }
+aether-auth = { path = "../aether-auth", version = "0.1.22", optional = true }
 async-stream = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
@@ -64,7 +64,7 @@ serde_json = { workspace = true, optional = true }
 # Must match the sse-stream version in the signature of rmcp's StreamableHttpClient.
 sse-stream = { version = "0.2.6", optional = true }
 tokio-stream = { workspace = true, features = ["sync"], optional = true }
-utils = { package = "aether-utils", path = "../utils", version = "0.3.1", optional = true }
+utils = { package = "aether-utils", path = "../utils", version = "0.3.2", optional = true }
 
 [[test]]
 name = "client"
