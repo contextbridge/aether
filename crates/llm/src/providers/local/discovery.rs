@@ -1,5 +1,6 @@
 use crate::catalog::LlmModel;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use std::time::Duration;
 use tracing::debug;
 
@@ -14,50 +15,29 @@ pub async fn discover_ollama() -> Vec<LlmModel> {
     let base = std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://localhost:11434".to_string());
     let url = format!("{base}/api/tags");
 
-    let Some(body) = fetch(&url).await else {
-        return Vec::new();
-    };
-
-    match serde_json::from_str::<OllamaTagsResponse>(&body) {
-        Ok(resp) => resp.models.into_iter().map(|m| LlmModel::Ollama(m.name)).collect(),
-        Err(e) => {
-            debug!("Failed to parse Ollama response: {e}");
-            Vec::new()
-        }
-    }
+    fetch::<OllamaTagsResponse>(&url)
+        .await
+        .map_or_else(Vec::new, |resp| resp.models.into_iter().map(|m| LlmModel::Ollama(m.name)).collect())
 }
 
 pub async fn discover_llama_cpp() -> Vec<LlmModel> {
     let base = std::env::var("LLAMA_CPP_HOST").unwrap_or_else(|_| "http://localhost:8080".to_string());
     let url = format!("{base}/v1/models");
 
-    let Some(body) = fetch(&url).await else {
-        return Vec::new();
-    };
-
-    match serde_json::from_str::<OpenAiModelsResponse>(&body) {
-        Ok(resp) => resp.data.into_iter().map(|m| LlmModel::LlamaCpp(m.id)).collect(),
-        Err(e) => {
-            debug!("Failed to parse LlamaCpp response: {e}");
-            Vec::new()
-        }
-    }
+    fetch::<OpenAiModelsResponse>(&url)
+        .await
+        .map_or_else(Vec::new, |resp| resp.data.into_iter().map(|m| LlmModel::LlamaCpp(m.id)).collect())
 }
 
-async fn fetch(url: &str) -> Option<String> {
+async fn fetch<T: DeserializeOwned>(url: &str) -> Option<T> {
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(2))
         .timeout(Duration::from_secs(3))
         .build()
         .ok()?;
 
-    match client.get(url).send().await {
-        Ok(resp) => resp.text().await.ok(),
-        Err(e) => {
-            debug!("Failed to reach {url}: {e}");
-            None
-        }
-    }
+    let response: Result<T, reqwest::Error> = async { client.get(url).send().await?.json().await }.await;
+    response.inspect_err(|error| debug!("Failed to fetch {url}: {error}")).ok()
 }
 
 #[derive(Deserialize)]
