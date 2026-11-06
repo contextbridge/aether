@@ -223,10 +223,12 @@ impl Sidebar {
             let Some(paths) = picked.await.ok().and_then(Result::ok).flatten() else {
                 return;
             };
-            Registry::update(&registry, cx, |state| {
-                for path in paths {
-                    state.add_project(git_root(&path));
-                }
+            cx.update(|cx| {
+                Registry::update(&registry, cx, |state| {
+                    for path in paths {
+                        state.add_project(git_root(&path));
+                    }
+                });
             });
         })
         .detach();

@@ -1,19 +1,14 @@
 use agent_client_protocol::v2::schema::SessionId;
+use clankerdiff_gpui_shell::persist::Store;
 use clankerdiff_ui_core::ThemePreference;
-use gpui::{AppContext, Context, Entity, Pixels, Size, Subscription};
+use gpui::{Pixels, Size};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use utils::fs::{read_json, write_json_atomic};
+use std::path::PathBuf;
 
 pub const STATE_FILE: &str = "state.json";
 
-pub struct Registry {
-    state: State,
-    saver: Option<Arc<Saver>>,
-    _quit: Subscription,
-}
+pub type Registry = Store<State>;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -40,40 +35,6 @@ pub enum Collapsed {
 
 pub fn default_state_file() -> Option<PathBuf> {
     utils::path::aether_home().map(|home| home.join("desktop").join(STATE_FILE))
-}
-
-impl Registry {
-    pub fn load(file: Option<PathBuf>, cx: &mut Context<Self>) -> Self {
-        let state = file.as_deref().map(read_state).unwrap_or_default();
-        let saver = file.map(|file| Arc::new(Saver { file, pending: Mutex::default(), writing: Mutex::default() }));
-        let quit = cx.on_app_quit(|this: &mut Self, _| {
-            if let Some(saver) = &this.saver {
-                *lock(&saver.pending) = Some(this.state.clone());
-                saver.save();
-            }
-            async {}
-        });
-        Self { state, saver, _quit: quit }
-    }
-
-    pub fn state(&self) -> &State {
-        &self.state
-    }
-
-    pub fn update(registry: &Entity<Self>, cx: &mut impl AppContext, change: impl FnOnce(&mut State)) {
-        registry.update(cx, |this, cx| {
-            let before = this.state.clone();
-            change(&mut this.state);
-            if this.state == before {
-                return;
-            }
-            cx.notify();
-            if let Some(saver) = this.saver.clone() {
-                *lock(&saver.pending) = Some(this.state.clone());
-                cx.background_spawn(async move { saver.save() }).detach();
-            }
-        });
-    }
 }
 
 impl State {
@@ -103,38 +64,8 @@ impl State {
     }
 }
 
-struct Saver {
-    file: PathBuf,
-    pending: Mutex<Option<State>>,
-    writing: Mutex<()>,
-}
-
-impl Saver {
-    fn save(&self) {
-        let _writing = lock(&self.writing);
-        let Some(state) = lock(&self.pending).take() else {
-            return;
-        };
-        if let Err(error) = write_json_atomic(&self.file, &state) {
-            tracing::warn!(%error, "could not save the desktop state");
-        }
-    }
-}
-
 fn toggle<T: Eq + std::hash::Hash>(set: &mut HashSet<T>, value: T) {
     if !set.remove(&value) {
         set.insert(value);
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-fn read_state(file: &Path) -> State {
-    read_json::<State>(file)
-        .inspect_err(|error| tracing::warn!(%error, "starting with no saved desktop state"))
-        .ok()
-        .flatten()
-        .unwrap_or_default()
 }
