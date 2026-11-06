@@ -1,5 +1,5 @@
 use futures::future::join_all;
-use regex::Regex;
+use regex::{Captures, Regex};
 use std::env;
 use std::path::Path;
 use std::sync::LazyLock;
@@ -9,34 +9,16 @@ use tokio::process::Command;
 /// `$SHELL -c` (fallback `sh`) from `cwd` and substituting the trimmed stdout.
 /// Returns `content` unchanged if no markers are present.
 pub async fn expand_shell(content: &str, cwd: &Path) -> String {
-    if !SHELL_MARKER.is_match(content) {
-        return content.to_string();
-    }
+    let commands = SHELL_MARKER.captures_iter(content).map(|captures| {
+        let (_, [command]) = captures.extract();
+        run(command, cwd)
+    });
+    let mut outputs = join_all(commands)
+        .await
+        .into_iter()
+        .map(|output| output.inspect_err(|error| tracing::warn!("{error}")).unwrap_or_default());
 
-    let spans: Vec<(usize, usize, &str)> = SHELL_MARKER
-        .captures_iter(content)
-        .filter_map(|captures| {
-            let whole = captures.get(0)?;
-            let cmd = captures.get(1)?;
-            Some((whole.start(), whole.end(), cmd.as_str()))
-        })
-        .collect();
-
-    let outputs = join_all(spans.iter().map(|(_, _, cmd)| run(cmd, cwd))).await;
-    let mut out = String::with_capacity(content.len());
-    let mut last = 0;
-
-    for ((start, end, _), result) in spans.iter().zip(outputs) {
-        out.push_str(&content[last..*start]);
-        match result {
-            Ok(output) => out.push_str(&output),
-            Err(err) => tracing::warn!("{err}"),
-        }
-        last = *end;
-    }
-
-    out.push_str(&content[last..]);
-    out
+    SHELL_MARKER.replace_all(content, |_: &Captures<'_>| outputs.next().unwrap_or_default()).into_owned()
 }
 
 #[derive(Debug, thiserror::Error)]
