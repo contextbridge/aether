@@ -1,4 +1,4 @@
-use crate::agents::CommandLine;
+use crate::agents::{CommandLine, parse_command_line};
 use clap::Parser;
 
 pub const DEFAULT_AGENT_COMMAND: &str = "aether acp";
@@ -17,5 +17,5 @@ pub struct Cli {
 }
 
 fn parse_agent_command(command_line: &str) -> Result<CommandLine, String> {
-    CommandLine::parse(command_line).map_err(|error| error.to_string())
+    parse_command_line(command_line).map_err(|error| error.to_string())
 }

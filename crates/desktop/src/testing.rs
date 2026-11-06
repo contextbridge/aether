@@ -1,4 +1,4 @@
-use crate::agents::{Agents, CommandLine, Endpoint};
+use crate::agents::{Agents, CommandLine, Endpoint, parse_command_line};
 use crate::clock::Clock;
 use crate::history::History;
 use crate::registry::{Registry, STATE_FILE};
@@ -184,7 +184,7 @@ impl DesktopHarnessBuilder {
             transport: Arc::new(self.connector.clone()),
             clock: Arc::new(FakeClock(self.now)),
             agents: Agents::new(
-                CommandLine::parse(DEFAULT_AGENT_COMMAND).expect("the default agent command parses"),
+                parse_command_line(DEFAULT_AGENT_COMMAND).expect("the default agent command parses"),
                 None,
             ),
             remotes: Arc::new(self.connector.remotes().clone()),
@@ -274,7 +274,7 @@ impl Transport for FakeConnector {
     fn stdio<'a>(&'a self, line: &'a CommandLine, dir: &'a Path) -> TransportFuture<'a, Connection> {
         Box::pin(async move {
             let agent = self.lock().take(dir).ok_or_else(|| ConnectError::Spawn {
-                program: line.command.clone(),
+                program: line.command().display().to_string(),
                 source: io::Error::new(io::ErrorKind::NotFound, "no fake agent is scripted for this directory"),
             })?;
             let (agent_transport, client_transport) = Channel::duplex();
