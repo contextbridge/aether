@@ -760,17 +760,7 @@ impl TestUiBuilder {
 
 /// Whether any cell drawn with `symbol` satisfies `predicate`.
 pub fn has_cell(buffer: &Buffer, symbol: &str, predicate: impl Fn(&Cell) -> bool) -> bool {
-    for y in buffer.area.top()..buffer.area.bottom() {
-        for x in buffer.area.left()..buffer.area.right() {
-            if let Some(cell) = buffer.cell((x, y))
-                && cell.symbol() == symbol
-                && predicate(cell)
-            {
-                return true;
-            }
-        }
-    }
-    false
+    buffer.content().iter().any(|cell| cell.symbol() == symbol && predicate(cell))
 }
 
 pub fn line_text(line: &ratatui::text::Line<'_>) -> String {
