@@ -8,6 +8,7 @@ use crate::remotes::{
 use crate::threads::{Thread, ThreadManager, ThreadRef, ThreadStatus};
 use agent_client_protocol::v2::schema::SessionId;
 use chrono::{DateTime, Duration, Utc};
+use clankerdiff_core::format_age;
 use gpui::{App, Entity};
 use gpui_base::input::InputState;
 use std::collections::{HashMap, HashSet};
@@ -350,13 +351,5 @@ fn saved_thread(session: &SavedSession) -> ThreadRef {
 }
 
 fn relative_time(then: DateTime<Utc>, now: DateTime<Utc>) -> String {
-    let elapsed = now.signed_duration_since(then);
-    match (elapsed.num_minutes(), elapsed.num_hours(), elapsed.num_days()) {
-        (..1, _, _) => "now".to_owned(),
-        (minutes, ..1, _) => format!("{minutes}m"),
-        (_, hours, ..1) => format!("{hours}h"),
-        (_, _, days @ ..7) => format!("{days}d"),
-        (_, _, days @ ..365) => format!("{}w", days / 7),
-        (_, _, days) => format!("{}y", days / 365),
-    }
+    format_age(u64::try_from(now.signed_duration_since(then).num_seconds()).unwrap_or(0))
 }
