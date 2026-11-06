@@ -64,7 +64,6 @@ clankerdiff-syntax = { workspace = true }
 clankerdiff-ui-core = { workspace = true }
 gpui = { workspace = true }
 gpui-base = { workspace = true }
-gpui_platform = { workspace = true }
 clap = { workspace = true }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 serde = { workspace = true }

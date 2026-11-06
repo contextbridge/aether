@@ -31,7 +31,7 @@ pub use ui::ActiveTheme;
 use aether_sessions::SessionStore;
 use agents::{Agents, default_agents_file};
 use clankerdiff_gpui::{DiffViewer, MarkdownReviewer};
-use clankerdiff_gpui_shell::{run_loop, runtime};
+use clankerdiff_gpui_shell::runtime;
 use clankerdiff_remote::CommandRemotes;
 use cli::Cli;
 use clock::SystemClock;
@@ -47,11 +47,9 @@ pub fn run(cli: Cli) {
     aws_lc_rs::default_provider().install_default().expect("failed to install the Rustls AWS-LC crypto provider");
     let runtime = runtime::build();
     let handle = runtime.handle().clone();
-    gpui_platform::application().run(move |cx: &mut App| {
+    clankerdiff_gpui_shell::launch(move |cx: &mut App| {
         runtime::install(cx, handle);
-        ui::load_fonts(cx).expect("failed to load the bundled fonts");
         init(cx);
-        run_loop::install(cx);
         let state_file = default_state_file();
         if state_file.is_none() {
             tracing::warn!("no home directory, so nothing is remembered between runs");
@@ -69,7 +67,6 @@ pub fn run(cli: Cli) {
         };
         cx.open_window(window_options(bounds), |window, cx| cx.new(|cx| DesktopApp::new(config, window, cx)))
             .expect("failed to open the main window");
-        cx.activate(true);
     });
     runtime.shutdown_background();
 }
