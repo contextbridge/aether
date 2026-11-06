@@ -9,9 +9,10 @@ use agent_client_protocol::v2::schema as acp;
 use client_core::format::token_count;
 use client_core::session_core::SessionCore;
 use gpui::{
-    Anchor, AnyElement, App, ClickEvent, Context, Div, Entity, FontFeatures, Hsla, PathBuilder, Role, Stateful,
-    Subscription, Window, anchored, canvas, deferred, div, point, prelude::*, px, relative,
+    Anchor, AnyElement, App, ClickEvent, Context, Div, Entity, FontFeatures, Hsla, Role, Stateful, Subscription,
+    Window, anchored, canvas, deferred, div, prelude::*, relative,
 };
+use gpui_base::plot::shape;
 use std::f32::consts::TAU;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -322,29 +323,11 @@ fn context_ring(fraction: f32, color: Hsla, track: Hsla) -> Div {
         canvas(
             |_, _, _| (),
             move |bounds, (), window, _| {
-                let stroke = bounds.size.width * (RING_STROKE_WIDTH / ICON_SIZE);
-                let radius = (bounds.size.width - stroke) / 2.0;
-                let center = bounds.center();
-                let at = |fraction: f32| {
-                    let angle = fraction * TAU;
-                    point(center.x + radius * angle.sin(), center.y - radius * angle.cos())
-                };
+                let outer_radius = bounds.size.width.as_f32() / 2.0;
+                let stroke = bounds.size.width.as_f32() * (RING_STROKE_WIDTH / ICON_SIZE);
+                let ring = shape::Arc::new().outer_radius(outer_radius).inner_radius(outer_radius - stroke);
                 for (sweep, color) in [(1.0, track), (fraction, color)] {
-                    if sweep == 0.0 {
-                        continue;
-                    }
-                    let mut path = PathBuilder::stroke(stroke);
-                    path.move_to(at(0.0));
-                    path.arc_to(point(radius, radius), px(0.0), false, true, at(sweep.min(0.5)));
-                    if sweep > 0.5 {
-                        path.arc_to(point(radius, radius), px(0.0), false, true, at(sweep));
-                    }
-                    if sweep >= 1.0 {
-                        path.close();
-                    }
-                    if let Ok(path) = path.build() {
-                        window.paint_path(path, color);
-                    }
+                    ring.paint(&shape::ArcData::new(&(), 0, sweep, 0.0, sweep * TAU), color, &bounds, window);
                 }
             },
         )
