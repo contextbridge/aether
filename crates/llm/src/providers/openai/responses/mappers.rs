@@ -52,6 +52,7 @@ impl ResponsesRequestPolicy {
         text_verbosity: Some("medium"),
         tool_strict: None,
         parallel_tool_calls: Some(true),
+        prompt_cache_key: PromptCacheKeySource::SessionAffinity,
         ..Self::OPENAI
     };
 
