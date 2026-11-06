@@ -12,8 +12,8 @@ use crate::threads::{Thread, ThreadManager};
 use crate::ui::ActiveTheme;
 use crate::ui::tokens::{ROW_HEIGHT, TWO_LINE_ROW_HEIGHT, rem};
 use crate::ui::{
-    Icon, IconButton, IconName, ListRow, MenuItem, PanelSide, ResizablePanel, SectionHeader, StyledExt, TreeRow,
-    Typography, TypographyExt, UiTheme, icon_slot, in_top_bar, tagged, text_input, tokens, with_menu,
+    Icon, IconButton, IconName, InlineEdit, ListRow, MenuItem, PanelSide, ResizablePanel, SectionHeader, StyledExt,
+    TreeRow, Typography, TypographyExt, UiTheme, icon_slot, in_top_bar, tagged, tokens, with_menu,
 };
 use crate::{OpenSettings, OpenThreadSwitcher};
 use agent_client_protocol::v2::schema::SessionId;
@@ -249,11 +249,7 @@ impl Sidebar {
     }
 
     fn start_rename(&mut self, session_id: SessionId, title: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let input = text_input(title.to_owned(), window, cx);
-        input.update(cx, |input, cx| {
-            input.focus(window, cx);
-            input.select_all(window, cx);
-        });
+        let input = InlineEdit::input(title.to_owned(), ActiveTheme::global(cx).ui(), window, cx);
         self.rename = Some(Rename { session_id, input });
         self.rebuild(cx);
     }
