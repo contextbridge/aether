@@ -7,6 +7,8 @@ Review MCP opens agent-authored artifacts for human review. It supports:
 - **Markdown** (`format: "markdown"`) opens in Aether's in-terminal Markdown review UI.
 - **HTML** (`format: "html"`) opens in your browser with an annotation overlay for element-level comments.
 
+`format` is optional for file sources ending in `.md`, `.markdown`, `.html`, or `.htm` and for URL sources (always HTML). It is required for inline content.
+
 ```json
 {
   "servers": {
