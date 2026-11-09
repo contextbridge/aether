@@ -43,7 +43,7 @@ pub struct QueryArgs {
     pub max_rows: usize,
     #[arg(long, default_value_t = 1000)]
     pub max_cell_chars: usize,
-    #[arg(long, default_value_t = 2000)]
+    #[arg(long, default_value_t = 30_000)]
     pub timeout_ms: u64,
     #[arg(required = true, trailing_var_arg = true)]
     pub sql: Vec<String>,

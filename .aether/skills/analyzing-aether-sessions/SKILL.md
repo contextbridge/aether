@@ -29,6 +29,7 @@ Use `aether-session-index` to answer factual questions about past sessions. Aggr
    ```bash
    cargo run -p aether-session-index -- query '<sql>'
    ```
+   The default `--timeout-ms` is 30000; raise it for heavy aggregates on large indexes.
 
 ## Rules
 
