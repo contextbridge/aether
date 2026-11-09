@@ -4,11 +4,13 @@ Use this tool to request feedback from the user on an artifact. Submit Markdown 
 
 ```json
 {"format": "markdown", "source": {"type": "content", "content": "# Question\n\nShould we use Postgres or DynamoDB?"}, "title": "Choose a database"}
-{"format": "markdown", "source": {"type": "file", "path": "docs/aether/plans/feature.md"}}
+{"source": {"type": "file", "path": "docs/aether/plans/feature.md"}}
 {"format": "html", "source": {"type": "content", "content": "<main><h1>Ship faster</h1></main>"}, "title": "Landing page"}
-{"format": "html", "source": {"type": "file", "path": "site/index.html"}}
-{"format": "html", "source": {"type": "url", "url": "http://localhost:5173/settings"}, "title": "Settings page"}
+{"source": {"type": "file", "path": "site/index.html"}}
+{"source": {"type": "url", "url": "http://localhost:5173/settings"}, "title": "Settings page"}
 ```
+
+`source` is a JSON object, not a string. `format` is inferred for `.md`/`.markdown`/`.html`/`.htm` files and for URLs (always `html`); pass it for inline `content`.
 
 ## Returns
 
