@@ -16,7 +16,8 @@ use rmcp::{
     service::{ElicitationMode, RequestContext},
 };
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
+use serde_json::Value;
 use std::path::{Path, PathBuf};
 use utils::artifact_review::{ArtifactReviewDecision, ArtifactReviewElicitationMeta, ArtifactReviewSubmission};
 
@@ -25,7 +26,10 @@ const REVIEW: &str = "review";
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ReviewArtifactInput {
-    pub format: ArtifactFormat,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "ArtifactFormat")]
+    pub format: Option<ArtifactFormat>,
+    #[serde(deserialize_with = "deserialize_source")]
     pub source: ArtifactSource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
@@ -100,6 +104,10 @@ impl ReviewArtifactTool {
         context: &RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, String> {
         let ReviewArtifactInput { format, source, title } = input;
+        let format = format.or_else(|| inferred_format(&source)).ok_or_else(|| {
+            "`format` is required for inline content and for files without a .md, .markdown, .html, or .htm extension."
+                .to_string()
+        })?;
         let mode = match format {
             ArtifactFormat::Markdown => ElicitationMode::Form,
             ArtifactFormat::Html => ElicitationMode::Url,
@@ -237,6 +245,30 @@ fn review_title(title: Option<&str>, label: Option<&str>) -> String {
 
 fn review_subject(title: Option<&str>, label: Option<&str>) -> String {
     title.or(label).map_or_else(|| "this content".to_string(), str::to_string)
+}
+
+fn inferred_format(source: &ArtifactSource) -> Option<ArtifactFormat> {
+    match source {
+        ArtifactSource::File { path } => match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+            "md" | "markdown" => Some(ArtifactFormat::Markdown),
+            "html" | "htm" => Some(ArtifactFormat::Html),
+            _ => None,
+        },
+        ArtifactSource::Url { .. } => Some(ArtifactFormat::Html),
+        ArtifactSource::Content { .. } => None,
+    }
+}
+
+fn deserialize_source<'de, D: Deserializer<'de>>(deserializer: D) -> Result<ArtifactSource, D::Error> {
+    let value = match Value::deserialize(deserializer)? {
+        Value::String(encoded) => serde_json::from_str(&encoded).map_err(|_| {
+            D::Error::custom(format!(
+                "`source` must be an object such as {{\"type\": \"file\", \"path\": \"plan.md\"}}, not the string {encoded:?}"
+            ))
+        })?,
+        value => value,
+    };
+    ArtifactSource::deserialize(value).map_err(D::Error::custom)
 }
 
 fn tool_error(message: String) -> CallToolResponse {

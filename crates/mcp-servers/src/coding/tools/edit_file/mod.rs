@@ -20,22 +20,17 @@ pub struct EditFileArgs {
 pub struct EditFileResponse {
     /// Path of the file that was edited
     pub file_path: String,
-    /// Total number of lines in the file after editing
-    pub total_lines: usize,
-    /// Number of replacements made
-    pub replacements_made: usize,
 }
 
 pub async fn edit_file_contents(args: EditFileArgs) -> Result<Displayed<EditFileResponse>, FileError> {
-    let ApplyEditsResult { path, original_content, updated_content, replacements_made } =
+    let ApplyEditsResult { path, original_content, updated_content } =
         apply_edits(Path::new(&args.file_path), &args.edits).await?;
     let file_path = path.to_string_lossy().into_owned();
-    let total_lines = updated_content.lines().count();
     let display_meta = ToolDisplayMeta::new("Edit file", basename(&file_path));
     let file_diff =
         FileDiff { path: file_path.clone(), old_text: Some(original_content), new_text: Some(updated_content) };
 
-    let response = EditFileResponse { file_path, total_lines, replacements_made };
+    let response = EditFileResponse { file_path };
     Ok(Displayed::new(response, ToolResultMeta::with_file_diff(display_meta, file_diff)))
 }
 
@@ -104,14 +99,13 @@ mod tests {
         let workspace = TestWorkspace::new().file("lines.txt", "alpha\nbeta\ngamma\n");
         let file_path = workspace.path("lines.txt");
 
-        let result = edit_file_contents(EditFileArgs {
+        edit_file_contents(EditFileArgs {
             file_path: file_path.to_string_lossy().to_string(),
             edits: vec![FileEdit::new("alpha", "ALPHA"), FileEdit::new("gamma", "GAMMA")],
         })
         .await
         .unwrap();
 
-        assert_eq!(result.output.replacements_made, 2);
         assert_eq!(fs::read_to_string(&file_path).unwrap(), "ALPHA\nbeta\nGAMMA\n");
     }
 

@@ -1,4 +1,4 @@
-use crate::common::{McpClientExt, TestResult, cancels_prompts, connect, scripted, test_error};
+use crate::common::{McpClientExt, TestResult, call_tool_error, cancels_prompts, connect, scripted, test_error};
 use axum::{Router, extract::Query, http::header::CONTENT_TYPE, response::Html, routing::get};
 use mcp_servers::review::ReviewMcp;
 use mcp_utils::client::{ClientOptions, McpClient};
@@ -74,14 +74,77 @@ async fn inline_markdown_is_sent_directly_to_the_review_ui() -> TestResult {
 
 #[tokio::test]
 async fn malformed_inputs_are_rejected() -> TestResult {
-    let test = review_test().file("valid.md", "# Valid").build().await?;
-    for args in [
-        json!({"source": {"type": "file", "path": "valid.md"}}),
-        json!({"format": "markdown", "source": {"type": "url", "url": "http://127.0.0.1:1/"}}),
+    let test = review_test().file("valid.md", "# Valid").file("notes.txt", "notes").build().await?;
+    for (args, error) in [
+        (json!({"format": "markdown", "source": {"type": "url", "url": "http://127.0.0.1:1/"}}), "cannot be reviewed"),
+        (json!({"source": {"type": "content", "content": "# Valid"}}), "`format` is required"),
+        (json!({"source": {"type": "file", "path": "notes.txt"}}), "`format` is required"),
+        (json!({"format": "markdown", "source": "valid.md"}), "source"),
     ] {
-        let result = test.client.call_raw("review_artifact", args.clone()).await?;
-        assert_eq!(result.is_error, Some(true), "{args} must be rejected: {result:?}");
+        let message = call_tool_error(&test.client, "review_artifact", args.clone()).await;
+        assert!(message.contains(error), "{args}: unexpected error: {message}");
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn format_is_inferred_from_the_file_extension() -> TestResult {
+    let test = review_test()
+        .file("docs/plan.md", "# Plan")
+        .file("docs/notes.markdown", "# Notes")
+        .file("site/index.html", "<h1>Index</h1>")
+        .file("site/legacy.htm", "<h1>Legacy</h1>")
+        .build()
+        .await?;
+
+    for path in ["docs/plan.md", "docs/notes.markdown"] {
+        let request = test.request_form(json!({"source": {"type": "file", "path": path}})).await?;
+        assert_eq!(request.meta.path, Some(test.path(path)));
+    }
+    for path in ["site/index.html", "site/legacy.htm"] {
+        let review = test.request_url(json!({"source": {"type": "file", "path": path}})).await?;
+        let document = reqwest::get(&review.url).await?.error_for_status()?.text().await?;
+        assert!(document.contains(&fs::read_to_string(test.path(path))?), "{path} is served as HTML");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn url_sources_are_reviewed_as_html_without_a_format() -> TestResult {
+    let test = review_test().build().await?;
+
+    let review = test.request_url(json!({"source": {"type": "url", "url": "http://127.0.0.1:1/app"}})).await?;
+
+    assert!(review.url.ends_with("/app"), "{}", review.url);
+    Ok(())
+}
+
+#[tokio::test]
+async fn source_encoded_as_a_json_string_is_accepted() -> TestResult {
+    let test = review_test().file(".aether/review.html", "<h1>Review</h1>").file("plan.md", "# Plan").build().await?;
+
+    let review = test.request_url(json!({"source": "{\"path\": \".aether/review.html\", \"type\": \"file\"}"})).await?;
+    let document = reqwest::get(&review.url).await?.error_for_status()?.text().await?;
+    assert!(document.contains("<h1>Review</h1>"));
+
+    let request = test
+        .request_form(json!({"format": "markdown", "source": "{\"type\": \"file\", \"path\": \"plan.md\"}"}))
+        .await?;
+    assert_eq!(request.meta.markdown, "# Plan");
+    Ok(())
+}
+
+#[tokio::test]
+async fn input_schema_only_requires_the_source() -> TestResult {
+    let test = review_test().build().await?;
+
+    let tools = test.client.list_tools().await?;
+    let tool = tools.iter().find(|tool| tool.name == "review_artifact").expect("review_artifact tool");
+    let schema = Value::Object((*tool.input_schema).clone());
+
+    assert_eq!(schema["required"], json!(["source"]), "{schema}");
+    assert_eq!(schema["properties"]["format"]["enum"], json!(["markdown", "html"]), "{schema}");
+    assert_eq!(schema["properties"]["source"]["oneOf"].as_array().map(Vec::len), Some(3), "{schema}");
     Ok(())
 }
 

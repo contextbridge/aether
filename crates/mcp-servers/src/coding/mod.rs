@@ -261,6 +261,7 @@ impl CodingMcp {
 
         let response = write_file_contents(args).await?;
 
+        self.mark_read(&response.output.file_path);
         self.spawn_diagnostic_refresh(&response.output.file_path);
 
         Ok(response)
@@ -281,11 +282,10 @@ impl CodingMcp {
 
         self.ensure_read_before_edit(&args.file_path)?;
 
-        let response = edit_file_contents(args).await?;
-
-        self.spawn_diagnostic_refresh(&response.output.file_path);
-
-        Ok(response)
+        let file_path = args.file_path.clone();
+        let result = edit_file_contents(args).await;
+        self.spawn_diagnostic_refresh(&file_path);
+        Ok(result?)
     }
 
     #[doc = include_str!("tools/bash/description.md")]
@@ -519,6 +519,10 @@ When using tools that take file paths, always use absolute paths from:
         }
 
         Ok(Displayed::new(result, ToolResultMeta::new(ToolDisplayMeta::new("Read file", summary)).located(location)))
+    }
+
+    fn mark_read(&self, file_path: &str) {
+        self.read_state.lock().expect("read state lock poisoned").files_read.insert(file_path.to_string());
     }
 
     /// Read-before-overwrite safety check: an existing file must have been read

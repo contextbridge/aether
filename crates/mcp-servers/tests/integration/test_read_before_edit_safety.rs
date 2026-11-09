@@ -38,6 +38,20 @@ async fn only_successfully_read_files_unlock_editing() -> TestResult {
     Ok(())
 }
 
+#[tokio::test]
+async fn files_the_agent_wrote_or_edited_can_be_changed_again_without_rereading() -> TestResult {
+    let workspace = CodingWorkspace::new().await;
+    let path = workspace.path("created.txt");
+
+    workspace.client.call("write_file", write(&path, "one")).await?;
+    workspace.client.call("edit_file", edit(&path, "one", "two")).await?;
+    workspace.client.call("write_file", write(&path, "three")).await?;
+    workspace.client.call("edit_file", edit(&path, "three", "four")).await?;
+
+    assert_eq!(workspace.read("created.txt")?, "four");
+    Ok(())
+}
+
 fn read(path: &Path) -> Value {
     json!({ "filePath": path })
 }

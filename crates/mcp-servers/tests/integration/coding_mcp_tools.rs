@@ -1,4 +1,4 @@
-use crate::common::{CodingWorkspace, McpClientExt, TestResult, test_error};
+use crate::common::{CodingWorkspace, McpClientExt, TestResult, call_tool_error, test_error};
 use aether_core::events::{AgentEvent, ToolEvent};
 use aether_core::testing::test_agent;
 use llm::testing::llm_response;
@@ -7,6 +7,7 @@ use mcp_servers::coding::tools::bash::BashInput;
 use mcp_servers::coding::tools::read_file::ReadFileArgs;
 use mcp_servers::coding::tools::web_fetch::{HttpResponse, WebFetchInput};
 use mcp_servers::testing::{FakeHttpClient, TestWorkspace};
+use serde_json::json;
 use std::fs::{canonicalize, read_to_string};
 use utils::tool_result_truncator::saved_path;
 
@@ -169,10 +170,57 @@ async fn edit_file_supports_batch_edits_and_response_metadata() -> TestResult {
             }),
         )
         .await?;
-    assert_eq!(result["replacementsMade"], 2);
+    let fields: Vec<_> = result.as_object().into_iter().flat_map(|fields| fields.keys()).collect();
+    assert_eq!(fields, ["filePath"], "edit_file should return a minimal success response");
     assert_eq!(meta["file_diff"]["old_text"], "alpha\nbeta\ngamma\n");
     assert_eq!(meta["file_diff"]["new_text"], "ALPHA\nbeta\nGAMMA\n");
     assert_eq!(workspace.read("source.txt")?, "ALPHA\nbeta\nGAMMA\n");
+    Ok(())
+}
+
+#[tokio::test]
+async fn edit_file_applies_each_edit_to_the_result_of_the_previous_one() -> TestResult {
+    let workspace = CodingWorkspace::new().await;
+    let path = workspace.write("source.txt", "foobar\n");
+    workspace.client.call("read_file", json!({ "filePath": path })).await?;
+
+    let edits = json!([{ "oldString": "foob", "newString": "X" }, { "oldString": "Xar", "newString": "Y" }]);
+    workspace.client.call("edit_file", json!({ "filePath": path, "edits": edits })).await?;
+
+    assert_eq!(workspace.read("source.txt")?, "Y\n");
+    Ok(())
+}
+
+#[tokio::test]
+async fn edit_file_writes_the_edits_that_apply_and_reports_the_ones_that_do_not() -> TestResult {
+    let workspace = CodingWorkspace::new().await;
+    let path = workspace.write("source.txt", "alpha\nbeta\ngamma\n");
+    workspace.client.call("read_file", json!({ "filePath": path })).await?;
+
+    let edits = json!([
+        { "oldString": "alpha", "newString": "ALPHA" },
+        { "oldString": "missing", "newString": "x" },
+        { "oldString": "gamma", "newString": "GAMMA" }
+    ]);
+    let error = call_tool_error(&workspace.client, "edit_file", json!({ "filePath": path, "edits": edits })).await;
+
+    assert_eq!(workspace.read("source.txt")?, "ALPHA\nbeta\nGAMMA\n");
+    assert!(error.contains("edits[1]: oldString not found"), "{error}");
+    assert!(!error.contains("edits[0]") && !error.contains("edits[2]"), "{error}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn edit_file_writes_nothing_when_no_edit_applies() -> TestResult {
+    let workspace = CodingWorkspace::new().await;
+    let path = workspace.write("source.txt", "alpha\n");
+    workspace.client.call("read_file", json!({ "filePath": path })).await?;
+
+    let edits = json!([{ "oldString": "missing", "newString": "x" }, { "oldString": "absent", "newString": "y" }]);
+    let error = call_tool_error(&workspace.client, "edit_file", json!({ "filePath": path, "edits": edits })).await;
+
+    assert_eq!(workspace.read("source.txt")?, "alpha\n");
+    assert!(error.contains("edits[0]") && error.contains("edits[1]"), "{error}");
     Ok(())
 }
 

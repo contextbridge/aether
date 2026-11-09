@@ -38,19 +38,16 @@ feat(frontend): expose client connection details on dashboard (CON-244)
 
 ### Step 1: Analyze Changes
 
+Start with the overview; full diffs can be very large:
+
 ```bash
-# Check staging area
-git status
-
-# View staged changes (if any)
-git diff --cached
-
-# View unstaged changes
-git diff
-
-# Recent commits for style reference
+git status --short
+git diff --cached --stat
+git diff --stat
 git log --oneline -5
 ```
+
+Then view diffs per file or area as needed (e.g. `git diff -- crates/foo/`, `git diff --cached -- path/to/file.rs`) instead of the whole diff at once.
 
 ### Step 2: Determine Commit Type
 

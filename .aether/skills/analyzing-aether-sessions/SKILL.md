@@ -29,11 +29,13 @@ Use `aether-session-index` to answer factual questions about past sessions. Aggr
    ```bash
    cargo run -p aether-session-index -- query '<sql>'
    ```
+   The default `--timeout-ms` is 30000; raise it for heavy aggregates on large indexes.
 
 ## Rules
 
 - The default DB is `$AETHER_HOME/session-index.sqlite`; treat it as a disposable cache and rerun `ingest` after schema or log changes.
 - Keep outputs small: prefer `count`, `group by`, `limit`, and CLI defaults.
 - Query runs single-statement read-only `select`/`with` SQL.
+- Read tool arguments from `tool_arguments` (JSON text, filled on calls, results, and errors), not `raw_json`.
 - For optimization advice, cite the query result pattern first, then give concrete behavior changes.
 - Avoid reading raw JSONL unless SQL cannot answer the question.

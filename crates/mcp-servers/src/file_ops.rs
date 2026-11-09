@@ -1,5 +1,4 @@
 use std::io::ErrorKind;
-use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use schemars::JsonSchema;
@@ -47,7 +46,7 @@ pub enum FileError {
     #[error("No edits supplied for file {path}: provide at least one edit")]
     EmptyEdits { path: String },
 
-    #[error("{} edit(s) failed for file {path}; no changes were written:\n{}", .failures.len(), format_failures(.failures))]
+    #[error("These edits failed and must be retried; all other edits were applied:\n{}", format_failures(.failures))]
     EditsFailed { path: String, failures: Vec<EditFailure> },
 }
 
@@ -61,11 +60,8 @@ pub struct EditFailure {
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum EditFailureKind {
-    #[error("string not found: `{pattern}`")]
+    #[error("oldString not found: `{pattern}`")]
     PatternNotFound { pattern: String },
-
-    #[error("edit overlaps the edit at index {other}; use non-overlapping edits or combine them")]
-    Overlapping { other: usize },
 }
 
 pub struct WriteTextFileResult {
@@ -79,7 +75,6 @@ pub struct ApplyEditsResult {
     pub path: PathBuf,
     pub original_content: String,
     pub updated_content: String,
-    pub replacements_made: usize,
 }
 
 pub async fn read_text_file(path: &Path) -> Result<String, FileError> {
@@ -110,78 +105,39 @@ pub async fn apply_edits(path: &Path, edits: &[FileEdit]) -> Result<ApplyEditsRe
     }
 
     let original_content = read_text_file(path).await?;
-    let resolved = resolve_edits(&original_content, edits)
-        .map_err(|failures| FileError::EditsFailed { path: display_path(path), failures })?;
+    let mut updated_content = original_content.clone();
+    let mut failures = Vec::new();
 
-    let updated_content = splice(&original_content, &resolved);
-    let replacements_made = resolved.len();
+    for (index, edit) in edits.iter().enumerate() {
+        match apply_edit(&updated_content, edit) {
+            Ok(content) => updated_content = content,
+            Err(kind) => failures.push(EditFailure { index, kind }),
+        }
+    }
 
-    if let Err(error) = write(path, &updated_content).await {
+    if failures.len() < edits.len()
+        && let Err(error) = write(path, &updated_content).await
+    {
         return Err(FileError::WriteFailed { path: display_path(path), reason: error.to_string() });
     }
 
-    Ok(ApplyEditsResult { path: path.to_path_buf(), original_content, updated_content, replacements_made })
-}
-
-struct ResolvedEdit {
-    range: Range<usize>,
-    replacement: String,
-    edit_index: usize,
-}
-
-fn resolve_edits(content: &str, edits: &[FileEdit]) -> Result<Vec<ResolvedEdit>, Vec<EditFailure>> {
-    let mut resolved: Vec<ResolvedEdit> = Vec::new();
-    let mut failures: Vec<EditFailure> = Vec::new();
-
-    for (index, FileEdit { old_string, new_string, replace_all }) in edits.iter().enumerate() {
-        let starts: Vec<usize> = content.match_indices(old_string).map(|(start, _)| start).collect();
-        if starts.is_empty() {
-            failures
-                .push(EditFailure { index, kind: EditFailureKind::PatternNotFound { pattern: old_string.clone() } });
-            continue;
-        }
-        let chosen = if *replace_all { starts.as_slice() } else { &starts[..1] };
-        for &start in chosen {
-            resolved.push(ResolvedEdit {
-                range: start..start + old_string.len(),
-                replacement: new_string.clone(),
-                edit_index: index,
-            });
-        }
+    if !failures.is_empty() {
+        return Err(FileError::EditsFailed { path: display_path(path), failures });
     }
 
-    resolved.sort_by_key(|edit| edit.range.start);
-    let mut furthest: Option<(usize, usize)> = None;
-    for edit in &resolved {
-        match furthest {
-            Some((end, other)) if edit.range.start < end => {
-                failures.push(EditFailure { index: edit.edit_index, kind: EditFailureKind::Overlapping { other } });
-                if edit.range.end > end {
-                    furthest = Some((edit.range.end, edit.edit_index));
-                }
-            }
-            _ => furthest = Some((edit.range.end, edit.edit_index)),
-        }
-    }
+    Ok(ApplyEditsResult { path: path.to_path_buf(), original_content, updated_content })
+}
 
-    if failures.is_empty() {
-        Ok(resolved)
+fn apply_edit(content: &str, edit: &FileEdit) -> Result<String, EditFailureKind> {
+    let FileEdit { old_string, new_string, replace_all } = edit;
+    if !content.contains(old_string.as_str()) {
+        return Err(EditFailureKind::PatternNotFound { pattern: old_string.clone() });
+    }
+    Ok(if *replace_all {
+        content.replace(old_string.as_str(), new_string)
     } else {
-        failures.sort_by_key(|failure| failure.index);
-        Err(failures)
-    }
-}
-
-fn splice(content: &str, resolved: &[ResolvedEdit]) -> String {
-    let mut result = String::with_capacity(content.len());
-    let mut last = 0;
-    for edit in resolved {
-        result.push_str(&content[last..edit.range.start]);
-        result.push_str(&edit.replacement);
-        last = edit.range.end;
-    }
-    result.push_str(&content[last..]);
-    result
+        content.replacen(old_string.as_str(), new_string, 1)
+    })
 }
 
 fn format_failures(failures: &[EditFailure]) -> String {
@@ -202,11 +158,10 @@ mod tests {
     use tempfile::TempDir;
 
     #[tokio::test]
-    async fn applies_batch_against_original_content() -> Result<(), Box<dyn std::error::Error>> {
+    async fn applies_independent_edits_in_one_batch() -> Result<(), Box<dyn std::error::Error>> {
         let (_dir, path) = with_file("alpha\nbeta\ngamma\n").await?;
-        let result = apply_edits(&path, &[FileEdit::new("alpha", "ALPHA"), FileEdit::new("gamma", "GAMMA")]).await?;
+        apply_edits(&path, &[FileEdit::new("alpha", "ALPHA"), FileEdit::new("gamma", "GAMMA")]).await?;
 
-        assert_eq!(result.replacements_made, 2);
         assert_eq!(std::fs::read_to_string(&path)?, "ALPHA\nbeta\nGAMMA\n");
         Ok(())
     }
@@ -220,15 +175,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn replace_all_counts_every_occurrence() -> Result<(), Box<dyn std::error::Error>> {
+    async fn replace_all_replaces_every_occurrence() -> Result<(), Box<dyn std::error::Error>> {
         let (_dir, path) = with_file("x x x\n").await?;
-        let result = apply_edits(
-            &path,
-            &[FileEdit { old_string: "x".to_string(), new_string: "y".to_string(), replace_all: true }],
-        )
-        .await?;
+        apply_edits(&path, &[FileEdit { old_string: "x".to_string(), new_string: "y".to_string(), replace_all: true }])
+            .await?;
 
-        assert_eq!(result.replacements_made, 3);
         assert_eq!(std::fs::read_to_string(&path)?, "y y y\n");
         Ok(())
     }
@@ -238,38 +189,6 @@ mod tests {
         let (_dir, path) = with_file("a\nb\nc\n").await?;
         apply_edits(&path, &[FileEdit::new("b\n", "")]).await?;
         assert_eq!(std::fs::read_to_string(&path)?, "a\nc\n");
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn overlapping_edits_are_rejected_and_file_unchanged() -> Result<(), Box<dyn std::error::Error>> {
-        let (_dir, path) = with_file("foobar\n").await?;
-
-        let error = apply_edits(&path, &[FileEdit::new("foob", "X"), FileEdit::new("obar", "Y")])
-            .await
-            .expect_err("overlapping edits should fail");
-
-        let failures = edits_failures(error)?;
-        assert!(failures.iter().any(|f| matches!(f.kind, EditFailureKind::Overlapping { .. })));
-        assert_eq!(std::fs::read_to_string(&path)?, "foobar\n");
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn every_overlapping_edit_is_reported() -> Result<(), Box<dyn std::error::Error>> {
-        let (_dir, path) = with_file("abcdef\n").await?;
-        let error =
-            apply_edits(&path, &[FileEdit::new("abcde", "X"), FileEdit::new("bc", "Y"), FileEdit::new("de", "Z")])
-                .await
-                .expect_err("overlapping edits should fail");
-
-        let failures = edits_failures(error)?;
-        let overlapping: Vec<usize> = failures
-            .iter()
-            .filter(|f| matches!(f.kind, EditFailureKind::Overlapping { other: 0 }))
-            .map(|f| f.index)
-            .collect();
-        assert_eq!(overlapping, vec![1, 2]);
         Ok(())
     }
 

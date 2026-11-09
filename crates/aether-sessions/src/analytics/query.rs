@@ -16,7 +16,7 @@ pub struct QueryOptions {
 
 impl QueryOptions {
     pub fn new(db_path: impl Into<PathBuf>, sql: impl Into<String>) -> Self {
-        Self { db_path: db_path.into(), sql: sql.into(), max_rows: 100, max_cell_chars: 1000, timeout_ms: 2000 }
+        Self { db_path: db_path.into(), sql: sql.into(), max_rows: 100, max_cell_chars: 1000, timeout_ms: 30_000 }
     }
 }
 
