@@ -24,4 +24,4 @@ Use this tool to edit a file. This tool accepts an array of batched exact-string
 
 ## Safety
 
-You MUST read a file with `read_file` before editing it. This prevents accidental data loss.
+You MUST read a file with `read_file` before editing it, unless you created or overwrote it with `write_file`. This prevents accidental data loss.

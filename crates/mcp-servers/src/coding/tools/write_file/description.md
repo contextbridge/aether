@@ -16,4 +16,4 @@ Writes a file to the filesystem, replacing entire contents. Creates parent direc
 
 ## Safety
 
-If the file exists, you MUST read it with `read_file` first. This prevents accidental data loss. New files don't require reading.
+If the file exists, you MUST read it with `read_file` first, unless you wrote it with `write_file` earlier. This prevents accidental data loss. New files don't require reading.

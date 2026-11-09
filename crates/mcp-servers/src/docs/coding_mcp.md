@@ -40,7 +40,7 @@ let server = CodingMcp::new("/my/project")
 
 The server enforces several safety checks:
 
-- **Read-before-edit** -- `write_file` and `edit_file` require the file to have been read first in the same session, preventing blind overwrites.
+- **Read-before-edit** -- `write_file` and `edit_file` require the file to have been read (or written by `write_file`) first in the same session, preventing blind overwrites.
 - **Dangerous command detection** -- Bash commands containing destructive patterns (`rm`, `git push --force`, redirect operators, etc.) are flagged.
 - **Permission modes** -- [`PermissionMode`] controls whether flagged operations require user approval via MCP elicitation.
 
