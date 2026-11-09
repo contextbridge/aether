@@ -122,6 +122,57 @@ async fn typed_projection_exposes_event_fields() {
 }
 
 #[tokio::test]
+async fn tool_call_arguments_are_backfilled_from_the_matching_result_or_error() {
+    let fixture = Fixture::new();
+    fixture.write_session(
+        "s1.jsonl",
+        &[
+            user_message("hello"),
+            tool_call("call-edit", "edit_file", ""),
+            SessionEvent::Agent(AgentEvent::tool_result("call-edit", "edit_file", r#"{"path":"a.rs"}"#, "ok")),
+            tool_call("call-bash", "bash", ""),
+            SessionEvent::Agent(AgentEvent::tool_error("call-bash", "bash", r#"{"command":"ls"}"#, "failed")),
+            tool_call("call-read", "read", r#"{"path":"b.rs"}"#),
+        ],
+    );
+    fixture.ingest().await;
+
+    let tools = fixture
+        .query("select event_type, tool_call_id, tool_arguments from events where tool_call_id is not null order by event_index")
+        .await;
+    assert_eq!(
+        tools.rows,
+        vec![
+            vec![json!("tool_call"), json!("call-edit"), json!(r#"{"path":"a.rs"}"#)],
+            vec![json!("tool_result"), json!("call-edit"), json!(r#"{"path":"a.rs"}"#)],
+            vec![json!("tool_call"), json!("call-bash"), json!(r#"{"command":"ls"}"#)],
+            vec![json!("tool_error"), json!("call-bash"), json!(r#"{"command":"ls"}"#)],
+            vec![json!("tool_call"), json!("call-read"), json!(r#"{"path":"b.rs"}"#)],
+        ]
+    );
+}
+
+#[tokio::test]
+async fn backfilled_arguments_come_from_the_same_call_when_ids_repeat() {
+    let fixture = Fixture::new();
+    fixture.write_session(
+        "s1.jsonl",
+        &[
+            user_message("first"),
+            tool_call("tool_call_0", "bash", ""),
+            SessionEvent::Agent(AgentEvent::tool_result("tool_call_0", "bash", r#"{"command":"ls"}"#, "ok")),
+            user_message("second"),
+            tool_call("tool_call_0", "bash", ""),
+            SessionEvent::Agent(AgentEvent::tool_error("tool_call_0", "bash", r#"{"command":"pwd"}"#, "failed")),
+        ],
+    );
+    fixture.ingest().await;
+
+    let calls = fixture.query("select tool_arguments from tool_calls order by event_index").await;
+    assert_eq!(calls.rows, vec![vec![json!(r#"{"command":"ls"}"#)], vec![json!(r#"{"command":"pwd"}"#)]]);
+}
+
+#[tokio::test]
 async fn session_usage_columns_are_projected_for_root_and_sub_agent_samples() {
     let fixture = Fixture::new();
     let root = UsageSource::new("root");

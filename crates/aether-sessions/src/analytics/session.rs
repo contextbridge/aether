@@ -1,4 +1,4 @@
-use super::row::{EventRow, event_row};
+use super::row::{EventRow, backfill_tool_arguments, event_row};
 use super::{SessionIndexError, clamp_i64};
 use crate::{FileFingerprint, SessionEvent, SessionLog, SessionLogEntry, SessionLogError, SessionMeta, UserEvent};
 use std::path::{Path, PathBuf};
@@ -78,6 +78,7 @@ fn parse_session_file(path: &Path, fingerprint: FileFingerprint) -> Result<Aethe
         }
     }
 
+    backfill_tool_arguments(&mut events);
     Ok(AetherSession { source_path: path.to_path_buf(), fingerprint, meta, events, parse_errors })
 }
 

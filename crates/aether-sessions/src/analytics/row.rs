@@ -1,6 +1,7 @@
 use super::clamp_i64;
 use crate::{SessionControlEvent, SessionEvent, UserEvent};
 use aether_core::events::{AgentEvent, ContextEvent, MessageEvent, ModelEvent, ToolEvent, TurnEvent, TurnOutcome};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct EventRow {
@@ -34,6 +35,27 @@ pub(crate) fn event_row(
         content_len,
         raw_json,
         projection: EventProjection::from(event),
+    }
+}
+
+/// Tool calls are logged before their arguments finish streaming, so fill empty
+/// call arguments from the matching result or error.
+pub(crate) fn backfill_tool_arguments(rows: &mut [EventRow]) {
+    let mut later_arguments = HashMap::new();
+    for row in rows.iter_mut().rev() {
+        let projection = &mut row.projection;
+        let Some(id) = projection.tool_call_id.clone() else { continue };
+        let is_call = projection.event_type == "tool_call";
+        match projection.tool_arguments.clone().filter(|args| !args.is_empty()) {
+            Some(args) if !is_call => {
+                later_arguments.insert(id, args);
+            }
+            Some(_) => {
+                later_arguments.remove(&id);
+            }
+            None if is_call => projection.tool_arguments = later_arguments.remove(&id),
+            None => projection.tool_arguments = later_arguments.get(&id).cloned(),
+        }
     }
 }
 
