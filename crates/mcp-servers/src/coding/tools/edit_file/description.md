@@ -1,4 +1,4 @@
-Use this tool to edit a file. This tool accepts an array of batched exact-string replacements. If 1 edit fails, no edits in the batch are applied.
+Use this tool to edit a file. This tool accepts an array of batched exact-string replacements.
 
 ## Usage
 
@@ -17,10 +17,10 @@ Use this tool to edit a file. This tool accepts an array of batched exact-string
 
 ## Tips
 
-- Batch every edit to a file into one call; edits must target non-overlapping regions.
+- Batch every edit to a file into one call.
 - Preserve exact indentation from `read_file` output — match text AFTER the tab character, not the line-number prefix.
 - To rename symbols across the codebase, prefer `lsp_rename` instead (if available).
-- Unless your edits require overwriting an entire file, prefer this tool over `create_file`.
+- Unless your edits require overwriting an entire file, prefer this tool over `write_file`.
 
 ## Safety
 

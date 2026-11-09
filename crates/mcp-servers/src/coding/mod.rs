@@ -281,11 +281,10 @@ impl CodingMcp {
 
         self.ensure_read_before_edit(&args.file_path)?;
 
-        let response = edit_file_contents(args).await?;
-
-        self.spawn_diagnostic_refresh(&response.output.file_path);
-
-        Ok(response)
+        let file_path = args.file_path.clone();
+        let result = edit_file_contents(args).await;
+        self.spawn_diagnostic_refresh(&file_path);
+        Ok(result?)
     }
 
     #[doc = include_str!("tools/bash/description.md")]
