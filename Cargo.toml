@@ -79,7 +79,7 @@ base16ct = { version = "1.0", features = ["alloc"] }
 base64 = "0.23"
 noyalib = "0.0.58"
 htmd = "0.5"
-dom_smoothie = "0.18"
+dom_smoothie = "0.19"
 
 # Encryption
 age = "0.12.1"
