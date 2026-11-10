@@ -62,7 +62,7 @@ reqwest = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 # Must match the sse-stream version in the signature of rmcp's StreamableHttpClient.
-sse-stream = { version = "0.2.6", optional = true }
+sse-stream = { version = "0.3.0", optional = true }
 tokio-stream = { workspace = true, features = ["sync"], optional = true }
 utils = { package = "aether-utils", path = "../utils", version = "0.3.1", optional = true }
 
