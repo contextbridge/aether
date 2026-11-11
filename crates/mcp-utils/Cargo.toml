@@ -36,6 +36,7 @@ client = [
     "dep:serde",
     "dep:serde_json",
     "dep:sse-stream",
+    "dep:sse-stream-rmcp",
     "dep:tokio-stream",
     "dep:utils",
     "rmcp/auth",
@@ -61,8 +62,10 @@ chrono = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
-# Must match the sse-stream version in the signature of rmcp's StreamableHttpClient.
-sse-stream = { version = "0.2.6", optional = true }
+# Direct dependency updated by Dependabot; rmcp's HTTP client still uses sse-stream 0.2.
+sse-stream = { version = "0.3.0", optional = true }
+# StreamableHttpClient's SSE type must come from the same crate version as rmcp.
+sse-stream-rmcp = { package = "sse-stream", version = "0.2.6", optional = true }
 tokio-stream = { workspace = true, features = ["sync"], optional = true }
 utils = { package = "aether-utils", path = "../utils", version = "0.3.1", optional = true }
 
