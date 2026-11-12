@@ -1,181 +1,146 @@
 use crate::chat::attachment::{Attachment, chip, chip_icon, thumbnail};
 use crate::threads::{Thread, ThreadStatus};
 use crate::ui::{
-    Backdrop, Button, ButtonVariant, Disclosure, Icon, IconButton, IconName, ListRow, StyledExt, SurfaceExt,
-    Typography, TypographyExt, UiTheme,
+    ButtonVariant, Icon, IconName, SurfaceExt, UiStyles, UiTheme, backdrop, button, disclosure, icon_button,
 };
-use clankerdiff_gpui::DiffViewer;
-use gpui::{
-    AnyElement, App, ClickEvent, ClipboardItem, Div, Entity, Hsla, Image, ObjectFit, SharedString, StyledImage, Window,
-    div, img, prelude::*, relative,
+use clankerdiff_rouge::{ReviewHandle, diff_view};
+use clankerdiff_rouge_shell::rouge::core::{
+    AnyView, Color, Cursor, Div, Fit, ImageSource, Styled, View, WindowHandle, div, image, pct, px, text, view,
 };
-use std::rc::Rc;
+use clankerdiff_rouge_shell::rouge::reactive::{Callback, Signal};
 use std::sync::Arc;
 
 pub(crate) fn prompt(
     row: usize,
-    text: String,
+    body: String,
     attachments: &[(usize, Attachment)],
-    theme: &UiTheme,
-    on_open: impl Fn(&Arc<Image>, &mut Window, &mut App) + 'static,
+    on_open: Callback<(Arc<[u8]>,)>,
 ) -> Div {
-    let on_open = Rc::new(on_open);
-    let attachments: Vec<AnyElement> = attachments
+    let attachments: Vec<AnyView> = attachments
         .iter()
         .map(|(block, attachment)| {
-            let selector = format!("message-attachment-{row}-{block}");
+            let id = format!("message-attachment-{row}-{block}");
             match attachment {
-                Attachment::Image(image) => {
-                    let (image, on_open) = (image.clone(), on_open.clone());
-                    thumbnail(selector.clone(), image.clone(), THUMBNAIL_SIZE, theme)
-                        .id(SharedString::from(selector))
-                        .cursor_pointer()
-                        .on_click(move |_: &ClickEvent, window, cx| on_open(&image, window, cx))
-                        .into_any_element()
+                Attachment::Image(bytes) => {
+                    let bytes = bytes.clone();
+                    let opened = bytes.clone();
+                    thumbnail(id, ImageSource::Bytes(bytes), THUMBNAIL_SIZE)
+                        .cursor(Cursor::Pointer)
+                        .on_click(move |event| {
+                            event.stop_propagation();
+                            on_open.call(opened.clone());
+                        })
+                        .into_any()
                 }
-                Attachment::File { icon, name } => {
-                    chip(selector, chip_icon(*icon, theme), name, theme).into_any_element()
-                }
+                Attachment::File { icon, name } => chip(id, chip_icon(*icon), name).into_any(),
             }
         })
         .collect();
-    div()
-        .max_w(relative(PROMPT_MAX_WIDTH))
-        .px_4()
-        .py_2()
-        .flex()
-        .flex_col()
-        .gap_2()
-        .elevated(*theme)
-        .typography(Typography::Reading)
-        .when(!text.is_empty(), |bubble| bubble.child(text))
-        .when(!attachments.is_empty(), |bubble| bubble.child(div().flex().flex_wrap().gap_2().children(attachments)))
+    let body = (!body.is_empty()).then(|| view! { <text reading>{body}</text> });
+    let files = (!attachments.is_empty()).then(|| view! { <div flex flex_wrap gap=8.0>{..attachments}</div> });
+    view! {
+        <div max_w=pct(PROMPT_MAX_WIDTH) px=16.0 py=8.0 flex col gap=8.0 surface bg=UiTheme::current().elevated>
+            {body}
+            {files}
+        </div>
+    }
 }
 
-pub(crate) fn message_actions(row: usize, text: String, theme: &UiTheme) -> Div {
-    div().pt_1().flex().reveal_on_hover(row_group(row)).child(
-        IconButton::new(format!("copy-message-{row}"), IconName::Copy, "Copy", *theme)
-            .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))),
-    )
+pub(crate) fn message_actions(row: usize, text: String, hovered: Signal<bool>, window: WindowHandle) -> Div {
+    view! {
+        <div pt=4.0 flex opacity={move || if hovered.get() { 1.0 } else { 0.0 }}>
+            <icon_button id={format!("copy-message-{row}")} icon=IconName::Copy label="Copy"
+                         on_click={move || window.copy_text(text.clone())}/>
+        </div>
+    }
 }
 
-pub(crate) fn row_group(row: usize) -> SharedString {
-    ListRow::hover_group(&format!("transcript-row-{row}"))
+pub(crate) fn image_preview(bytes: Arc<[u8]>, on_close: Callback) -> impl View {
+    view! {
+        <backdrop id="image-preview" on_dismiss=on_close>
+            <div w=pct(100.0) h=pct(100.0) min_h=0.0 cursor=Cursor::Pointer on_click={move |_| on_close.call()}>
+                {image(ImageSource::Bytes(bytes)).fit(Fit::Contain).size_full()}
+            </div>
+        </backdrop>
+    }
 }
 
-pub(crate) fn image_preview(
-    image: Arc<Image>,
-    theme: &UiTheme,
-    on_close: impl Fn(&mut Window, &mut App) + 'static,
-) -> Backdrop {
-    Backdrop::new("image-preview", *theme)
-        .on_dismiss(on_close)
-        .child(img(image).size_full().object_fit(ObjectFit::Contain))
-}
-
-pub(crate) fn full_diff(
-    viewer: Entity<DiffViewer>,
-    theme: &UiTheme,
-    on_close: impl Fn(&mut Window, &mut App) + 'static,
-) -> Backdrop {
-    let on_close = Rc::new(on_close);
-    let close = on_close.clone();
-    Backdrop::new("full-diff", *theme).on_dismiss(move |window, cx| on_close(window, cx)).child(
-        div()
-            .debug_selector(|| "full-diff-panel".to_owned())
-            .occlude()
-            .size_full()
-            .flex()
-            .flex_col()
-            .overflow_hidden()
-            .floating(*theme)
-            .child(
-                div().flex().justify_end().p_1().child(
-                    IconButton::new("close-full-diff", IconName::X, "Close", *theme)
-                        .on_click(move |_, window, cx| close(window, cx)),
-                ),
-            )
-            .child(div().flex_1().min_h_0().child(viewer)),
-    )
+pub(crate) fn full_diff(handle: &ReviewHandle, on_close: Callback) -> impl View + use<> {
+    view! {
+        <backdrop id="full-diff" on_dismiss=on_close>
+            <div test_id="full-diff-panel" w=pct(100.0) h=pct(100.0) min_h=0.0 flex col overflow_hidden floating>
+                <div flex justify_end p=4.0>
+                    <icon_button id="close-full-diff" icon=IconName::X label="Close" on_click=on_close/>
+                </div>
+                <div flex_1 min_h=0.0>{diff_view(*handle)}</div>
+            </div>
+        </backdrop>
+    }
 }
 
 pub(crate) fn thinking_block(
-    text: String,
+    thought: String,
     streaming: bool,
     index: usize,
     expanded: bool,
-    theme: &UiTheme,
-    on_toggle: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> AnyElement {
-    let colors = theme.colors;
-    div()
-        .flex()
-        .flex_col()
-        .gap_2()
-        .typography(Typography::Body)
-        .text_color(colors.text_muted)
-        .child(Disclosure::new(("thinking", index), expanded, *theme).on_toggle(on_toggle).child(if streaming {
-            "Thinking…"
-        } else {
-            "Thought"
-        }))
-        .when(expanded, |block| {
-            block.child(
-                div()
-                    .debug_selector(move || format!("thinking-text-{index}"))
-                    .pl_3()
-                    .border_l_2()
-                    .border_color(colors.border_subtle)
-                    .child(text),
-            )
-        })
-        .into_any_element()
+    on_toggle: Callback,
+) -> AnyView {
+    let theme = UiTheme::current();
+    let body = expanded.then(|| {
+        view! {
+            <div test_id={format!("thinking-text-{index}")} pl=12.0 border_l=px(2.0) border_color=theme.border_subtle>
+                <text body muted>{thought}</text>
+            </div>
+        }
+    });
+    view! {
+        <div flex col gap=8.0>
+            <disclosure id={format!("thinking-{index}")} expanded on_toggle>
+                <text body muted>{if streaming { "Thinking…" } else { "Thought" }}</text>
+            </disclosure>
+            {body}
+        </div>
+    }
+    .into_any()
 }
 
-pub(crate) fn notice(text: &str, theme: &UiTheme) -> AnyElement {
-    line(IconName::Info, theme.colors.text_muted, text).into_any_element()
+pub(crate) fn notice(text: &str) -> AnyView {
+    line(IconName::Info, UiTheme::current().text_muted.get_untracked(), text).into_any()
 }
 
-pub(crate) fn error(index: usize, text: &str, theme: &UiTheme) -> AnyElement {
-    line(IconName::TriangleAlert, theme.colors.destructive, text)
-        .debug_selector(move || format!("transcript-error-{index}"))
-        .into_any_element()
+pub(crate) fn error(index: usize, text: &str) -> AnyView {
+    line(IconName::TriangleAlert, UiTheme::current().destructive.get_untracked(), text)
+        .test_id(format!("transcript-error-{index}"))
+        .into_any()
 }
 
-pub(crate) fn reconnect_banner(thread: &Entity<Thread>, status: ThreadStatus, theme: &UiTheme) -> Option<Div> {
+pub(crate) fn reconnect_banner(thread: Thread, status: ThreadStatus) -> Option<Div> {
     let problem = status.problem()?;
-    Some(
-        div()
-            .px_3()
-            .py_2()
-            .flex()
-            .items_center()
-            .gap_2()
-            .elevated(*theme)
-            .child(line(IconName::TriangleAlert, theme.colors.warning, problem).flex_1().min_w_0())
-            .child(reconnect_button(thread, theme)),
-    )
+    let warning = UiTheme::current().warning.get_untracked();
+    Some(view! {
+        <div px=12.0 py=8.0 flex items_center gap=8.0 surface bg=UiTheme::current().elevated>
+            {line(IconName::TriangleAlert, warning, problem).flex_1().min_w(0.0)}
+            {reconnect_button(thread)}
+        </div>
+    })
 }
 
-pub(crate) fn reconnect_button(thread: &Entity<Thread>, theme: &UiTheme) -> Button {
-    let thread = thread.clone();
-    Button::new("transcript-reconnect", "Reconnect", *theme)
-        .icon(IconName::RotateCw)
-        .variant(ButtonVariant::Primary)
-        .on_click(move |_, _, cx| thread.update(cx, Thread::reconnect))
+pub(crate) fn reconnect_button(thread: Thread) -> AnyView {
+    view! {
+        <button id="transcript-reconnect" label="Reconnect" icon=IconName::RotateCw variant=ButtonVariant::Primary
+                on_click={move || thread.reconnect()}/>
+    }
 }
 
 const THUMBNAIL_SIZE: f32 = 96.0;
 
-const PROMPT_MAX_WIDTH: f32 = 0.85;
+const PROMPT_MAX_WIDTH: f32 = 85.0;
 
-fn line(icon: IconName, color: Hsla, text: &str) -> Div {
-    div()
-        .flex()
-        .items_start()
-        .gap_2()
-        .typography(Typography::Small)
-        .text_color(color)
-        .child(Icon::new(icon, color))
-        .child(div().flex_1().min_w_0().child(text.to_owned()))
+fn line(icon: IconName, color: Color, label: &str) -> Div {
+    view! {
+        <div flex items_start gap=8.0>
+            {Icon::new(icon, color)}
+            <div flex_1 min_w=0.0><text small color=color>{label.to_owned()}</text></div>
+        </div>
+    }
 }

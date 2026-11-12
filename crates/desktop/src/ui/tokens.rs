@@ -1,4 +1,4 @@
-pub use clankerdiff_gpui::ui::tokens::*;
+pub use clankerdiff_rouge::ui::tokens::*;
 
 pub const UNREAD_DOT_SIZE: f32 = 8.0;
 

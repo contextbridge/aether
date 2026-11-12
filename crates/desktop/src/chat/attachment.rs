@@ -1,14 +1,15 @@
-use crate::ui::tokens::{ICON_SIZE_SMALL, RADIUS_INNER, rem};
-use crate::ui::{Icon, IconName, Typography, TypographyExt, UiTheme};
+use crate::ui::tokens::{ICON_SIZE_SMALL, RADIUS_INNER};
+use crate::ui::{Icon, IconName, UiStyles, UiTheme};
 use agent_client_protocol::v2::schema as acp;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use clankerdiff_rouge_shell::rouge::core::{AnyView, Div, Fit, ImageSource, Styled, View, div, image, px, text, view};
 use client_core::composer::attachment::{AttachmentKind, PromptAttachment, classify_attachment};
-use gpui::{Div, Image, ImageFormat, ImageSource, ObjectFit, StyledImage, div, img, prelude::*};
 use std::sync::Arc;
 
+#[derive(Clone, PartialEq)]
 pub(crate) enum Attachment {
-    Image(Arc<Image>),
+    Image(Arc<[u8]>),
     File { icon: IconName, name: String },
 }
 
@@ -28,50 +29,42 @@ impl Attachment {
     }
 }
 
-pub(crate) fn chip(selector: String, preview: impl IntoElement, name: &str, theme: &UiTheme) -> Div {
-    div()
-        .debug_selector(move || selector)
-        .flex()
-        .items_center()
-        .gap_1()
-        .min_w_0()
-        .px_2()
-        .py_1()
-        .rounded(rem(RADIUS_INNER))
-        .bg(theme.colors.surface_selected)
-        .typography(Typography::Small)
-        .text_color(theme.colors.text_secondary)
-        .child(preview)
-        .child(div().min_w_0().truncate().child(name.to_owned()))
-}
-
-pub(crate) fn chip_icon(icon: IconName, theme: &UiTheme) -> Icon {
-    Icon::new(icon, theme.colors.text_muted).size(ICON_SIZE_SMALL)
-}
-
-pub(crate) fn thumbnail(selector: String, image: impl Into<ImageSource>, size: f32, theme: &UiTheme) -> Div {
-    div()
-        .debug_selector(move || selector)
-        .flex_none()
-        .size(rem(size))
-        .rounded(rem(RADIUS_INNER))
-        .overflow_hidden()
-        .border_1()
-        .border_color(theme.colors.border)
-        .child(img(image).size_full().object_fit(ObjectFit::Cover))
-}
-
-pub(crate) fn preview(selector: String, attachment: &PromptAttachment, size: f32, theme: &UiTheme) -> Div {
-    match classify_attachment(&attachment.path) {
-        AttachmentKind::Audio => div().flex().child(chip_icon(IconName::AudioLines, theme)),
-        _ => thumbnail(selector, attachment.path.clone(), size, theme),
+pub(crate) fn chip(id: String, preview: impl View, name: &str) -> Div {
+    let theme = UiTheme::current();
+    view! {
+        <div test_id=id flex items_center gap=4.0 min_w=0.0 px=8.0 py=4.0 rounded=RADIUS_INNER
+             bg=theme.surface_selected>
+            {preview}
+            <div min_w=0.0 overflow_hidden><text small secondary no_wrap>{name.to_owned()}</text></div>
+        </div>
     }
 }
 
-fn decode(image: &acp::ImageContent) -> Option<Arc<Image>> {
-    let format = ImageFormat::from_mime_type(&image.mime_type.0)?;
-    let bytes = BASE64.decode(&image.data).ok()?;
-    Some(Arc::new(Image::from_bytes(format, bytes)))
+pub(crate) fn chip_icon(icon: IconName) -> Icon {
+    Icon::new(icon, UiTheme::current().text_muted).size(ICON_SIZE_SMALL)
+}
+
+pub(crate) fn thumbnail(id: String, source: ImageSource, size: f32) -> Div {
+    view! {
+        <div test_id=id flex_none size=size rounded=RADIUS_INNER overflow_hidden border=px(1.0)
+             border_color=UiTheme::current().border>
+            {image(source).fit(Fit::Cover).size_full()}
+        </div>
+    }
+}
+
+pub(crate) fn preview(id: String, attachment: &PromptAttachment, size: f32) -> AnyView {
+    match classify_attachment(&attachment.path) {
+        AttachmentKind::Audio => div().flex().child(chip_icon(IconName::AudioLines)).into_any(),
+        _ => thumbnail(id, ImageSource::File(attachment.path.clone()), size).into_any(),
+    }
+}
+
+fn decode(image: &acp::ImageContent) -> Option<Arc<[u8]>> {
+    matches!(&*image.mime_type.0, "image/png" | "image/jpeg" | "image/jpg")
+        .then(|| BASE64.decode(&image.data).ok())
+        .flatten()
+        .map(Arc::from)
 }
 
 fn file_name(resource: &acp::EmbeddedResource) -> &str {

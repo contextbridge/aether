@@ -3,7 +3,6 @@ use aether_desktop::history::{ProjectHistory, SavedSession, UNTITLED, git_root, 
 use aether_desktop::testing::DesktopHarness;
 use aether_sessions::SessionSummary;
 use aether_sessions::testing::session_meta;
-use gpui::TestAppContext;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -51,17 +50,17 @@ fn a_directory_outside_any_checkout_is_its_own_project() {
     assert_eq!(git_root(Path::new("/no/such/dir")), Path::new("/no/such/dir"));
 }
 
-#[gpui::test]
-fn a_finished_turn_refreshes_history(cx: &mut TestAppContext) {
-    let (harness, thread) = DesktopHarness::alpha(cx, replying("alpha-session", "done"));
-    let history = harness.history(cx);
+#[test]
+fn a_finished_turn_refreshes_history() {
+    let (mut harness, thread) = DesktopHarness::alpha(replying("alpha-session", "done"));
+    let history = harness.history();
     harness.save_session("saved-by-the-agent", "/alpha", "2026-01-01T00:00:00Z", Some("hi"));
-    assert!(cx.read(|cx| history.read(cx).projects().is_empty()), "history has not been re-read yet");
+    assert!(history.projects().is_empty(), "history has not been re-read yet");
 
-    thread.update(cx, |thread, cx| thread.send("hi".into(), cx));
-    harness.run_until(cx, |cx| !history.read(cx).projects().is_empty());
+    thread.send("hi".into());
+    harness.run_until(|_| !history.projects().is_empty());
 
-    let sessions = cx.read(|cx| history.read(cx).projects()[0].sessions.clone());
+    let sessions = history.projects()[0].sessions.clone();
     assert_eq!(
         sessions,
         [SavedSession::from(summary("saved-by-the-agent", "/alpha", "2026-01-01T00:00:00Z", Some("hi")))]

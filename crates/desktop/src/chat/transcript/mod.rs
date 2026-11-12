@@ -4,433 +4,62 @@ mod markdown;
 mod message;
 mod tools;
 
-pub(crate) use markdown::install as install_markdown;
 pub(crate) use message::reconnect_banner;
 
 use super::attachment::Attachment;
+use crate::platform::Platform;
 use crate::threads::{Thread, ThreadStatus};
-use crate::ui::ActiveTheme;
-use crate::ui::tokens::{ROW_HEIGHT, rem};
-use crate::ui::{EmptyState, Icon, IconName, ListScrollbar, NoticeTone, StyledExt, Tooltip, UiTheme};
-use crate::ui::{Typography, TypographyExt};
+use crate::ui::tokens::ROW_HEIGHT;
+use crate::ui::{ActiveTheme, Hint, Icon, IconName, ListScrollbar, StyledExt, UiStyles, UiTheme, empty_state};
 use acp_utils::conversation::{
-    Conversation, ConversationContent, ConversationId, ConversationItem, ConversationItemId, Notice, NoticeLevel,
-    Revision,
+    ConversationContent, ConversationId, ConversationItem, ConversationItemId, Notice, NoticeLevel, Revision,
 };
 use agent_client_protocol::v2::schema as acp;
 use clankerdiff_core::DiffDocument;
-use clankerdiff_gpui::{DiffViewer, DiffViewerEvent, DiffViewerOptions};
-use client_core::session_core::SessionCore;
-use gpui::{
-    AnyElement, App, Context, Entity, EventEmitter, FollowMode, Image, ListAlignment, ListState, Role, Subscription,
-    Window, div, linear_color_stop, linear_gradient, list, prelude::*, px,
+use clankerdiff_rouge::{DiffViewerEvent, DiffViewerOptions, ReviewController, ReviewHandle, ReviewOutput};
+use clankerdiff_rouge_shell::rouge::core::{
+    Align, AnyView, BoxShadow, Cursor, FocusHandle, RowKey, Styled, TextAlign, View, VirtualListHandle, WindowHandle,
+    div, dynamic, focus_handle, px, root_font_size, show, text, view, virtual_list, virtual_list_handle, window_handle,
 };
-use gpui_base::{TextView, TextViewMotion, TextViewState};
+use clankerdiff_rouge_shell::rouge::reactive::{
+    Callback, Memo, Scope, Signal, Stored, effect, memo, signal, stored, untrack,
+};
 use groups::{Group, GroupKind, groups};
-use markdown::code_actions;
-use message::{
-    error, full_diff, image_preview, message_actions, notice, prompt, reconnect_button, row_group, thinking_block,
-};
+use message::{error, full_diff, image_preview, message_actions, notice, prompt, reconnect_button, thinking_block};
+use std::borrow::Cow;
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
-use std::ops::Range;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
-use tools::{ToolActions, ToolFold, ToolPreviews, ToolRenderer, fold_header};
+use tools::{ToolActions, ToolCard, ToolFold, ToolPreviews, fold_header};
 
+#[derive(Clone, Copy)]
 pub(crate) struct Transcript {
-    thread: Entity<Thread>,
-    list: ListState,
-    synced: Option<ConversationId>,
-    revisions: Vec<Revision>,
+    thread: Thread,
+    list: VirtualListHandle,
+    following: Signal<bool>,
+    unfolded: Signal<HashSet<Fold>>,
+    preview: Signal<Option<Arc<[u8]>>>,
+    full_diff: Signal<Option<ReviewHandle>>,
+    attachments: Stored<HashMap<ConversationItemId, Rc<ItemAttachments>>>,
+    tools: Stored<ToolPreviews>,
+    focus: Stored<HashMap<ConversationItemId, FocusHandle>>,
+    summary: Memo<Summary>,
+    structure: Memo<u64>,
+    on_location: Callback<(acp::ToolCallLocation,)>,
+    platform: Stored<Rc<dyn Platform>>,
+    window: WindowHandle,
+    scope: Scope,
+}
+
+type ItemAttachments = Vec<(usize, Attachment)>;
+
+#[derive(Clone, Default, PartialEq)]
+struct Summary {
+    conversation: Option<ConversationId>,
+    items: Vec<(ConversationItemId, Revision)>,
     groups: Vec<Group>,
-    replies: HashMap<ConversationItemId, Reply>,
-    attachments: HashMap<ConversationItemId, Arc<Vec<(usize, Attachment)>>>,
-    unfolded: HashSet<Fold>,
-    preview: Option<Arc<Image>>,
-    full_diff: Option<(Entity<DiffViewer>, Subscription)>,
-    tools: ToolPreviews,
-    _thread_changed: Subscription,
-}
-
-impl Transcript {
-    pub(crate) fn new(thread: Entity<Thread>, cx: &mut Context<Self>) -> Self {
-        // The trailing row clears the fade; list padding would shrink the scrollbar range and stop drags reaching the end.
-        let list = ListState::new(1, ListAlignment::Bottom, px(OVERDRAW));
-        list.set_follow_mode(FollowMode::Tail);
-        let this = cx.entity().downgrade();
-        list.set_scroll_handler(move |_, _, cx| {
-            let _ = this.update(cx, |_, cx| cx.notify());
-        });
-        let thread_changed = cx.observe(&thread, |_, _, cx| cx.notify());
-        Self {
-            thread,
-            list,
-            synced: None,
-            revisions: Vec::new(),
-            groups: Vec::new(),
-            replies: HashMap::new(),
-            attachments: HashMap::new(),
-            unfolded: HashSet::new(),
-            preview: None,
-            full_diff: None,
-            tools: ToolPreviews::default(),
-            _thread_changed: thread_changed,
-        }
-    }
-
-    fn sync(&mut self, cx: &App) -> Vec<(usize, ConversationItemId, String)> {
-        let conversation = self.thread.read(cx).core().map(SessionCore::conversation);
-        let id = conversation.map(Conversation::id);
-        let items = conversation.map(Conversation::items).unwrap_or_default();
-        let revisions: Vec<Revision> = items.iter().map(ConversationItem::revision).collect();
-        let groups = groups(items);
-        let changed: Vec<usize> = if id != self.synced || revisions.len() < self.revisions.len() {
-            self.list.reset(revisions.len() + 1);
-            self.replies.clear();
-            self.attachments.clear();
-            self.tools.clear();
-            self.unfolded.clear();
-            self.full_diff = None;
-            (0..revisions.len()).collect()
-        } else {
-            let changed: Vec<usize> =
-                (0..revisions.len()).filter(|&index| self.revisions.get(index) != Some(&revisions[index])).collect();
-            for &index in changed.iter().take_while(|&&index| index < self.revisions.len()) {
-                self.list.remeasure_items(index..index + 1);
-            }
-            self.list.splice(self.revisions.len()..self.revisions.len(), revisions.len() - self.revisions.len());
-            let regrouped = self.groups.iter().filter(|group| !groups.contains(group));
-            for group in regrouped.chain(groups.iter().filter(|group| !self.groups.contains(group))) {
-                self.list.remeasure_items(group.rows.clone());
-            }
-            changed
-        };
-        self.synced = id;
-        self.revisions = revisions;
-        self.groups = groups;
-        changed
-            .into_iter()
-            .filter_map(|index| {
-                let item = &items[index];
-                matches!(item.content(), ConversationContent::Assistant(_))
-                    .then(|| (index, item.id(), item.text().unwrap_or_default().into_owned()))
-            })
-            .collect()
-    }
-
-    fn update_reply(&mut self, index: usize, id: ConversationItemId, text: String, cx: &mut Context<Self>) {
-        if let Some(reply) = self.replies.get_mut(&id) {
-            match text.strip_prefix(reply.text.as_str()) {
-                Some("") => {}
-                Some(appended) => reply.view.update(cx, |view, cx| view.push_str(appended, cx)),
-                None => reply.view.update(cx, |view, cx| view.set_text(&text, cx)),
-            }
-            reply.text = text;
-            return;
-        }
-        let view = cx.new(|cx| TextViewState::markdown(&text, cx));
-        let parsed = cx.observe(&view, move |this, _, _| this.list.remeasure_items(index..index + 1));
-        self.replies.insert(id, Reply { view, text, _parsed: parsed });
-    }
-
-    fn toggle(&mut self, fold: Fold, rows: Range<usize>, cx: &mut Context<Self>) {
-        if !self.unfolded.remove(&fold) {
-            self.unfolded.insert(fold);
-        }
-        self.list.pause_following_tail();
-        self.list.remeasure_items(rows);
-        cx.notify();
-    }
-
-    fn open_full_diff(&mut self, document: &Arc<DiffDocument>, window: &mut Window, cx: &mut Context<Self>) {
-        let theme = ActiveTheme::global(cx).review().clone();
-        let options = DiffViewerOptions { themes: false, review_bar: false, ..DiffViewerOptions::default() };
-        let viewer = cx.new(|_| DiffViewer::with_options(document.clone(), theme, options));
-        let cancelled = cx.subscribe(&viewer, |this, _, event: &DiffViewerEvent, cx| {
-            if matches!(event, DiffViewerEvent::Cancel) {
-                this.close_full_diff(cx);
-            }
-        });
-        self.full_diff = Some((viewer, cancelled));
-        window.blur(cx);
-        cx.notify();
-    }
-
-    fn close_full_diff(&mut self, cx: &mut Context<Self>) {
-        self.full_diff = None;
-        cx.notify();
-    }
-
-    fn jump_to_latest(&mut self, cx: &mut Context<Self>) {
-        self.list.set_follow_mode(FollowMode::Tail);
-        cx.notify();
-    }
-
-    fn render_row(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
-        let desktop_theme = ActiveTheme::global(cx);
-        let theme = desktop_theme.ui();
-        let thread = self.thread.clone();
-        let Some(items) = thread.read(cx).core().map(|core| core.conversation().items()) else {
-            return div().into_any_element();
-        };
-        let Some(item) = items.get(index) else {
-            return div().h(rem(FADE_HEIGHT)).into_any_element();
-        };
-        let group = self.groups.iter().find(|group| group.rows.contains(&index)).cloned();
-        let (header, folded) = match &group {
-            Some(Group { rows, kind }) => {
-                let fold = Fold::Rows(*kind, items[rows.start].id());
-                let expanded = self.unfolded.contains(&fold);
-                let header = (index == rows.start).then(|| {
-                    let toggle = cx.listener({
-                        let rows = rows.clone();
-                        move |this, _, _, cx| this.toggle(fold, rows.clone(), cx)
-                    });
-                    fold_header(*kind, index, &items[rows.clone()], expanded, &theme, toggle)
-                });
-                (header, !expanded)
-            }
-            None => (None, false),
-        };
-        if folded && header.is_none() {
-            return div().into_any_element();
-        }
-        let content = (!folded).then(|| self.render_item(index, item, &theme, cx));
-        let row_group = row_group(index);
-        let is_tool = matches!(item.content(), ConversationContent::Tool(_));
-        let is_prompt = matches!(item.content(), ConversationContent::User(_));
-        div()
-            .debug_selector(move || format!("transcript-row-{index}"))
-            .group(row_group)
-            .w_full()
-            .px_4()
-            .when(is_prompt, |row| row.pt_6().pb_2())
-            .when(!is_tool && !is_prompt && group.is_none(), Styled::py_2)
-            .when(header.is_some() && group.as_ref().is_some_and(|group| group.kind == GroupKind::Turn), Styled::py_2)
-            .child(div().content_width().children(header).children(content.map(|content| {
-                let indented = group.as_ref().is_some_and(|group| group.kind == GroupKind::Run);
-                div().when(indented, Styled::pl_4).child(content)
-            })))
-            .into_any_element()
-    }
-
-    fn render_item(
-        &mut self,
-        index: usize,
-        item: &ConversationItem,
-        theme: &UiTheme,
-        cx: &Context<Self>,
-    ) -> AnyElement {
-        let fold = Fold::Item(item.id());
-        let id = item.id();
-        let expanded = self.unfolded.contains(&fold);
-        let toggle = cx.listener(move |this, _, _, cx| this.toggle(fold, index..index + 1, cx));
-        let copy = |text: String| message_actions(index, text, theme);
-        match item.content() {
-            ConversationContent::User(blocks) => {
-                let text: String = blocks
-                    .iter()
-                    .filter_map(|block| match block {
-                        acp::ContentBlock::Text(text) => Some(text.text.as_str()),
-                        _ => None,
-                    })
-                    .collect();
-                let attachments = self
-                    .attachments
-                    .entry(id)
-                    .or_insert_with(|| {
-                        Arc::new(
-                            blocks
-                                .iter()
-                                .enumerate()
-                                .filter_map(|(block, content)| Some((block, Attachment::of(content)?)))
-                                .collect(),
-                        )
-                    })
-                    .clone();
-                let open = cx.listener(|this, image: &Arc<Image>, _, cx| {
-                    this.preview = Some(image.clone());
-                    cx.notify();
-                });
-                div()
-                    .flex()
-                    .flex_col()
-                    .items_end()
-                    .child(prompt(index, text.clone(), &attachments, theme, open))
-                    .child(copy(text))
-                    .into_any_element()
-            }
-            ConversationContent::Assistant(_) => match self.replies.get(&id) {
-                Some(reply) => div()
-                    .typography(Typography::Reading)
-                    .child(div().debug_selector(move || format!("reply-{index}")).child(
-                        TextView::new(&reply.view).motion(reply_motion()).code_block_actions({
-                            let theme = *theme;
-                            move |block, _, _| code_actions(index, block, &theme)
-                        }),
-                    ))
-                    .when(!item.is_open(), |reply_row| reply_row.child(copy(reply.text.clone())))
-                    .into_any_element(),
-                None => div().into_any_element(),
-            },
-            ConversationContent::Thought(_) => {
-                let text = item.text().unwrap_or_default().into_owned();
-                thinking_block(text, item.is_open(), index, expanded, theme, toggle)
-            }
-            ConversationContent::Tool(tool) => {
-                let full = Fold::Full(id);
-                let fold = match (expanded, self.unfolded.contains(&full)) {
-                    (false, _) => ToolFold::Folded,
-                    (true, false) => ToolFold::Expanded,
-                    (true, true) => ToolFold::Full,
-                };
-                let show_all = cx.listener(move |this, _, _, cx| this.toggle(full, index..index + 1, cx));
-                let actions = ToolActions {
-                    open_diff: Rc::new(cx.listener(|this, document: &Arc<DiffDocument>, window, cx| {
-                        this.open_full_diff(document, window, cx);
-                    })),
-                    open_location: Rc::new(cx.listener(|_, location: &acp::ToolCallLocation, _, cx| {
-                        cx.emit(location.clone());
-                    })),
-                };
-                ToolRenderer::new(ActiveTheme::global(cx), self.tools.get(item, tool), actions)
-                    .render(tool, index, fold, toggle, show_all)
-            }
-            ConversationContent::Notice(Notice { level: NoticeLevel::Info, text }) => notice(text, theme),
-            ConversationContent::Notice(Notice { level: NoticeLevel::Error, text }) => error(index, text, theme),
-        }
-    }
-}
-
-impl EventEmitter<acp::ToolCallLocation> for Transcript {}
-
-impl Render for Transcript {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        for (index, id, text) in self.sync(cx) {
-            self.update_reply(index, id, text, cx);
-        }
-        let theme = ActiveTheme::global(cx).ui();
-        let thread = self.thread.clone();
-        let thread = thread.read(cx);
-        let status = thread.status();
-        let conversation = thread.core().map(SessionCore::conversation);
-        let body = if conversation.is_none_or(|conversation| conversation.items().is_empty()) {
-            empty_state(&self.thread, status, thread.error(), &theme)
-        } else {
-            let jump = (!self.list.is_following_tail()).then(|| {
-                div()
-                    .id("jump-to-latest")
-                    .debug_selector(|| "jump-to-latest".to_owned())
-                    .role(Role::Button)
-                    .aria_label("Jump to latest")
-                    .flex_none()
-                    .h(rem(ROW_HEIGHT))
-                    .px_3()
-                    .flex()
-                    .items_center()
-                    .rounded_full()
-                    .border_1()
-                    .border_color(theme.colors.border_subtle)
-                    .bg(theme.colors.elevated)
-                    .shadow_md()
-                    .text_color(theme.colors.text_secondary)
-                    .cursor_pointer()
-                    .hover(move |pill| pill.border_color(theme.colors.border).text_color(theme.colors.text))
-                    .tooltip(Tooltip::text("Jump to latest", theme))
-                    .on_click(cx.listener(|this, _, _, cx| this.jump_to_latest(cx)))
-                    .child(Icon::new(IconName::ArrowDown, theme.colors.text_secondary))
-            });
-            let rows =
-                list(self.list.clone(), cx.processor(|this, index, _, cx| this.render_row(index, cx))).size_full();
-            let fade = linear_gradient(
-                180.0,
-                linear_color_stop(theme.colors.canvas.opacity(0.0), 0.0),
-                linear_color_stop(theme.colors.canvas, FADE_OPAQUE_FROM),
-            );
-            let foot = div().absolute().bottom_0().left_0().right_0().h(rem(FADE_HEIGHT)).bg(fade);
-            let jump = jump.map(|jump| {
-                div().absolute().bottom(rem(FADE_HEIGHT)).left_0().right_0().flex().justify_center().child(jump)
-            });
-            div()
-                .size_full()
-                .flex()
-                .child(div().relative().flex_1().min_w_0().h_full().child(rows).child(foot).children(jump))
-                .child(ListScrollbar::new("transcript-scrollbar", self.list.clone(), theme))
-                .into_any_element()
-        };
-        let full_diff = self.full_diff.as_ref().map(|(viewer, _)| {
-            let this = cx.entity().downgrade();
-            full_diff(viewer.clone(), &theme, move |_, cx| {
-                let _ = this.update(cx, Self::close_full_diff);
-            })
-        });
-        let preview = self.preview.clone().map(|image| {
-            let this = cx.entity().downgrade();
-            image_preview(image, &theme, move |_, cx| {
-                let _ = this.update(cx, |this, cx| {
-                    this.preview = None;
-                    cx.notify();
-                });
-            })
-        });
-        div()
-            .debug_selector(|| "transcript".to_owned())
-            .relative()
-            .size_full()
-            .flex()
-            .flex_col()
-            .child(div().flex_1().min_h_0().w_full().child(body))
-            .children(preview)
-            .children(full_diff)
-    }
-}
-
-const FADE_HEIGHT: f32 = 24.0;
-
-const FADE_OPAQUE_FROM: f32 = 0.6;
-
-const OVERDRAW: f32 = 400.0;
-
-fn reply_motion() -> TextViewMotion {
-    TextViewMotion::default()
-        .with_stream_fade(Duration::from_millis(STREAM_FADE_MILLIS))
-        .with_stream_fade_stagger(Duration::from_millis(STREAM_FADE_STAGGER_MILLIS))
-}
-
-const STREAM_FADE_MILLIS: u64 = 240;
-const STREAM_FADE_STAGGER_MILLIS: u64 = 12;
-
-struct Reply {
-    view: Entity<TextViewState>,
-    text: String,
-    _parsed: Subscription,
-}
-
-fn empty_state(thread: &Entity<Thread>, status: ThreadStatus, error: Option<&str>, theme: &UiTheme) -> AnyElement {
-    if let Some(problem) = status.problem() {
-        let detail = error.unwrap_or("Reconnect to pick up where it left off").to_owned();
-        let tone = if status == ThreadStatus::Errored { NoticeTone::Error } else { NoticeTone::Warning };
-        return div()
-            .size_full()
-            .p_6()
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap_3()
-            .text_center()
-            .child(div().typography(Typography::Heading).text_color(theme.notice_style(tone).foreground).child(problem))
-            .child(div().typography(Typography::Body).text_color(theme.colors.text_muted).child(detail))
-            .child(reconnect_button(thread, theme))
-            .into_any_element();
-    }
-    let (title, detail) = match status {
-        ThreadStatus::Connecting => ("Connecting…", "Starting the agent for this thread"),
-        ThreadStatus::Dormant => ("Stopped", "This thread's agent is not running"),
-        _ => ("New thread", "Send a prompt to start"),
-    };
-    EmptyState::new(title, detail, NoticeTone::Neutral, *theme).into_any_element()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -439,3 +68,427 @@ enum Fold {
     Full(ConversationItemId),
     Rows(GroupKind, ConversationItemId),
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum RowId {
+    Item(ConversationItemId),
+    Spacer,
+}
+
+impl Transcript {
+    pub(crate) fn new(
+        thread: Thread,
+        platform: Rc<dyn Platform>,
+        on_location: impl Fn(acp::ToolCallLocation) + 'static,
+    ) -> Self {
+        let summary = memo(move || {
+            thread
+                .with_core(|core| {
+                    let conversation = core.conversation();
+                    let items = conversation.items();
+                    Summary {
+                        conversation: Some(conversation.id()),
+                        items: items.iter().map(|item| (item.id(), item.revision())).collect(),
+                        groups: groups(items),
+                    }
+                })
+                .unwrap_or_default()
+        });
+        let unfolded: Signal<HashSet<Fold>> = signal(HashSet::new());
+        let structure = memo(move || {
+            let groups = summary.with(|summary| hash(&(summary.conversation, &summary.groups)));
+            let folds = unfolded.with(|unfolded| unfolded.iter().map(hash).fold(0, u64::wrapping_add));
+            groups ^ folds
+        });
+        let transcript = Self {
+            thread,
+            list: virtual_list_handle(),
+            following: signal(true),
+            unfolded,
+            preview: signal(None),
+            full_diff: signal(None),
+            attachments: stored(HashMap::new()),
+            tools: stored(ToolPreviews::default()),
+            focus: stored(HashMap::new()),
+            summary,
+            structure,
+            on_location: Callback::from(on_location),
+            platform: stored(platform),
+            window: window_handle(),
+            scope: Scope::new(),
+        };
+        transcript.observe();
+        transcript
+    }
+
+    fn observe(self) {
+        let summary = self.summary;
+        let previous: Cell<(Option<ConversationId>, usize)> = Cell::new((None, 0));
+        effect(move || {
+            let current = summary.with(|summary| (summary.conversation, summary.items.len()));
+            let (was, had) = previous.replace(current);
+            if was != current.0 || current.1 < had {
+                untrack(|| {
+                    self.attachments.update(HashMap::clear);
+                    self.tools.update(ToolPreviews::clear);
+                    self.focus.update(HashMap::clear);
+                    self.unfolded.update(HashSet::clear);
+                    self.full_diff.set(None);
+                });
+            }
+        });
+        effect(move || {
+            let rows = summary.with(|summary| summary.items.clone());
+            untrack(|| {
+                if self.following.get_untracked() {
+                    self.list.scroll_to_row(rows.len(), Align::Bottom);
+                }
+            });
+        });
+        let offset = Cell::new(0.0_f32);
+        let state = self.list.scroll_state();
+        effect(move || {
+            let state = state.get();
+            let at = state.offset.y;
+            let bottom = at >= state.max_offset().y - FOLLOW_SLOP;
+            let up = at < offset.replace(at) - FOLLOW_SLOP;
+            untrack(|| {
+                if bottom {
+                    self.following.set_if_changed(true);
+                } else if up {
+                    self.following.set_if_changed(false);
+                }
+            });
+        });
+    }
+
+    pub(crate) fn view(self) -> impl View {
+        let empty = memo(move || self.summary.with(|summary| summary.items.is_empty()));
+        let close_preview = Callback::from(move || self.preview.set(None));
+        let close_diff = Callback::from(move || self.full_diff.set(None));
+        view! {
+            <div test_id="transcript" relative size_full flex col>
+                <div flex_1 min_h=0.0 w_full>
+                    <dynamic>{if empty.get() { self.empty_state().into_any() } else { untrack(|| self.list()).into_any() }}</dynamic>
+                </div>
+                <dynamic>{self.preview.get().map(|bytes| image_preview(bytes, close_preview))}</dynamic>
+                <dynamic>{self.full_diff.get().map(|handle| full_diff(&handle, close_diff))}</dynamic>
+            </div>
+        }
+    }
+
+    fn list(self) -> impl View {
+        let theme = UiTheme::current();
+        let (summary, structure, list) = (self.summary, self.structure, self.list);
+        let rows = virtual_list(
+            move || summary.with(|summary| summary.items.len()) + 1,
+            ROW_ESTIMATE,
+            move |index| untrack(|| self.row(index)),
+        )
+        .row_identity(move |index| {
+            let id = summary.with(|summary| summary.items.get(index).map_or(RowId::Spacer, |(id, _)| RowId::Item(*id)));
+            RowKey::new(id, structure.get())
+        })
+        .measure_rows(|| u64::from(root_font_size().get().to_bits()))
+        .handle(list)
+        .size_full();
+        let following = self.following;
+        let scroll = list.scroll_state();
+        let jump = move || {
+            view! {
+            <div test_id="jump-to-latest" flex_none h=ROW_HEIGHT px=12.0 flex items_center rounded={ROW_HEIGHT / 2.0}
+                 border=px(1.0) border_color=theme.border_subtle bg=theme.elevated shadow=BoxShadow::md()
+                 cursor=Cursor::Pointer
+                 on_click={move |event| {
+                     event.stop_propagation();
+                     following.set(true);
+                     list.scroll_to_row(summary.with_untracked(|summary| summary.items.len()), Align::Bottom);
+                 }}>
+                {Icon::new(IconName::ArrowDown, theme.text_secondary)}
+            </div>
+            }
+            .tooltip("Jump to latest")
+        };
+        view! {
+            <div size_full flex>
+                <div relative flex_1 min_w=0.0 h_full>
+                    {rows}
+                    <show when={move || !following.get()}>
+                        <div absolute bottom=FADE_HEIGHT left=0.0 right=0.0 flex justify_center>{jump()}</div>
+                    </show>
+                </div>
+                <show when={move || scroll.with(|scroll| scroll.content.height > scroll.viewport.height + 0.5)}>
+                    <div test_id="transcript-scrollbar" flex_none h_full>{ListScrollbar::list(list)}</div>
+                </show>
+            </div>
+        }
+    }
+
+    fn row(self, index: usize) -> AnyView {
+        let (item, group) = self.summary.with(|summary| {
+            let group = summary.groups.iter().find(|group| group.rows.contains(&index)).cloned();
+            (summary.items.get(index).map(|(id, _)| *id), group)
+        });
+        if item.is_none() {
+            return view! { <div h=FADE_HEIGHT/> }.into_any();
+        }
+        let Some((kind, header)) = self
+            .thread
+            .with_core(|core| {
+                let items = core.conversation().items();
+                let kind = items.get(index).map(kind_of)?;
+                let header = group.as_ref().map(|Group { rows, kind }| {
+                    let fold = Fold::Rows(*kind, items[rows.start].id());
+                    let expanded = self.unfolded.with(|unfolded| unfolded.contains(&fold));
+                    let toggle = Callback::from(move || self.toggle(fold));
+                    let header = (index == rows.start)
+                        .then(|| fold_header(*kind, index, &items[rows.clone()], expanded, toggle));
+                    (header, !expanded)
+                });
+                Some((kind, header))
+            })
+            .flatten()
+        else {
+            return view! { <div h=px(1.0)/> }.into_any();
+        };
+        let (header, folded) = header.unwrap_or((None, false));
+        if folded && header.is_none() {
+            return view! { <div h=px(1.0)/> }.into_any();
+        }
+        let hovered = signal(false);
+        let content = (!folded).then(|| {
+            let indented = group.as_ref().is_some_and(|group| group.kind == GroupKind::Run);
+            let item = self.item(index, kind, hovered);
+            if indented { div().pl(16.0).child(item) } else { div().child(item) }
+        });
+        let turn_header = header.is_some() && group.as_ref().is_some_and(|group| group.kind == GroupKind::Turn);
+        let padding = match kind {
+            Kind::User => (24.0, 8.0),
+            Kind::Tool if !turn_header => (0.0, 0.0),
+            _ if group.is_some() && !turn_header => (0.0, 0.0),
+            _ => (8.0, 8.0),
+        };
+        view! {
+            <div test_id={format!("transcript-row-{index}")} w_full px=16.0 pt=padding.0 pb=padding.1
+                 on_hover={move |inside| {
+                     hovered.set_if_changed(inside);
+                 }}>
+                <div content_width>{header}{content}</div>
+            </div>
+        }
+        .into_any()
+    }
+
+    fn item(self, index: usize, kind: Kind, hovered: Signal<bool>) -> AnyView {
+        let thread = self.thread;
+        match kind {
+            Kind::User => self.user(index, hovered),
+            Kind::Assistant => {
+                let text = memo(move || {
+                    thread
+                        .with_core(|core| {
+                            core.conversation().items().get(index).and_then(|item| item.text().map(Cow::into_owned))
+                        })
+                        .flatten()
+                        .unwrap_or_default()
+                });
+                let open = memo(move || {
+                    thread
+                        .with_core(|core| core.conversation().items().get(index).is_some_and(ConversationItem::is_open))
+                        .unwrap_or(false)
+                });
+                let (window, platform) = (self.window, self.platform);
+                view! {
+                    <div reading>
+                        <div test_id={format!("reply-{index}")}>{markdown::reply(text, window, platform)}</div>
+                        <dynamic>{(!open.get()).then(|| message_actions(index, text.get_untracked(), hovered, window))}</dynamic>
+                    </div>
+                }
+                .into_any()
+            }
+            Kind::Thought | Kind::Tool | Kind::Notice => {
+                let revision = memo(move || {
+                    thread
+                        .with_core(|core| core.conversation().items().get(index).map(ConversationItem::revision))
+                        .flatten()
+                });
+                dynamic(move || {
+                    revision.get();
+                    untrack(|| self.settled_item(index))
+                })
+                .into_any()
+            }
+        }
+    }
+
+    fn user(self, index: usize, hovered: Signal<bool>) -> AnyView {
+        let Some((id, text, blocks)) = self
+            .thread
+            .with_core(|core| {
+                let item = core.conversation().items().get(index)?;
+                let ConversationContent::User(blocks) = item.content() else {
+                    return None;
+                };
+                let text: String = blocks
+                    .iter()
+                    .filter_map(|block| match block {
+                        acp::ContentBlock::Text(text) => Some(text.text.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+                Some((item.id(), text, blocks.clone()))
+            })
+            .flatten()
+        else {
+            return ().into_any();
+        };
+        let attachments = self.attachments.update(|attachments| {
+            attachments
+                .entry(id)
+                .or_insert_with(|| {
+                    Rc::new(
+                        blocks
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(block, content)| Some((block, Attachment::of(content)?)))
+                            .collect(),
+                    )
+                })
+                .clone()
+        });
+        let open = Callback::from(move |bytes: Arc<[u8]>| self.preview.set(Some(bytes)));
+        view! {
+            <div flex col items_end>
+                {prompt(index, text.clone(), &attachments, open)}
+                {message_actions(index, text, hovered, self.window)}
+            </div>
+        }
+        .into_any()
+    }
+
+    fn settled_item(self, index: usize) -> AnyView {
+        let theme = ActiveTheme::current();
+        let review = theme.review();
+        let actions = ToolActions {
+            open_diff: Callback::from(move |document: Arc<DiffDocument>| self.open_full_diff(document)),
+            open_location: self.on_location,
+        };
+        self.thread
+            .with_core(|core| {
+                let item = core.conversation().items().get(index)?;
+                let id = item.id();
+                let expanded = self.unfolded.with(|unfolded| unfolded.contains(&Fold::Item(id)));
+                let toggle = Callback::from(move || self.toggle(Fold::Item(id)));
+                Some(match item.content() {
+                    ConversationContent::Thought(_) => {
+                        let text = item.text().unwrap_or_default().into_owned();
+                        thinking_block(text, item.is_open(), index, expanded, toggle)
+                    }
+                    ConversationContent::Tool(tool) => {
+                        let full = Fold::Full(id);
+                        let fold = match (expanded, self.unfolded.with(|unfolded| unfolded.contains(&full))) {
+                            (false, _) => ToolFold::Folded,
+                            (true, false) => ToolFold::Expanded,
+                            (true, true) => ToolFold::Full,
+                        };
+                        let show_all = Callback::from(move || self.toggle(full));
+                        let preview = self.tools.update(|tools| tools.get(item, tool));
+                        let focus = self
+                            .focus
+                            .update(|handles| *handles.entry(id).or_insert_with(|| self.scope.run(focus_handle)));
+                        let card =
+                            ToolCard { review: &review, theme: theme.review_signal(), preview: &preview, actions };
+                        card.render(tool, index, fold, focus, toggle, show_all)
+                    }
+                    ConversationContent::Notice(Notice { level: NoticeLevel::Info, text }) => notice(text),
+                    ConversationContent::Notice(Notice { level: NoticeLevel::Error, text }) => error(index, text),
+                    ConversationContent::User(_) | ConversationContent::Assistant(_) => ().into_any(),
+                })
+            })
+            .flatten()
+            .unwrap_or_else(|| ().into_any())
+    }
+
+    fn toggle(self, fold: Fold) {
+        self.following.set(false);
+        self.unfolded.update(|unfolded| {
+            if !unfolded.remove(&fold) {
+                unfolded.insert(fold);
+            }
+        });
+    }
+
+    fn open_full_diff(self, document: Arc<DiffDocument>) {
+        let theme = ActiveTheme::current().review();
+        let options = DiffViewerOptions { themes: false, review_bar: false, ..DiffViewerOptions::default() };
+        let handle = self.scope.run(|| {
+            ReviewController::with_options(document, theme, options).mount(move |output| {
+                if output == ReviewOutput::Event(DiffViewerEvent::Cancel) {
+                    self.full_diff.set(None);
+                }
+            })
+        });
+        self.full_diff.set(Some(handle));
+    }
+
+    fn empty_state(self) -> impl View {
+        let thread = self.thread;
+        let state = memo(move || (thread.status(), thread.error()));
+        dynamic(move || {
+            let (status, error) = state.get();
+            if let Some(problem) = status.problem() {
+                let theme = UiTheme::current();
+                let detail = error.unwrap_or_else(|| "Reconnect to pick up where it left off".to_owned());
+                let color = if status == ThreadStatus::Errored { theme.destructive } else { theme.warning };
+                return view! {
+                    <div size_full p=24.0 flex col items_center justify_center gap=12.0>
+                        <text heading color=color align=TextAlign::Center>{problem}</text>
+                        <text body muted align=TextAlign::Center>{detail}</text>
+                        {reconnect_button(thread)}
+                    </div>
+                }
+                .into_any();
+            }
+            let (title, detail) = match status {
+                ThreadStatus::Connecting => ("Connecting…", "Starting the agent for this thread"),
+                ThreadStatus::Dormant => ("Stopped", "This thread's agent is not running"),
+                _ => ("New thread", "Send a prompt to start"),
+            };
+            view! {
+                <div size_full flex items_center justify_center>
+                    <empty_state icon=IconName::MessageSquareText title detail/>
+                </div>
+            }
+            .into_any()
+        })
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    User,
+    Assistant,
+    Thought,
+    Tool,
+    Notice,
+}
+
+fn kind_of(item: &ConversationItem) -> Kind {
+    match item.content() {
+        ConversationContent::User(_) => Kind::User,
+        ConversationContent::Assistant(_) => Kind::Assistant,
+        ConversationContent::Thought(_) => Kind::Thought,
+        ConversationContent::Tool(_) => Kind::Tool,
+        ConversationContent::Notice(_) => Kind::Notice,
+    }
+}
+
+fn hash(value: &impl Hash) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
+}
+
+const FADE_HEIGHT: f32 = 24.0;
+const ROW_ESTIMATE: f32 = 48.0;
+const FOLLOW_SLOP: f32 = 2.0;

@@ -1,16 +1,15 @@
 use super::thread::Thread;
 use crate::target::{AgentConnector, ConnectError, SessionTarget};
 use agent_client_protocol::v2::schema::SessionId;
-use clankerdiff_gpui_shell::runtime;
+use clankerdiff_rouge_shell::rouge::reactive::{Task, spawn};
+use clankerdiff_rouge_shell::runtime;
 use client_core::command::{Command, ReviewSource};
 use client_core::runtime::{Input, SessionRuntime};
 use client_core::session_core::SessionCoreConfig;
-use gpui::{Context, Task};
 use std::future::Future;
 use std::pin::pin;
 use std::sync::Arc;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
-use tokio::task::JoinError;
 
 pub(crate) enum DriverMessage {
     Launched(String),
@@ -20,41 +19,41 @@ pub(crate) enum DriverMessage {
     Input(Input),
 }
 
-pub(crate) struct ThreadDriverHandle {
+pub(crate) struct Driver {
     commands: UnboundedSender<Command>,
-    _connection: Task<Result<(), JoinError>>,
-    _receive: Task<()>,
+    _connection: Task<()>,
+    receive: Task<()>,
 }
 
-impl ThreadDriverHandle {
+impl Driver {
     pub(crate) fn spawn(
         connector: Arc<AgentConnector>,
         target: SessionTarget,
         session_id: Option<SessionId>,
-        cx: &mut Context<Thread>,
+        thread: Thread,
     ) -> Self {
         let (commands, commands_rx) = unbounded_channel();
         let (messages, mut messages_rx) = unbounded_channel();
-        let connection = runtime::spawn(cx, drive(connector, target, session_id, commands_rx, messages));
-        let receive = cx.spawn(async move |this, cx| {
+        let connection = runtime::spawn(drive(connector, target, session_id, commands_rx, messages));
+        let receive = spawn(async move {
             while let Some(message) = messages_rx.recv().await {
                 let batch = std::iter::once(message).chain(std::iter::from_fn(|| messages_rx.try_recv().ok()));
-                let batch: Vec<DriverMessage> = batch.collect();
-                let handled = this.update(cx, |thread, cx| {
-                    for message in batch {
-                        thread.on_driver_message(message, cx);
-                    }
-                });
-                if handled.is_err() {
+                if !thread.receive(batch.collect()) {
                     break;
                 }
             }
         });
-        Self { commands, _connection: connection, _receive: receive }
+        Self { commands, _connection: connection, receive }
     }
 
     pub(crate) fn send(&self, command: Command) {
         let _ = self.commands.send(command);
+    }
+}
+
+impl Drop for Driver {
+    fn drop(&mut self) {
+        self.receive.cancel();
     }
 }
 

@@ -2,7 +2,7 @@ use acp_utils::conversation::{ConversationContent, ConversationItem, ToolCall, T
 use std::collections::HashSet;
 use std::ops::Range;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct Group {
     pub(crate) rows: Range<usize>,
     pub(crate) kind: GroupKind,

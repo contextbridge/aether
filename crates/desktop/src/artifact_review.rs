@@ -1,94 +1,114 @@
-use crate::files::Dismissed;
+use crate::platform::Platform;
 use crate::threads::Thread;
 use crate::ui::ActiveTheme;
 use clankerdiff_core::ReviewCapabilities;
-use clankerdiff_gpui::{MarkdownReviewer, MarkdownReviewerOptions};
 use clankerdiff_markdown::{MarkdownDocument, MarkdownReviewDecision, MarkdownReviewEvent, MarkdownReviewSubmission};
+use clankerdiff_rouge::{MarkdownController, MarkdownHandle, MarkdownOutput, markdown_review_view};
+use clankerdiff_rouge_shell::rouge::core::{Styled, View, WindowHandle, div, dynamic, view, window_handle};
+use clankerdiff_rouge_shell::rouge::reactive::{
+    Callback, Scope, Signal, Stored, effect, memo, signal, spawn, stored, untrack,
+};
 use client_core::elicitation::{ElicitationAnswer, ElicitationId};
-use gpui::{ClipboardItem, Context, Entity, EventEmitter, Subscription, Window, div, prelude::*};
+use std::rc::Rc;
 use std::sync::Arc;
 use utils::artifact_review::{ArtifactReviewElicitationMeta, ArtifactReviewSubmission};
 
+#[derive(Clone, Copy)]
 pub(crate) struct ArtifactReview {
-    thread: Entity<Thread>,
-    reviewer: Option<Reviewer>,
-    _subscriptions: Vec<Subscription>,
+    thread: Thread,
+    reviewer: Signal<Option<Reviewer>>,
+    on_dismissed: Callback,
+    platform: Stored<Rc<dyn Platform>>,
+    window: WindowHandle,
+    scope: Scope,
 }
 
+#[derive(Clone, Copy)]
 struct Reviewer {
     id: ElicitationId,
-    view: Entity<MarkdownReviewer>,
-    _subscription: Subscription,
+    handle: MarkdownHandle,
+    scope: Scope,
 }
 
 impl ArtifactReview {
-    pub(crate) fn new(thread: Entity<Thread>, cx: &mut Context<Self>) -> Self {
-        let subscriptions = vec![
-            cx.observe(&thread, |this, _, cx| this.sync(cx)),
-            cx.observe_global::<ActiveTheme>(|this, cx| {
-                let theme = ActiveTheme::global(cx).review().clone();
-                if let Some(reviewer) = &this.reviewer {
-                    reviewer.view.update(cx, |view, cx| view.set_theme(theme, cx));
+    pub(crate) fn new(thread: Thread, platform: Rc<dyn Platform>, on_dismissed: impl Fn() + 'static) -> Self {
+        let review = Self {
+            thread,
+            reviewer: signal(None),
+            on_dismissed: Callback::from(on_dismissed),
+            platform: stored(platform),
+            window: window_handle(),
+            scope: Scope::new(),
+        };
+        let pending = memo(move || thread.pending_review().map(|(id, _)| id));
+        effect(move || {
+            let pending = pending.get();
+            untrack(|| review.sync(pending));
+        });
+        effect(move || {
+            let theme = ActiveTheme::current().review();
+            untrack(|| {
+                if let Some(reviewer) = review.reviewer.get_untracked() {
+                    reviewer.handle.set_theme(theme);
                 }
-            }),
-        ];
-        let mut review = Self { thread, reviewer: None, _subscriptions: subscriptions };
-        review.sync(cx);
+            });
+        });
         review
     }
 
-    fn sync(&mut self, cx: &mut Context<Self>) {
-        let pending = self.thread.read(cx).pending_review();
-        if pending.map(|(id, _)| id) == self.reviewer.as_ref().map(|reviewer| reviewer.id) {
+    pub(crate) fn view(self) -> impl View {
+        let shown = memo(move || self.reviewer.get().map(|reviewer| reviewer.id));
+        view! {
+            <div test_id="artifact-review" size_full>
+                <dynamic>{shown.get().and_then(|_| untrack(|| self.reviewer.get_untracked())).map(|reviewer| markdown_review_view(reviewer.handle))}</dynamic>
+            </div>
+        }
+    }
+
+    fn sync(self, pending: Option<ElicitationId>) {
+        if pending == self.reviewer.with_untracked(|reviewer| reviewer.map(|reviewer| reviewer.id)) {
             return;
         }
-        let pending = pending.map(|(id, meta)| (id, meta.clone()));
-        self.reviewer = pending.map(|(id, meta)| Reviewer::new(id, meta, cx));
-        if self.reviewer.is_none() {
-            cx.emit(Dismissed);
+        if let Some(previous) = self.reviewer.get_untracked() {
+            spawn(async move { previous.scope.dispose() });
         }
-        cx.notify();
+        let meta = self.thread.pending_review().filter(|(id, _)| Some(*id) == pending);
+        let reviewer = meta.map(|(id, meta)| self.reviewer(id, meta));
+        let dismissed = reviewer.is_none();
+        self.reviewer.set(reviewer);
+        if dismissed {
+            self.on_dismissed.call();
+        }
     }
 
-    fn on_reviewer_event(&mut self, id: ElicitationId, event: &MarkdownReviewEvent, cx: &mut Context<Self>) {
-        let reply = match event {
-            MarkdownReviewEvent::Submit(submission) => ElicitationAnswer::accept_strings(answer(submission).fields()),
-            MarkdownReviewEvent::CopyFormatted(text) => {
-                return cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
-            }
-            MarkdownReviewEvent::Cancel => ElicitationAnswer::Cancel,
-        };
-        Thread::with_core(&self.thread, cx, |core| core.answer_elicitation(id, reply));
-    }
-}
-
-impl EventEmitter<Dismissed> for ArtifactReview {}
-
-impl Render for ArtifactReview {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .debug_selector(|| "artifact-review".to_owned())
-            .size_full()
-            .children(self.reviewer.as_ref().map(|reviewer| reviewer.view.clone()))
-    }
-}
-
-impl Reviewer {
-    fn new(id: ElicitationId, meta: ArtifactReviewElicitationMeta, cx: &mut Context<ArtifactReview>) -> Self {
+    fn reviewer(self, id: ElicitationId, meta: ArtifactReviewElicitationMeta) -> Reviewer {
         let ArtifactReviewElicitationMeta { path, title, markdown, .. } = meta;
         let document =
             MarkdownDocument::parse_with_metadata(path.map(|path| path.display().to_string()), Some(title), markdown);
-        let theme = ActiveTheme::global(cx).review().clone();
-        let view = cx.new(|cx| {
-            let options = MarkdownReviewerOptions { themes: false, ..MarkdownReviewerOptions::default() };
-            let mut reviewer = MarkdownReviewer::with_options(Arc::new(document), theme, options);
-            reviewer
-                .set_capabilities(ReviewCapabilities { submit: true, clipboard: true, ..ReviewCapabilities::NONE }, cx);
-            reviewer
+        let theme = ActiveTheme::current().review();
+        let scope = self.scope.child();
+        let handle = scope.run(|| {
+            let handle =
+                MarkdownController::new(Arc::new(document), theme).mount(move |output| self.on_output(id, output));
+            handle.set_capabilities(ReviewCapabilities { submit: true, clipboard: true, ..ReviewCapabilities::NONE });
+            handle
         });
-        let subscription =
-            cx.subscribe(&view, move |this, _, event: &MarkdownReviewEvent, cx| this.on_reviewer_event(id, event, cx));
-        Self { id, view, _subscription: subscription }
+        Reviewer { id, handle, scope }
+    }
+
+    fn on_output(self, id: ElicitationId, output: MarkdownOutput) {
+        let reply = match output {
+            MarkdownOutput::Event(MarkdownReviewEvent::Submit(submission)) => {
+                ElicitationAnswer::accept_strings(answer(&submission).fields())
+            }
+            MarkdownOutput::Event(MarkdownReviewEvent::CopyFormatted(text)) | MarkdownOutput::CopyCode(text) => {
+                return self.window.copy_text(text);
+            }
+            MarkdownOutput::Event(MarkdownReviewEvent::Cancel) => ElicitationAnswer::Cancel,
+            MarkdownOutput::OpenLink(url) => return self.platform.with(|platform| platform.open(&url)),
+            MarkdownOutput::ThemeChanged(_) => return,
+        };
+        self.thread.update_core(|core| core.answer_elicitation(id, reply));
     }
 }
 

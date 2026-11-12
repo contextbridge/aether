@@ -1,14 +1,15 @@
-use super::Composer;
-use crate::ui::tokens::{COMPOSER_POPUP_HEIGHT, rem};
-use crate::ui::{PickerItem, PickerList, SurfaceExt, UiTheme};
+use crate::ui::tokens::COMPOSER_POPUP_HEIGHT;
+use crate::ui::{PickerItem, SurfaceExt, picker_list};
+use clankerdiff_rouge_shell::rouge::core::{Div, Length, Styled, div, view};
+use clankerdiff_rouge_shell::rouge::reactive::Callback;
 use clankerdiff_ui_core::{PickerOption, PickerState};
 use client_core::composer::attachment::PromptAttachment;
 use client_core::composer::completion_token::{CompletionToken, Trigger};
 use client_core::composer::file_listing::RepoFiles;
 use client_core::session_core::CommandEntry;
-use gpui::{AnyElement, Context, div, prelude::*};
-use gpui_base::input::InlineTokenSpan;
+use std::ops::Range;
 
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct CompletionMenu {
     token: CompletionToken,
     items: Vec<CompletionItem>,
@@ -16,7 +17,7 @@ pub(crate) struct CompletionMenu {
     highlighted: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum CompletionItem {
     Command(CommandEntry),
     File(PromptAttachment),
@@ -58,41 +59,41 @@ impl CompletionMenu {
         self.highlighted = self.highlighted.saturating_add_signed(by).min(last);
     }
 
-    pub(crate) fn render(&self, theme: &UiTheme, cx: &mut Context<Composer>) -> AnyElement {
-        let empty = self.status.as_deref().unwrap_or(match self.token.trigger {
-            Trigger::File => "No matching files",
-            Trigger::Command => "No matching commands",
-        });
-        let items = self.items.iter().enumerate().map(|(position, item)| match item {
-            CompletionItem::Command(command) => {
-                PickerItem::new(format!("item-{position}"), format!("/{}", command.name))
-                    .detail(command.description.clone())
+    pub(crate) fn render(&self, on_choose: Callback<(usize,)>) -> Div {
+        let empty = self.status.clone().unwrap_or_else(|| {
+            match self.token.trigger {
+                Trigger::File => "No matching files",
+                Trigger::Command => "No matching commands",
             }
-            CompletionItem::File(file) => PickerItem::new(format!("item-{position}"), file.display_name.clone()),
+            .to_owned()
         });
-        div()
-            .debug_selector(|| "completion-menu".to_owned())
-            .elevated(*theme)
-            .shadow_lg()
-            .child(
-                PickerList::new("completion", *theme)
-                    .items(items)
-                    .highlighted(Some(self.highlighted))
-                    .empty(empty)
-                    .max_height(rem(COMPOSER_POPUP_HEIGHT))
-                    .on_choose(cx.listener(|composer, position: &usize, window, cx| {
-                        composer.accept_completion(*position, window, cx);
-                    })),
-            )
-            .into_any_element()
+        let items: Vec<PickerItem> = self
+            .items
+            .iter()
+            .enumerate()
+            .map(|(position, item)| match item {
+                CompletionItem::Command(command) => {
+                    PickerItem::new(format!("completion-item-{position}"), format!("/{}", command.name))
+                        .detail(command.description.clone())
+                }
+                CompletionItem::File(file) => {
+                    PickerItem::new(format!("completion-item-{position}"), file.display_name.clone())
+                }
+            })
+            .collect();
+        let highlighted = self.highlighted;
+        view! {
+            <div test_id="completion-menu" floating p=4.0>
+                <picker_list id="completion" items highlighted empty
+                             max_height={Length::design(COMPOSER_POPUP_HEIGHT)} on_choose/>
+            </div>
+        }
     }
 }
 
-pub(crate) fn active_token(text: &str, cursor: usize, mentions: &[InlineTokenSpan]) -> Option<CompletionToken> {
+pub(crate) fn active_token(text: &str, cursor: usize, mentions: &[Range<usize>]) -> Option<CompletionToken> {
     CompletionToken::at(text, cursor).filter(|token| {
-        !mentions
-            .iter()
-            .any(|mention| mention.range().start < token.range.end && token.range.start < mention.range().end)
+        !mentions.iter().any(|mention| mention.start < token.range.end && token.range.start < mention.end)
     })
 }
 

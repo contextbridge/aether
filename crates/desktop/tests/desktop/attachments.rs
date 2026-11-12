@@ -4,198 +4,169 @@ use acp_utils::testing::{FakeAgent, FakeAgentRequests};
 use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder};
 use aether_desktop::threads::Thread;
 use agent_client_protocol::v2::schema as acp;
-use gpui::{
-    ClipboardEntry, ClipboardItem, ClipboardString, Entity, ExternalPaths, FileDropEvent, Image, ImageFormat,
-    TestAppContext,
-};
 use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
-#[gpui::test]
-fn a_pasted_screenshot_is_attached_and_sent_with_the_prompt(cx: &mut TestAppContext) {
-    let (harness, _, mut requests, _workspace) = seeing(cx);
+#[test]
+fn a_pasted_screenshot_is_attached_and_sent_with_the_prompt() {
+    let (mut harness, _, mut requests, _workspace) = seeing();
 
-    cx.write_to_clipboard(ClipboardItem::new_image(&Image::from_bytes(ImageFormat::Png, PNG.to_vec())));
-    harness.simulate_keystrokes(cx, "secondary-v");
-    assert!(harness.bounds(cx, "composer-attachment-0").is_some());
-    assert!(harness.shows(cx, "composer-text", ""));
-    harness.simulate_keystrokes(cx, "enter");
+    harness.platform().copy_image(PNG);
+    harness.press("secondary-v");
+    assert!(harness.bounds("composer-attachment-0").is_some());
+    assert!(harness.shows("composer-text", ""));
+    harness.press("enter");
 
-    let prompt = harness.next(cx, &mut requests.prompt).prompt;
+    let prompt = harness.next(&mut requests.prompt).prompt;
     assert!(prompt.iter().any(|block| matches!(block, acp::ContentBlock::Image(_))), "{prompt:?}");
-    assert!(harness.bounds(cx, "composer-attachment-0").is_none(), "sending clears the attachments");
+    assert!(harness.bounds("composer-attachment-0").is_none(), "sending clears the attachments");
 }
 
-#[gpui::test]
-fn copied_files_attach_their_media_and_mention_the_rest(cx: &mut TestAppContext) {
-    let (harness, _, _, workspace) = seeing(cx);
+#[test]
+fn copied_files_attach_their_media_and_mention_the_rest() {
+    let (mut harness, _, _, workspace) = seeing();
     let photo = write(&workspace, "photo.png", PNG);
     let notes = write(&workspace, "notes.md", b"# notes");
 
-    cx.write_to_clipboard(ClipboardItem {
-        entries: vec![
-            ClipboardEntry::ExternalPaths(ExternalPaths(vec![photo, notes].into())),
-            ClipboardEntry::String(ClipboardString::new("photo.png\nnotes.md".into())),
-        ],
-    });
-    harness.simulate_keystrokes(cx, "secondary-v");
+    harness.platform().copy_files(vec![photo, notes]);
+    harness.press("secondary-v");
 
-    assert!(harness.shows(cx, "composer-text", "@notes.md "));
-    assert!(harness.bounds(cx, "composer-attachment-0-thumbnail").is_some(), "the photo is attached");
-    assert!(harness.bounds(cx, "composer-attachment-1").is_none(), "the notes are only mentioned");
+    assert!(harness.shows("composer-text", "@notes.md "));
+    assert!(harness.bounds("composer-attachment-0-thumbnail").is_some(), "the photo is attached");
+    assert!(harness.bounds("composer-attachment-1").is_none(), "the notes are only mentioned");
 }
 
-#[gpui::test]
-fn copied_text_still_pastes_as_text(cx: &mut TestAppContext) {
-    let (harness, _, _, _workspace) = seeing(cx);
+#[test]
+fn copied_text_still_pastes_as_text() {
+    let (mut harness, _, _, _workspace) = seeing();
 
-    cx.write_to_clipboard(ClipboardItem::new_string("/tmp/report.pdf".into()));
-    harness.simulate_keystrokes(cx, "secondary-v");
+    harness.platform().copy_text("/tmp/report.pdf");
+    harness.press("secondary-v");
 
-    assert!(harness.shows(cx, "composer-text", "/tmp/report.pdf"));
-    assert!(harness.bounds(cx, "composer-attachment-0").is_none());
+    assert!(harness.shows("composer-text", "/tmp/report.pdf"));
+    assert!(harness.bounds("composer-attachment-0").is_none());
 }
 
-#[gpui::test]
-fn a_clipboard_image_in_a_format_agents_cannot_read_is_refused(cx: &mut TestAppContext) {
-    let (harness, thread, _, _workspace) = seeing(cx);
-
-    cx.write_to_clipboard(ClipboardItem::new_image(&Image::from_bytes(ImageFormat::Tiff, vec![0x49, 0x49])));
-    harness.simulate_keystrokes(cx, "secondary-v");
-
-    assert!(harness.bounds(cx, "composer-attachment-0").is_none());
-    assert!(noticed(&thread, cx, "Can't attach TIFF images; paste a PNG, JPEG, GIF or WebP instead."));
-    assert!(harness.bounds(cx, "transcript-error-0").is_some(), "the refusal shows as an error");
-}
-
-#[gpui::test]
-fn files_dropped_on_the_thread_are_attached(cx: &mut TestAppContext) {
-    let (harness, _, _, workspace) = seeing(cx);
+#[test]
+fn files_dropped_on_the_thread_are_attached() {
+    let (mut harness, _, _, workspace) = seeing();
     let photo = write(&workspace, "photo.png", PNG);
     let clip = write(&workspace, "clip.wav", b"RIFF");
-    let position = harness.center(cx, "transcript").unwrap();
 
-    harness.simulate_event(cx, FileDropEvent::Entered { position, paths: ExternalPaths(vec![photo, clip].into()) });
-    harness.simulate_event(cx, FileDropEvent::Submit { position });
+    harness.drop_files("transcript", vec![photo, clip]).unwrap();
 
-    assert!(harness.bounds(cx, "composer-attachment-0").is_some());
-    assert!(harness.bounds(cx, "composer-attachment-1").is_some());
-    assert!(harness.bounds(cx, "composer-attachment-0-thumbnail").is_some(), "an image previews itself");
-    assert!(harness.bounds(cx, "composer-attachment-1-thumbnail").is_none(), "a sound has no preview");
+    assert!(harness.bounds("composer-attachment-0").is_some());
+    assert!(harness.bounds("composer-attachment-1").is_some());
+    assert!(harness.bounds("composer-attachment-0-thumbnail").is_some(), "an image previews itself");
+    assert!(harness.bounds("composer-attachment-1-thumbnail").is_none(), "a sound has no preview");
 }
 
-#[gpui::test]
-fn files_dropped_on_the_changes_are_not_attached(cx: &mut TestAppContext) {
-    let (harness, _, _, workspace) = seeing(cx);
+#[test]
+fn files_dropped_on_the_changes_are_not_attached() {
+    let (mut harness, _, _, workspace) = seeing();
     let photo = write(&workspace, "photo.png", PNG);
-    harness.simulate_keystrokes(cx, "secondary-2");
-    let position = harness.center(cx, "view-switch").unwrap();
+    harness.press("secondary-2");
 
-    harness.simulate_event(cx, FileDropEvent::Entered { position, paths: ExternalPaths(vec![photo].into()) });
-    harness.simulate_event(cx, FileDropEvent::Submit { position });
-    harness.click(cx, "tab-chat").unwrap();
+    harness.drop_files("view-switch", vec![photo]).unwrap();
+    harness.click("tab-chat").unwrap();
 
-    assert!(harness.bounds(cx, "composer-attachment-0").is_none());
+    assert!(harness.bounds("composer-attachment-0").is_none());
 }
 
-#[gpui::test]
-fn a_dropped_folder_is_named_for_a_local_agent_to_open(cx: &mut TestAppContext) {
-    let (harness, _, _, workspace) = seeing(cx);
+#[test]
+fn a_dropped_folder_is_named_for_a_local_agent_to_open() {
+    let (mut harness, _, _, workspace) = seeing();
     let folder = workspace.path().join("assets");
     fs::create_dir_all(&folder).unwrap();
 
-    drop_files(&harness, cx, vec![folder.clone()]);
+    drop_files(&mut harness, vec![folder.clone()]);
 
-    assert!(harness.shows(cx, "composer-text", &format!("{} ", folder.display())));
+    assert!(harness.shows("composer-text", &format!("{} ", folder.display())));
 }
 
-#[gpui::test]
-fn the_paperclip_attaches_the_chosen_files(cx: &mut TestAppContext) {
-    let (harness, _, _, workspace) = seeing(cx);
+#[test]
+fn the_paperclip_attaches_the_chosen_files() {
+    let (mut harness, _, _, workspace) = seeing();
     let photo = write(&workspace, "photo.png", PNG);
 
-    harness.click(cx, "attach-files").unwrap();
-    cx.simulate_path_prompt_response(|options| {
-        assert!(options.files && options.multiple);
-        Some(vec![photo])
-    });
-    cx.run_until_parked();
+    harness.click("attach-files").unwrap();
+    let prompt = harness.platform().answer_path_prompt(Some(vec![photo])).expect("the paperclip asks for files");
 
-    assert!(harness.bounds(cx, "composer-attachment-0").is_some());
+    assert!(!prompt.directories && prompt.multiple, "{prompt:?}");
+    harness.run_until_painted("composer-attachment-0");
 }
 
-#[gpui::test]
-fn an_attachment_comes_off_with_its_remove_button_or_backspace(cx: &mut TestAppContext) {
-    let (harness, _, _, workspace) = seeing(cx);
+#[test]
+fn an_attachment_comes_off_with_its_remove_button_or_backspace() {
+    let (mut harness, _, _, workspace) = seeing();
     let paths = vec![write(&workspace, "one.png", PNG), write(&workspace, "two.png", PNG)];
-    drop_files(&harness, cx, paths);
+    drop_files(&mut harness, paths);
 
-    harness.click(cx, "composer-attachment-0-remove").unwrap();
-    assert!(harness.bounds(cx, "composer-attachment-1").is_none());
-    harness.simulate_keystrokes(cx, "backspace");
+    harness.click("composer-attachment-0-remove").unwrap();
+    assert!(harness.bounds("composer-attachment-1").is_none());
+    harness.press("backspace");
 
-    assert!(harness.bounds(cx, "composer-attachment-0").is_none());
+    assert!(harness.bounds("composer-attachment-0").is_none());
 }
 
-#[gpui::test]
-fn a_sent_prompt_shows_its_attachments_and_its_image_opens_full_size(cx: &mut TestAppContext) {
+#[test]
+fn a_sent_prompt_shows_its_attachments_and_its_image_opens_full_size() {
     let workspace = TempDir::new().unwrap();
     let agent = image_capable().prompt_reply("Nice.");
-    let (harness, thread) = DesktopHarnessBuilder::default().agent(workspace.path(), agent).start(cx, workspace.path());
+    let (mut harness, thread) = DesktopHarnessBuilder::default().agent(workspace.path(), agent).start(workspace.path());
     let photo = write(&workspace, "photo.png", PNG);
     let notes = write(&workspace, "notes.md", b"# notes");
 
-    drop_files(&harness, cx, vec![photo, notes]);
-    harness.simulate_input(cx, "compare");
-    harness.simulate_keystrokes(cx, "enter");
-    harness.run_until(cx, |cx| texts(thread.read(cx)).iter().any(|text| text == "Nice."));
+    drop_files(&mut harness, vec![photo, notes]);
+    harness.type_text("compare");
+    harness.press("enter");
+    harness.run_until(|_| texts(thread).iter().any(|text| text == "Nice."));
 
-    assert!(harness.bounds(cx, "message-attachment-0-1").is_some(), "the mentioned file is shown with the prompt");
-    assert!(harness.bounds(cx, "message-attachment-0-2").is_some(), "so is the image");
-    harness.click(cx, "message-attachment-0-2").unwrap();
-    assert!(harness.bounds(cx, "image-preview").is_some(), "clicking the image opens it full size");
-    harness.click(cx, "image-preview").unwrap();
-    assert!(harness.bounds(cx, "image-preview").is_none(), "clicking again closes it");
+    assert!(harness.bounds("message-attachment-0-1").is_some(), "the mentioned file is shown with the prompt");
+    assert!(harness.bounds("message-attachment-0-2").is_some(), "so is the image");
+    harness.click("message-attachment-0-2").unwrap();
+    assert!(harness.bounds("image-preview").is_some(), "clicking the image opens it full size");
+    harness.click("image-preview").unwrap();
+    assert!(harness.bounds("image-preview").is_none(), "clicking again closes it");
 }
 
-#[gpui::test]
-fn an_image_the_agent_cannot_take_comes_back_to_the_composer(cx: &mut TestAppContext) {
+#[test]
+fn an_image_the_agent_cannot_take_comes_back_to_the_composer() {
     let workspace = TempDir::new().unwrap();
     let agent = FakeAgent::new("alpha-session");
-    let (harness, thread) = DesktopHarnessBuilder::default().agent(workspace.path(), agent).start(cx, workspace.path());
-    drop_files(&harness, cx, vec![write(&workspace, "photo.png", PNG)]);
+    let (mut harness, thread) = DesktopHarnessBuilder::default().agent(workspace.path(), agent).start(workspace.path());
+    drop_files(&mut harness, vec![write(&workspace, "photo.png", PNG)]);
 
-    harness.simulate_input(cx, "what is this?");
-    harness.simulate_keystrokes(cx, "enter");
-    harness
-        .run_until(cx, |cx| texts(thread.read(cx)).iter().any(|text| text.ends_with("does not support image input.")));
+    harness.type_text("what is this?");
+    harness.press("enter");
+    harness.run_until(|_| texts(thread).iter().any(|text| text.ends_with("does not support image input.")));
 
-    assert!(harness.shows(cx, "composer-text", "what is this?"));
-    assert!(harness.bounds(cx, "composer-attachment-0").is_some());
+    assert!(harness.shows("composer-text", "what is this?"));
+    assert!(harness.bounds("composer-attachment-0").is_some());
 }
 
-#[gpui::test]
-fn a_dropped_folder_is_refused_for_a_remote_agent(cx: &mut TestAppContext) {
+#[test]
+fn a_dropped_folder_is_refused_for_a_remote_agent() {
     let workspace = TempDir::new().unwrap();
     let remote = RemoteServerInfo { cwd: "/vm/workspace".into(), session_id: None };
     let agent = FakeAgent::new("vm-session").remote_server(&remote);
-    let (harness, thread) = DesktopHarnessBuilder::default().agent(workspace.path(), agent).start(cx, workspace.path());
+    let (mut harness, thread) = DesktopHarnessBuilder::default().agent(workspace.path(), agent).start(workspace.path());
     let folder = workspace.path().join("assets");
     fs::create_dir_all(&folder).unwrap();
 
-    drop_files(&harness, cx, vec![folder]);
+    drop_files(&mut harness, vec![folder]);
 
-    assert!(harness.shows(cx, "composer-text", ""));
-    assert!(noticed(&thread, cx, "Can't attach folders or binary files to a remote agent: assets"));
+    assert!(harness.shows("composer-text", ""));
+    assert!(noticed(thread, "Can't attach folders or binary files to a remote agent: assets"));
 }
 
 const PNG: &[u8] = &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
 
-fn seeing(cx: &mut TestAppContext) -> (DesktopHarness, Entity<Thread>, FakeAgentRequests, TempDir) {
+fn seeing() -> (DesktopHarness, Thread, FakeAgentRequests, TempDir) {
     let workspace = TempDir::new().unwrap();
     let (agent, requests) = image_capable().capture();
-    let (harness, thread) = DesktopHarnessBuilder::default().agent(workspace.path(), agent).start(cx, workspace.path());
+    let (harness, thread) = DesktopHarnessBuilder::default().agent(workspace.path(), agent).start(workspace.path());
     (harness, thread, requests, workspace)
 }
 
@@ -211,12 +182,10 @@ fn write(workspace: &TempDir, name: &str, contents: &[u8]) -> PathBuf {
     path
 }
 
-fn drop_files(harness: &DesktopHarness, cx: &mut TestAppContext, paths: Vec<PathBuf>) {
-    let position = harness.center(cx, "composer").unwrap();
-    harness.simulate_event(cx, FileDropEvent::Entered { position, paths: ExternalPaths(paths.into()) });
-    harness.simulate_event(cx, FileDropEvent::Submit { position });
+fn drop_files(harness: &mut DesktopHarness, paths: Vec<PathBuf>) {
+    harness.drop_files("composer", paths).unwrap();
 }
 
-fn noticed(thread: &Entity<Thread>, cx: &TestAppContext, notice: &str) -> bool {
-    cx.read(|cx| texts(thread.read(cx)).iter().any(|text| text.ends_with(notice)))
+fn noticed(thread: Thread, notice: &str) -> bool {
+    texts(thread).iter().any(|text| text.ends_with(notice))
 }

@@ -1,60 +1,58 @@
-use crate::agents::Agents;
-use crate::chat::SearchPrompts;
+use crate::agents::{Agents, Catalogs};
 use crate::clock::Clock;
-use crate::file_picker::FilePicker;
+use crate::file_picker::file_picker;
 use crate::history::History;
-use crate::menus::APP_NAME;
-use crate::registry::Registry;
+use crate::platform::{Notification, Platform};
+use crate::registry::{Registry, Saved, WindowSize};
 use crate::remotes::Fleet;
-use crate::settings::{self, Settings};
-use crate::sidebar::{self, NewCloudThread, NewThread, Sidebar, ToggleSidebar};
+use crate::settings::settings;
+use crate::sidebar::{Sidebar, SwitcherEntry, toggle_button};
 use crate::target::{AgentConnector, Transport};
-use crate::theme;
+use crate::tasks::spawn_in;
 use crate::thread_view::{ThreadTab, ThreadView};
 use crate::threads::{Attention, Thread, ThreadEvent, ThreadManager};
-use crate::ui::ActiveTheme;
 use crate::ui::interface_size::DEFAULT_INTERFACE_SIZE;
-use crate::ui::tokens::{MODAL_WIDTH, PICKER_LIST_HEIGHT, rem};
-use crate::ui::window_chrome;
+use crate::ui::tokens::{MODAL_WIDTH, PICKER_LIST_HEIGHT};
 use crate::ui::{
-    Backdrop, EmptyState, IndicatorLayer, InterfaceSize, NoticeTone, PickerItem, SearchPicker, SearchPickerEvent,
-    StyledExt, Typography, TypographyExt, UI_FONT, UiTheme, picker_closed, place_window_buttons, spin_when_shown,
+    ActiveTheme, IconName, IndicatorLayer, InterfaceSize, PickerItem, SearchPickerHandle, StyledExt, UI_FONT, UiStyles,
+    UiTheme, backdrop, empty_state, key_binding, picker_closed, search_picker, window_appearance,
 };
 use aether_sessions::SessionStore;
 use agent_client_protocol::v2::schema::SessionId;
 use clankerdiff_core::RepoPath;
-use clankerdiff_gpui::ui::keymap::key_binding;
 use clankerdiff_remote::Remotes;
-use gpui::{
-    AnyElement, App, Context, Entity, EntityId, FocusHandle, StyleRefinement, Subscription, SystemNotification, Window,
-    actions, div, prelude::*,
+use clankerdiff_rouge::ReviewHandle;
+use clankerdiff_rouge_shell::rouge::core::{
+    AnyView, Chord, Div, Length, Styled, View, WindowHandle, div, dynamic, view, window_focused, window_handle,
+    window_size,
 };
-use gpui_base::TextSelectionLayer;
+use clankerdiff_rouge_shell::rouge::reactive::{Scope, Signal, Stored, effect, memo, signal, spawn, stored, untrack};
+use std::cell::Cell;
 use std::collections::{BTreeSet, HashMap};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::Arc;
 
-actions!(
-    aether_desktop,
-    [SelectNextThread, SelectPreviousThread, OpenThreadSwitcher, ShowChat, ShowFiles, OpenFile, OpenSettings,]
-);
-
-pub struct DesktopApp {
-    threads: Entity<ThreadManager>,
-    history: Entity<History>,
-    registry: Entity<Registry>,
-    agents: Entity<Agents>,
-    fleet: Entity<Fleet>,
-    sidebar: Entity<Sidebar>,
-    indicators: Entity<IndicatorLayer>,
-    views: HashMap<EntityId, Entity<ThreadView>>,
-    focused: Option<EntityId>,
-    restore: Option<SessionId>,
-    launched: BTreeSet<String>,
-    modal: Option<(Modal, Subscription)>,
-    focus_handle: FocusHandle,
-    _subscriptions: Vec<Subscription>,
-}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SelectNextThread;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SelectPreviousThread;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OpenThreadSwitcher;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShowChat;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShowFiles;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OpenFile;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OpenSettings;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NewThread;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NewCloudThread;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ToggleSidebar;
 
 pub struct DesktopConfig {
     pub transport: Arc<dyn Transport>,
@@ -63,165 +61,280 @@ pub struct DesktopConfig {
     pub remotes: Arc<dyn Remotes>,
     pub remotes_file: Option<PathBuf>,
     pub sessions: Option<SessionStore>,
-    pub registry: Entity<Registry>,
+    pub registry: Saved,
+    pub platform: Rc<dyn Platform>,
 }
 
+#[derive(Clone, Copy)]
+pub struct DesktopApp {
+    threads: ThreadManager,
+    history: History,
+    registry: Registry,
+    agents: Catalogs,
+    fleet: Fleet,
+    sidebar: Sidebar,
+    views: Stored<HashMap<usize, (Scope, ThreadView)>>,
+    modal: Signal<Option<Modal>>,
+    platform: Stored<Rc<dyn Platform>>,
+    restore: Stored<Option<SessionId>>,
+    window: WindowHandle,
+    scope: Scope,
+}
+
+#[derive(Clone)]
+enum Modal {
+    Switcher(Rc<[SwitcherEntry]>),
+    Files(Thread),
+    Settings,
+}
+
+pub(crate) const NEW_THREAD_KEYS: &str = "secondary-n";
+pub(crate) const NEW_CLOUD_THREAD_KEYS: &str = "secondary-alt-n";
+pub(crate) const TOGGLE_SIDEBAR_KEYS: &str = "secondary-b";
+pub(crate) const SWITCHER_KEYS: &str = "secondary-k";
+pub(crate) const NEXT_THREAD_KEYS: &str = "secondary-]";
+pub(crate) const PREVIOUS_THREAD_KEYS: &str = "secondary-[";
+pub(crate) const SHOW_CHAT_KEYS: &str = "secondary-1";
+pub(crate) const SHOW_FILES_KEYS: &str = "secondary-2";
+pub(crate) const OPEN_FILE_KEYS: &str = "secondary-p";
+pub(crate) const SETTINGS_KEYS: &str = "secondary-,";
+
 impl DesktopApp {
-    pub fn new(config: DesktopConfig, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let DesktopConfig { transport, clock, agents, remotes, remotes_file, sessions, registry } = config;
-        let preference = registry.read(cx).state().theme.clone();
-        theme::apply(&preference, window, cx);
-        if let Some(size) = registry.read(cx).state().interface_size {
-            InterfaceSize::set(size, cx);
+    pub fn new(config: DesktopConfig) -> Self {
+        let DesktopConfig { transport, clock, agents, remotes, remotes_file, sessions, registry, platform } = config;
+        let registry = Registry::new(registry);
+        let preference = memo(move || registry.with(|state| state.theme.clone()));
+        let active = ActiveTheme::install(preference.get_untracked().theme(window_appearance()));
+        effect(move || active.apply(&preference.get()));
+        let size = InterfaceSize::install(DEFAULT_INTERFACE_SIZE);
+        if let Some(saved) = registry.with(|state| state.interface_size) {
+            size.set(saved);
         }
-        let window_active = window.is_window_active();
-        let agents = cx.new(|_| agents);
-        let connector = Arc::new(AgentConnector::new(remotes.clone(), transport));
-        let threads = cx.new(|cx| {
-            let mut threads = ThreadManager::new(connector, agents.clone(), clock.clone());
-            threads.set_window_active(window_active, cx);
-            threads
-        });
-        let history = cx.new(|cx| {
-            let mut history = History::new(sessions);
-            history.refresh(cx);
-            history
-        });
-        let fleet = cx.new(|cx| Fleet::new(remotes, remotes_file, cx));
-        let sidebar = cx.new(|cx| {
-            Sidebar::new(threads.clone(), history.clone(), registry.clone(), agents.clone(), fleet.clone(), clock, cx)
-        });
-        let subscriptions = vec![
-            spin_when_shown(window),
-            cx.observe_window_appearance(window, |this, window, cx| {
-                let preference = this.registry.read(cx).state().theme.clone();
-                theme::apply(&preference, window, cx);
-            }),
-            cx.observe_window_activation(window, |this, window, cx| {
-                let active = window.is_window_active();
-                this.threads.update(cx, |threads, cx| threads.set_window_active(active, cx));
-                if active {
-                    this.history.update(cx, History::refresh);
-                    this.agents.update(cx, Agents::reload);
-                    this.fleet.update(cx, Fleet::reload);
-                }
-            }),
-            cx.observe_window_bounds(window, |this, window, cx| {
-                let size = window.window_bounds().get_bounds().size;
-                Registry::update(&this.registry, cx, |state| state.window_size = Some(size));
-            }),
-            cx.observe_in(&threads, window, |this, _, window, cx| this.sync_views(window, cx)),
-            cx.observe(&threads, |this, _, cx| this.follow_threads(cx)),
-            cx.observe_global::<InterfaceSize>(|this, cx| this.remember_interface_size(cx)),
-            cx.observe(&sidebar, |_, _, cx| cx.notify()),
-            cx.observe(&history, |this, _, cx| this.restore_selection(cx)),
-            cx.subscribe(&threads, |this, _, attention: &Attention, cx| this.on_attention(attention, cx)),
-        ];
-        let app = cx.weak_entity();
-        let window_handle = window.window_handle();
-        cx.on_system_notification_response(move |response, cx| {
-            let session_id = SessionId::new(response.tag.as_ref());
-            let _ = window_handle.update(cx, |_, window, cx| {
-                window.activate_window();
-                app.update(cx, |app, cx| app.select_session(&session_id, cx))
+        effect(move || {
+            let committed = size.committed();
+            untrack(|| {
+                registry
+                    .update(|state| state.interface_size = (committed != DEFAULT_INTERFACE_SIZE).then_some(committed));
             });
         });
-        let indicators = cx.new(|cx| IndicatorLayer::new(window, cx));
-        let focus_handle = cx.focus_handle();
-        focus_handle.focus(window, cx);
-        let restore = registry.read(cx).state().last_selected.clone();
-        Self {
+        let _ = IndicatorLayer::install();
+        let agents = Catalogs::new(agents);
+        let connector = Arc::new(AgentConnector::new(remotes.clone(), transport));
+        let threads = ThreadManager::new(connector, agents, clock.clone());
+        let history = History::new(sessions);
+        let fleet = Fleet::new(remotes, remotes_file);
+        let platform = stored(platform);
+        let sidebar = Sidebar::new(threads, history, registry, agents, fleet, clock, platform);
+        let app = Self {
             threads,
             history,
             registry,
             agents,
             fleet,
             sidebar,
-            indicators,
-            views: HashMap::new(),
-            focused: None,
-            restore,
-            launched: BTreeSet::new(),
-            modal: None,
-            focus_handle,
-            _subscriptions: subscriptions,
-        }
-    }
-
-    pub fn bind_keys(cx: &mut App) {
-        let bindings = [
-            key_binding("secondary-n", NewThread, None, cx),
-            key_binding("secondary-alt-n", NewCloudThread, None, cx),
-            key_binding("secondary-b", ToggleSidebar, None, cx),
-            key_binding("secondary-k", OpenThreadSwitcher, None, cx),
-            key_binding("secondary-]", SelectNextThread, None, cx),
-            key_binding("secondary-[", SelectPreviousThread, None, cx),
-            key_binding("secondary-1", ShowChat, None, cx),
-            key_binding("secondary-2", ShowFiles, None, cx),
-            key_binding("secondary-p", OpenFile, None, cx),
-            key_binding("secondary-,", OpenSettings, None, cx),
-            key_binding("secondary-]", SelectNextThread, Some(INPUT_CONTEXT), cx),
-            key_binding("secondary-[", SelectPreviousThread, Some(INPUT_CONTEXT), cx),
-            key_binding("secondary-r", SearchPrompts, Some(INPUT_CONTEXT), cx),
-        ];
-        cx.bind_keys(bindings);
-        SearchPicker::bind_keys(cx);
-        Settings::bind_keys(cx);
-    }
-
-    pub fn threads(&self) -> &Entity<ThreadManager> {
-        &self.threads
-    }
-
-    pub fn history(&self) -> &Entity<History> {
-        &self.history
-    }
-
-    pub fn registry(&self) -> &Entity<Registry> {
-        &self.registry
-    }
-
-    pub fn fleet(&self) -> &Entity<Fleet> {
-        &self.fleet
-    }
-
-    fn thread_view(&self, thread: &Entity<Thread>) -> Option<&Entity<ThreadView>> {
-        self.views.get(&thread.entity_id())
-    }
-
-    fn restore_selection(&mut self, cx: &mut Context<Self>) {
-        let Some(session_id) = self.restore.take() else {
-            return;
+            views: stored(HashMap::new()),
+            modal: signal(None),
+            platform,
+            restore: stored(registry.with(|state| state.last_selected.clone())),
+            window: window_handle(),
+            scope: Scope::new(),
         };
-        if self.threads.read(cx).selected().is_some() {
-            return;
-        }
-        let projects = self.history.read(cx).projects();
-        let saved = projects.iter().flat_map(|project| &project.sessions).find(|session| session.id == session_id);
-        if let Some(cwd) = saved.map(|session| session.cwd.clone()) {
-            self.threads.update(cx, |threads, cx| threads.resume(session_id, cwd, cx));
-        }
+        app.observe();
+        app
     }
 
-    fn select_session(&mut self, session_id: &SessionId, cx: &mut Context<Self>) {
-        self.threads.update(cx, |threads, cx| {
-            if let Some(thread) = threads.thread_with_session(session_id, cx).cloned() {
-                threads.select(&thread, cx);
+    pub fn threads(&self) -> ThreadManager {
+        self.threads
+    }
+
+    pub fn history(&self) -> History {
+        self.history
+    }
+
+    pub fn registry(&self) -> Registry {
+        self.registry
+    }
+
+    pub fn fleet(&self) -> Fleet {
+        self.fleet
+    }
+
+    pub fn diff_review(&self, thread: Thread) -> Option<ReviewHandle> {
+        let view = self.views.with(|views| views.get(&thread.number()).map(|(_, view)| *view))?;
+        view.files().review()
+    }
+
+    pub fn view(self) -> impl View {
+        let theme = UiTheme::current();
+        let collapsed = memo(move || self.registry.with(|state| state.sidebar_collapsed));
+        let selected = memo(move || self.threads.selected());
+        let root = view! {
+            <div test_id="desktop" relative size_full flex bg=theme.canvas text_color=theme.text font=UI_FONT body>
+                <dynamic>{(!collapsed.get()).then(|| self.sidebar.view())}</dynamic>
+                <div test_id="main" flex_1 min_w=0.0 h_full>
+                    <dynamic>{match selected.get() {
+                        Some(thread) => untrack(|| self.view_of(thread).view(collapsed)).into_any(),
+                        None => no_thread(collapsed.get()).into_any(),
+                    }}</dynamic>
+                </div>
+                <dynamic>{self.modal.get().map(|modal| untrack(|| self.render_modal(modal)))}</dynamic>
+            </div>
+        };
+        InterfaceSize::current().bind(self.bind(root))
+    }
+
+    fn bind(self, root: Div) -> Div {
+        let root = root
+            .bind_key(chord(NEW_THREAD_KEYS), NewThread)
+            .bind_key(chord(NEW_CLOUD_THREAD_KEYS), NewCloudThread)
+            .bind_key(chord(TOGGLE_SIDEBAR_KEYS), ToggleSidebar)
+            .bind_key(chord(SWITCHER_KEYS), OpenThreadSwitcher)
+            .bind_key(chord(NEXT_THREAD_KEYS), SelectNextThread)
+            .bind_key(chord(PREVIOUS_THREAD_KEYS), SelectPreviousThread)
+            .bind_key(chord(SHOW_CHAT_KEYS), ShowChat)
+            .bind_key(chord(SHOW_FILES_KEYS), ShowFiles)
+            .bind_key(chord(OPEN_FILE_KEYS), OpenFile)
+            .bind_key(chord(SETTINGS_KEYS), OpenSettings);
+        root.on_action(move |_: &NewThread| self.sidebar.new_thread())
+            .on_action(move |_: &NewCloudThread| self.sidebar.new_cloud_thread())
+            .on_action(move |_: &ToggleSidebar| self.toggle_sidebar())
+            .on_action(move |_: &SelectNextThread| self.step_selection(1))
+            .on_action(move |_: &SelectPreviousThread| self.step_selection(-1))
+            .on_action(move |_: &OpenThreadSwitcher| self.open_switcher())
+            .on_action(move |_: &OpenSettings| self.present(Modal::Settings))
+            .on_action(move |_: &ShowChat| self.show_tab(ThreadTab::Chat))
+            .on_action(move |_: &ShowFiles| self.show_tab(ThreadTab::Files))
+            .on_action(move |_: &OpenFile| self.open_file_picker())
+    }
+
+    fn observe(self) {
+        let threads = self.threads;
+        threads.on_attention(move |attention| self.on_attention(&attention));
+        let focused = window_focused();
+        let first = Cell::new(true);
+        effect(move || {
+            let active = focused.get();
+            untrack(|| {
+                threads.set_window_active(active);
+                if active && !first.replace(false) {
+                    self.history.refresh();
+                    self.agents.reload();
+                    self.fleet.reload();
+                }
+            });
+        });
+        self.history.refresh();
+        let size = window_size();
+        effect(move || {
+            let size = size.get();
+            untrack(|| {
+                self.registry
+                    .update(|state| state.window_size = Some(WindowSize { width: size.width, height: size.height }));
+            });
+        });
+        let live = memo(move || threads.threads());
+        effect(move || {
+            let live = live.get();
+            untrack(|| self.drop_views(&live));
+        });
+        let followed = memo(move || {
+            threads
+                .threads()
+                .iter()
+                .map(|thread| (thread.project(), thread.target().instance().map(str::to_owned)))
+                .collect::<Vec<_>>()
+        });
+        let launched = stored(BTreeSet::new());
+        effect(move || {
+            let followed = followed.get();
+            untrack(|| self.follow_threads(&followed, launched));
+        });
+        let selected_session = memo(move || threads.selected().and_then(|thread| thread.session_id()));
+        let remembered = Cell::new(false);
+        effect(move || {
+            let session_id = selected_session.get();
+            if remembered.replace(true) || session_id.is_some() {
+                untrack(|| self.registry.update(|state| state.last_selected = session_id));
+            }
+        });
+        effect(move || {
+            let projects = self.history.projects();
+            untrack(|| self.restore_selection(&projects));
+        });
+    }
+
+    fn view_of(self, thread: Thread) -> ThreadView {
+        if let Some((_, view)) = self.views.with(|views| views.get(&thread.number()).copied()) {
+            return view;
+        }
+        let scope = self.scope.child();
+        let view = scope.run(|| ThreadView::new(thread, self.registry, self.platform.get()));
+        self.views.update(|views| views.insert(thread.number(), (scope, view)));
+        view
+    }
+
+    fn drop_views(self, live: &[Thread]) {
+        let dropped: Vec<Scope> = self.views.update(|views| {
+            let gone: Vec<usize> =
+                views.keys().copied().filter(|number| live.iter().all(|thread| thread.number() != *number)).collect();
+            gone.into_iter().filter_map(|number| views.remove(&number)).map(|(scope, _)| scope).collect()
+        });
+        if dropped.is_empty() {
+            return;
+        }
+        self.history.refresh();
+        spawn(async move {
+            for scope in dropped {
+                scope.dispose();
             }
         });
     }
 
-    fn on_attention(&self, attention: &Attention, cx: &mut App) {
-        if attention.event == ThreadEvent::TurnFinished {
-            self.history.update(cx, History::refresh);
+    fn follow_threads(self, followed: &[(Option<PathBuf>, Option<String>)], launched: Stored<BTreeSet<String>>) {
+        let listed = self.registry.with(|state| state.projects.clone());
+        let unlisted: Vec<PathBuf> =
+            followed.iter().filter_map(|(project, _)| project.clone()).filter(|root| !listed.contains(root)).collect();
+        if !unlisted.is_empty() {
+            self.registry.update(|state| unlisted.into_iter().for_each(|root| state.add_project(root)));
         }
-        if !attention.watched {
-            self.notify(attention, cx);
+        let now: BTreeSet<String> = followed.iter().filter_map(|(_, instance)| instance.clone()).collect();
+        let grew = launched.with(|launched| !now.is_subset(launched));
+        launched.set(now);
+        if grew {
+            self.fleet.refresh();
         }
     }
 
-    fn notify(&self, attention: &Attention, cx: &App) {
-        let thread = attention.thread.read(cx);
+    fn restore_selection(self, projects: &[crate::history::ProjectHistory]) {
+        if self.restore.with(Option::is_none) || projects.is_empty() || self.threads.selected().is_some() {
+            return;
+        }
+        let Some(session_id) = self.restore.update(Option::take) else {
+            return;
+        };
+        let saved = projects.iter().flat_map(|project| &project.sessions).find(|session| session.id == session_id);
+        if let Some(cwd) = saved.map(|session| session.cwd.clone()) {
+            self.threads.resume(session_id, cwd);
+        }
+    }
+
+    fn select_session(self, session_id: &SessionId) {
+        if let Some(thread) = self.threads.thread_with_session(session_id) {
+            self.threads.select(thread);
+        }
+    }
+
+    fn on_attention(self, attention: &Attention) {
+        if attention.event == ThreadEvent::TurnFinished {
+            self.history.refresh();
+        }
+        if !attention.watched {
+            self.notify(attention);
+        }
+    }
+
+    fn notify(self, attention: &Attention) {
+        let thread = attention.thread;
         let Some(session_id) = thread.session_id() else {
             return;
         };
@@ -231,261 +344,126 @@ impl DesktopApp {
             }
             _ => TURN_FINISHED.to_owned(),
         };
-        cx.show_system_notification(SystemNotification {
-            tag: session_id.0.clone().into(),
-            title: self.registry.read(cx).state().title(Some(session_id), thread.title()).into(),
-            body: body.into(),
-            actions: Vec::new(),
+        let title = self.registry.with(|state| state.title(Some(&session_id), thread.title()));
+        let clicked =
+            self.platform.with(|platform| platform.notify(Notification { tag: session_id.0.to_string(), title, body }));
+        let window = self.window;
+        spawn_in(self.scope, async move {
+            if clicked.await {
+                window.focus();
+                self.select_session(&session_id);
+            }
         });
     }
 
-    fn step_selection(&mut self, step: isize, cx: &mut Context<Self>) {
-        let order = self.sidebar.read(cx).live_order(cx);
+    fn step_selection(self, step: isize) {
+        let order = self.sidebar.live_order();
         let len = order.len();
         if len == 0 {
             return;
         }
-        let selected = self.threads.read(cx).selected();
-        let position = selected.and_then(|selected| order.iter().position(|listed| listed == selected));
+        let selected = self.threads.selected();
+        let position = selected.and_then(|selected| order.iter().position(|listed| *listed == selected));
         let from = position.unwrap_or(if step > 0 { len - 1 } else { 0 });
         let next = (from + len).wrapping_add_signed(step) % len;
-        self.threads.update(cx, |threads, cx| threads.select(&order[next], cx));
+        self.threads.select(order[next]);
     }
 
-    fn open_switcher(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.modal.is_some() {
-            return;
+    fn open_switcher(self) {
+        if self.modal.with(Option::is_none) {
+            self.present(Modal::Switcher(self.sidebar.switcher_entries().into()));
         }
-        let entries = self.sidebar.read(cx).switcher_entries(cx);
-        let items = entries
-            .iter()
-            .map(|entry| PickerItem::new(entry.key.selector(), entry.title.clone()).detail(entry.project.clone()))
-            .collect();
-        let theme = ActiveTheme::global(cx).ui();
-        let switcher = cx.new(|cx| {
-            SearchPicker::new("switcher", items, theme, cx)
-                .searchable("Search threads…", window, cx)
-                .empty("No matching threads")
-                .footer("↑↓ Move    ↵ Open    Esc Close")
-                .width(rem(MODAL_WIDTH))
-                .height(rem(PICKER_LIST_HEIGHT))
-        });
-        let subscription = cx.subscribe_in(&switcher, window, move |this, _, event: &SearchPickerEvent, window, cx| {
-            let closed = picker_closed(event, |index| {
-                this.threads.update(cx, |threads, cx| threads.open(&entries[index].thread, cx));
-            });
-            if closed {
-                this.close_modal(window, cx);
+    }
+
+    fn open_file_picker(self) {
+        if let Some(thread) = self.threads.selected().filter(|_| self.modal.with(Option::is_none)) {
+            self.present(Modal::Files(thread));
+        }
+    }
+
+    fn present(self, modal: Modal) {
+        if self.modal.with(Option::is_none) {
+            self.modal.set(Some(modal));
+        }
+    }
+
+    fn close_modal(self) {
+        self.modal.set(None);
+    }
+
+    fn show_tab(self, tab: ThreadTab) {
+        if let Some(thread) = self.threads.selected() {
+            self.view_of(thread).show(tab);
+        }
+    }
+
+    fn open_file(self, thread: Thread, path: RepoPath) {
+        self.threads.select(thread);
+        self.view_of(thread).open_file(path, None);
+    }
+
+    fn toggle_sidebar(self) {
+        self.registry.update(|state| state.sidebar_collapsed = !state.sidebar_collapsed);
+    }
+
+    fn render_modal(self, modal: Modal) -> AnyView {
+        match modal {
+            Modal::Switcher(entries) => {
+                let items = entries
+                    .iter()
+                    .map(|entry| {
+                        PickerItem::new(format!("switcher-{}", entry.key.selector()), entry.title.clone())
+                            .detail(entry.project.clone())
+                    })
+                    .collect();
+                let handle = SearchPickerHandle::new(items, move |event| {
+                    let closed = picker_closed(&event, |index| {
+                        if let Some(entry) = entries.get(index) {
+                            self.threads.open(&entry.thread);
+                        }
+                    });
+                    if closed {
+                        self.close_modal();
+                    }
+                });
+                view! {
+                    <backdrop id="switcher-backdrop" align_top on_dismiss={move || self.close_modal()}>
+                        <search_picker id="switcher" handle searchable="Search threads…" empty="No matching threads"
+                                       footer=FOOTER width={Length::design(MODAL_WIDTH)}
+                                       height={Length::design(PICKER_LIST_HEIGHT)}/>
+                    </backdrop>
+                }
+                .into_any()
             }
-        });
-        self.present(Modal::Switcher(switcher), subscription, cx);
-    }
-
-    fn open_file_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.modal.is_some() {
-            return;
-        }
-        let Some(thread) = self.threads.read(cx).selected().cloned() else {
-            return;
-        };
-        let files = cx.new(|cx| FilePicker::new(thread.clone(), window, cx));
-        let subscription = cx.subscribe_in(&files, window, move |this, _, picked: &Option<RepoPath>, window, cx| {
-            if let Some(path) = picked
-                && let Some(view) = this.thread_view(&thread).cloned()
-            {
-                this.threads.update(cx, |threads, cx| threads.select(&thread, cx));
-                view.update(cx, |view, cx| view.open_file(path.clone(), None, window, cx));
-            }
-            this.close_modal(window, cx);
-        });
-        self.present(Modal::Files(files), subscription, cx);
-    }
-
-    fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.modal.is_some() {
-            return;
-        }
-        let settings = cx.new(|cx| Settings::new(self.registry.clone(), cx));
-        settings.update(cx, |settings, cx| settings.focus(window, cx));
-        let subscription = cx.subscribe_in(&settings, window, |this, _, _: &settings::Closed, window, cx| {
-            this.close_modal(window, cx);
-        });
-        self.present(Modal::Settings(settings), subscription, cx);
-    }
-
-    fn present(&mut self, modal: Modal, subscription: Subscription, cx: &mut Context<Self>) {
-        self.modal = Some((modal, subscription));
-        cx.notify();
-    }
-
-    fn close_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.modal = None;
-        self.focus_selected(window, cx);
-        cx.notify();
-    }
-
-    fn render_modal(&self, theme: &UiTheme, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let backdrop = |id: &'static str| {
-            let app = cx.entity().downgrade();
-            Backdrop::new(id, *theme).align_top().on_dismiss(move |window, cx| {
-                let _ = app.update(cx, |this, cx| this.close_modal(window, cx));
+            Modal::Files(thread) => file_picker(thread, move |picked: Option<RepoPath>| {
+                self.close_modal();
+                if let Some(path) = picked {
+                    self.open_file(thread, path);
+                }
             })
-        };
-        Some(match &self.modal.as_ref()?.0 {
-            Modal::Switcher(picker) => backdrop("switcher-backdrop").child(picker.clone()).into_any_element(),
-            Modal::Files(files) => backdrop("file-picker-backdrop").child(files.clone()).into_any_element(),
-            Modal::Settings(settings) => settings.clone().into_any_element(),
-        })
-    }
-
-    fn focus_selected(&self, window: &mut Window, cx: &mut Context<Self>) {
-        match self.selected_view(cx) {
-            Some(view) => view.update(cx, |view, cx| view.focus(window, cx)),
-            None => self.focus_handle.focus(window, cx),
+            .into_any(),
+            Modal::Settings => settings(self.registry, move || self.close_modal()).into_any(),
         }
-    }
-
-    fn selected_view(&self, cx: &App) -> Option<Entity<ThreadView>> {
-        self.threads.read(cx).selected().and_then(|thread| self.thread_view(thread)).cloned()
-    }
-
-    fn show_tab(&self, tab: ThreadTab, window: &mut Window, cx: &mut App) {
-        if let Some(view) = self.selected_view(cx) {
-            view.update(cx, |view, cx| view.show(tab, window, cx));
-        }
-    }
-
-    fn toggle_sidebar(&self, cx: &mut Context<Self>) {
-        Registry::update(&self.registry, cx, |state| state.sidebar_collapsed = !state.sidebar_collapsed);
-        cx.notify();
-    }
-
-    fn remember_interface_size(&self, cx: &mut App) {
-        let size = InterfaceSize::get(cx);
-        let chosen = (size != DEFAULT_INTERFACE_SIZE).then_some(size);
-        Registry::update(&self.registry, cx, |state| state.interface_size = chosen);
-    }
-
-    fn remember_selection(&self, cx: &mut App) {
-        let selected = self.threads.read(cx).selected();
-        let session_id = selected.and_then(|thread| thread.read(cx).session_id().cloned());
-        Registry::update(&self.registry, cx, |state| state.last_selected = session_id);
-    }
-
-    fn follow_threads(&mut self, cx: &mut Context<Self>) {
-        let threads = self.threads.read(cx);
-        let listed = &self.registry.read(cx).state().projects;
-        let unlisted: Vec<PathBuf> = threads
-            .projects(cx)
-            .filter(|root| !listed.iter().any(|listed| listed == root))
-            .map(Path::to_path_buf)
-            .collect();
-        let launched: BTreeSet<String> = threads
-            .threads()
-            .iter()
-            .filter_map(|thread| thread.read(cx).target().instance().map(str::to_owned))
-            .collect();
-        if !unlisted.is_empty() {
-            Registry::update(&self.registry, cx, |state| unlisted.into_iter().for_each(|root| state.add_project(root)));
-        }
-        if !launched.is_subset(&self.launched) {
-            self.fleet.update(cx, Fleet::refresh);
-        }
-        self.launched = launched;
-    }
-
-    fn sync_views(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let threads = self.threads.read(cx).threads().to_vec();
-        let views = self.views.len();
-        self.views.retain(|id, _| threads.iter().any(|thread| thread.entity_id() == *id));
-        if self.views.len() < views {
-            self.history.update(cx, History::refresh);
-        }
-        for thread in threads {
-            if !self.views.contains_key(&thread.entity_id()) {
-                let view = cx.new(|cx| ThreadView::new(thread.clone(), self.registry.clone(), window, cx));
-                self.views.insert(thread.entity_id(), view);
-            }
-        }
-        self.remember_selection(cx);
-        let selected = self.threads.read(cx).selected().map(Entity::entity_id);
-        if selected != self.focused {
-            self.focused = selected;
-            if let Some(view) = self.selected_view(cx) {
-                view.update(cx, |view, cx| view.focus(window, cx));
-            }
-        }
-        cx.notify();
     }
 }
 
-impl Render for DesktopApp {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        InterfaceSize::apply(window, cx);
-        place_window_buttons(window);
-        let theme = ActiveTheme::global(cx).ui();
-        let shown = self.sidebar.read(cx);
-        let sidebar_panel = (!shown.collapsed(cx)).then(|| {
-            let width = shown.width(cx);
-            self.sidebar.clone().cached(StyleRefinement::default().flex_none().w(width).h_full())
-        });
-        let selected = self.threads.read(cx).selected().and_then(|thread| self.thread_view(thread));
-        let main = div().debug_selector(|| "main".to_owned()).flex_1().min_w_0().h_full().child(match selected {
-            Some(view) => view.clone().cached(StyleRefinement::default().size_full()).into_any_element(),
-            None => div()
-                .size_full()
-                .flex()
-                .flex_col()
-                .when(sidebar_panel.is_none(), |main| {
-                    main.child(div().top_bar(true, window).pr_4().child(sidebar::toggle_button(false, &theme)))
-                })
-                .child(div().flex_1().min_h_0().child(EmptyState::new(
-                    "No thread selected",
-                    "Select a thread, or start a new one",
-                    NoticeTone::Neutral,
-                    theme,
-                )))
-                .into_any_element(),
-        });
-        let content = div()
-            .track_focus(&self.focus_handle)
-            .on_action(cx.listener(|this, _: &NewThread, _, cx| this.sidebar.update(cx, Sidebar::new_thread)))
-            .on_action(
-                cx.listener(|this, _: &NewCloudThread, _, cx| this.sidebar.update(cx, Sidebar::new_cloud_thread)),
-            )
-            .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_sidebar(cx)))
-            .on_action(cx.listener(|this, _: &SelectNextThread, _, cx| this.step_selection(1, cx)))
-            .on_action(cx.listener(|this, _: &SelectPreviousThread, _, cx| this.step_selection(-1, cx)))
-            .on_action(cx.listener(|this, _: &OpenThreadSwitcher, window, cx| this.open_switcher(window, cx)))
-            .on_action(cx.listener(|this, _: &OpenSettings, window, cx| this.open_settings(window, cx)))
-            .on_action(cx.listener(|this, _: &ShowChat, window, cx| this.show_tab(ThreadTab::Chat, window, cx)))
-            .on_action(cx.listener(|this, _: &ShowFiles, window, cx| this.show_tab(ThreadTab::Files, window, cx)))
-            .on_action(cx.listener(|this, _: &OpenFile, window, cx| this.open_file_picker(window, cx)))
-            .relative()
-            .size_full()
-            .flex()
-            .bg(theme.colors.canvas)
-            .text_color(theme.colors.text)
-            .font_family(UI_FONT)
-            .typography(Typography::Body)
-            .child(TextSelectionLayer)
-            .children(sidebar_panel)
-            .child(main)
-            .child(self.indicators.clone())
-            .children(self.render_modal(&theme, cx))
-            .into_any_element();
+pub(crate) fn chord(keys: &str) -> Chord {
+    key_binding(keys).unwrap_or_else(|error| unreachable!("built-in chord {keys}: {error}"))
+}
 
-        window_chrome::decorate(content, APP_NAME, &theme, window, cx)
+fn no_thread(collapsed: bool) -> impl View {
+    let header = collapsed.then(|| view! { <div top_bar pr=16.0>{toggle_button(false)}</div> });
+    view! {
+        <div size_full flex col>
+            {header}
+            <div flex_1 min_h=0.0 flex items_center justify_center>
+                <empty_state icon=IconName::MessageSquareText title="No thread selected"
+                             detail="Select a thread, or start a new one"/>
+            </div>
+        </div>
     }
 }
 
-enum Modal {
-    Switcher(Entity<SearchPicker>),
-    Files(Entity<FilePicker>),
-    Settings(Entity<Settings>),
-}
-
-const INPUT_CONTEXT: &str = "Input";
-
+const FOOTER: &str = "↑↓ Move    ↵ Open    Esc Close";
 const TURN_FINISHED: &str = "The agent finished its turn";
 const NEEDS_INPUT: &str = "The agent needs your input";

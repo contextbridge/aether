@@ -4,8 +4,9 @@ use aether_desktop::agents::{AgentProfile, Agents, CommandLine, project_agents_f
 use aether_desktop::testing::DesktopHarness;
 use aether_desktop::threads::{Thread, ThreadStatus};
 use agent_client_protocol::v2::schema::{ElicitationSchema, StringPropertySchema};
+use clankerdiff_core::FilesMode;
+use clankerdiff_rouge_shell::rouge::core::Rect;
 use clankerdiff_server::{DiffServer, ServerListener, ServerOptions};
-use gpui::{Entity, TestAppContext};
 use serde_json::json;
 use std::fs;
 use std::path::Path;
@@ -20,8 +21,8 @@ pub(crate) fn replying(session_id: &str, reply: &str) -> FakeAgent {
     FakeAgent::new(session_id).prompt_reply(reply)
 }
 
-pub(crate) fn texts(thread: &Thread) -> Vec<String> {
-    thread.core().map(|core| acp_utils::testing::texts(core.conversation())).unwrap_or_default()
+pub(crate) fn texts(thread: Thread) -> Vec<String> {
+    thread.with_core(|core| acp_utils::testing::texts(core.conversation())).unwrap_or_default()
 }
 
 pub(crate) fn asking_name() -> FakeAgent {
@@ -32,16 +33,45 @@ pub(crate) fn name_form() -> ElicitationSchema {
     ElicitationSchema::new().property("name", StringPropertySchema::new().title("Name"), true)
 }
 
-pub(crate) fn asked(cx: &mut TestAppContext, agent: FakeAgent) -> (DesktopHarness, Entity<Thread>) {
-    let (harness, thread) = DesktopHarness::alpha(cx, agent);
-    thread.update(cx, |thread, cx| thread.send("go".into(), cx));
-    harness.run_until(cx, |cx| thread.read(cx).status() == ThreadStatus::NeedsInput);
+pub(crate) fn asked(agent: FakeAgent) -> (DesktopHarness, Thread) {
+    let (mut harness, thread) = DesktopHarness::alpha(agent);
+    thread.send("go".into());
+    harness.run_until(|_| thread.status() == ThreadStatus::NeedsInput);
     (harness, thread)
 }
 
-pub(crate) fn choose(harness: &DesktopHarness, cx: &mut TestAppContext, row: &'static str, entry: &'static str) {
-    harness.right_click(cx, row).unwrap();
-    harness.click(cx, entry).unwrap();
+pub(crate) fn files_mode(harness: &DesktopHarness, thread: Thread) -> Option<FilesMode> {
+    harness.app().diff_review(thread).map(|review| review.with(|review| review.session().files_mode()))
+}
+
+pub(crate) fn choose(harness: &mut DesktopHarness, row: &str, entry: &str) {
+    harness.right_click(row).unwrap();
+    harness.click(entry).unwrap();
+}
+
+pub(crate) trait Edges {
+    fn left(&self) -> f32;
+    fn right(&self) -> f32;
+    fn top(&self) -> f32;
+    fn bottom(&self) -> f32;
+}
+
+impl Edges for Rect {
+    fn left(&self) -> f32 {
+        self.origin.x
+    }
+
+    fn right(&self) -> f32 {
+        self.max().x
+    }
+
+    fn top(&self) -> f32 {
+        self.origin.y
+    }
+
+    fn bottom(&self) -> f32 {
+        self.max().y
+    }
 }
 
 pub(crate) struct WebSocketServer {

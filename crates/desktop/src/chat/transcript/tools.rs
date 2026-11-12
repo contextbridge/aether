@@ -1,10 +1,9 @@
 use super::code::highlights;
 use super::groups::{GroupKind, Work};
-use crate::ui::ActiveTheme;
-use crate::ui::tokens::{ICON_SIZE_SMALL, ROW_HEIGHT, rem};
+use crate::ui::tokens::{ICON_SIZE_SMALL, ROW_HEIGHT};
+use crate::ui::typography::Typography;
 use crate::ui::{
-    Button, ButtonVariant, CODE_FONT, ControlSize, Disclosure, Icon, IconName, Tooltip, Typography, TypographyExt,
-    UiTheme, Waveform,
+    ButtonVariant, CODE_FONT, ControlSize, Hint, Icon, IconName, UiStyles, UiTheme, Waveform, button, disclosure,
 };
 use acp_utils::content::first_line;
 use acp_utils::conversation::{
@@ -12,38 +11,27 @@ use acp_utils::conversation::{
 };
 use agent_client_protocol::v2::schema as acp;
 use clankerdiff_core::{DiffDocument, LineStat};
-use clankerdiff_gpui::PatchPreview;
-use clankerdiff_gpui::style::stat_badges;
+use clankerdiff_rouge::PatchPreview;
+use clankerdiff_rouge::style::stat_badges;
+use clankerdiff_rouge_shell::rouge::core::{
+    AnyView, Cursor, Div, FocusHandle, SpanStyle, Styled, View, div, px, rich_text, text, view,
+};
+use clankerdiff_rouge_shell::rouge::reactive::{Callback, ReadSignal};
 use clankerdiff_syntax::{LanguageHint, SyntaxCell};
 use clankerdiff_ui_core::ReviewTheme;
-use gpui::{
-    AnyElement, App, ClickEvent, Div, ElementId, HighlightStyle, Role, StyledText, Window, div, prelude::*, px,
-};
 use std::collections::HashMap;
 use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
 
+#[derive(Clone, Copy)]
 pub(crate) struct ToolActions {
-    pub(crate) open_diff: OpenDiff,
-    pub(crate) open_location: OpenLocation,
-}
-
-type OpenDiff = Rc<dyn Fn(&Arc<DiffDocument>, &mut Window, &mut App)>;
-
-type OpenLocation = Rc<dyn Fn(&acp::ToolCallLocation, &mut Window, &mut App)>;
-
-type ShowAll = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
-
-pub(crate) struct ToolRenderer<'a> {
-    review: &'a ReviewTheme,
-    theme: UiTheme,
-    preview: &'a ToolPreview,
-    actions: ToolActions,
+    pub(crate) open_diff: Callback<(Arc<DiffDocument>,)>,
+    pub(crate) open_location: Callback<(acp::ToolCallLocation,)>,
 }
 
 #[derive(Default)]
-pub(crate) struct ToolPreviews(HashMap<ConversationItemId, ToolPreview>);
+pub(crate) struct ToolPreviews(HashMap<ConversationItemId, Rc<ToolPreview>>);
 
 pub(crate) struct ToolPreview {
     revision: Revision,
@@ -51,17 +39,24 @@ pub(crate) struct ToolPreview {
     patches: Vec<Option<PatchPreview>>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToolFold {
+    Folded,
+    Expanded,
+    Full,
+}
+
 impl ToolPreviews {
     pub(crate) fn clear(&mut self) {
         self.0.clear();
     }
 
-    pub(crate) fn get(&mut self, item: &ConversationItem, tool: &ToolCall) -> &ToolPreview {
-        let preview = self.0.entry(item.id()).or_insert_with(|| ToolPreview::new(item.revision(), tool));
+    pub(crate) fn get(&mut self, item: &ConversationItem, tool: &ToolCall) -> Rc<ToolPreview> {
+        let preview = self.0.entry(item.id()).or_insert_with(|| Rc::new(ToolPreview::new(item.revision(), tool)));
         if preview.revision != item.revision() {
-            *preview = ToolPreview::new(item.revision(), tool);
+            *preview = Rc::new(ToolPreview::new(item.revision(), tool));
         }
-        preview
+        preview.clone()
     }
 }
 
@@ -84,39 +79,31 @@ impl ToolPreview {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ToolFold {
-    Folded,
-    Expanded,
-    Full,
-}
-
 pub(crate) fn fold_header(
     kind: GroupKind,
     row: usize,
     items: &[ConversationItem],
     expanded: bool,
-    theme: &UiTheme,
-    on_toggle: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-) -> AnyElement {
-    let colors = theme.colors;
+    on_toggle: Callback,
+) -> AnyView {
+    let theme = UiTheme::current();
     let work = Work::of(items);
     let failed = work.failed > 0;
     if kind == GroupKind::Run {
         let status = if failed { ToolStatus::Failed } else { ToolStatus::Success };
         let summary = work.details().collect::<Vec<_>>().join(" · ");
-        return Disclosure::new(("tool-group", row), expanded, *theme)
-            .h(rem(ROW_HEIGHT))
-            .overflow_hidden()
-            .on_toggle(on_toggle)
-            .children(tool_line(
-                status_icon(status, &format!("group-{row}"), theme),
-                div().flex_none().child(format!("Ran {} tools", work.tools)),
-                Some(summary.into_any_element()),
-                failed,
-                theme,
-            ))
-            .into_any_element();
+        let [icon, title, summary] = tool_line(
+            status_icon(status, &format!("group-{row}")),
+            view! { <div flex_none><text>{format!("Ran {} tools", work.tools)}</text></div> },
+            Some(view! { <text no_wrap>{summary}</text> }.into_any()),
+            failed,
+        );
+        return view! {
+            <disclosure id={format!("tool-group-{row}")} expanded on_toggle h=ROW_HEIGHT overflow_hidden>
+                <div flex items_center gap=8.0 min_w=0.0>{icon}{title}{summary}</div>
+            </disclosure>
+        }
+        .into_any();
     }
     let done = match work.tools {
         0 => "Thought".to_owned(),
@@ -125,209 +112,174 @@ pub(crate) fn fold_header(
     };
     let label = std::iter::once(done).chain(work.details()).collect::<Vec<_>>().join(" · ");
     let chevron = if expanded { IconName::ChevronDown } else { IconName::ChevronRight };
-    let hairline = || div().flex_1().h(px(1.0)).bg(colors.border_subtle);
-    let selector = format!("turn-summary-{row}");
-    div()
-        .id(("turn-summary", row))
-        .debug_selector(move || selector)
-        .role(Role::Button)
-        .aria_expanded(expanded)
-        .focusable()
-        .tab_stop(true)
-        .h(rem(ROW_HEIGHT))
-        .flex()
-        .items_center()
-        .gap_3()
-        .cursor_pointer()
-        .typography(Typography::Body)
-        .text_color(if failed { colors.destructive } else { colors.text_muted })
-        .hover(move |summary| summary.text_color(colors.text_secondary))
-        .focus_visible(move |summary| summary.text_color(colors.text))
-        .on_click(on_toggle)
-        .child(hairline())
-        .child(
-            div()
-                .flex_none()
-                .flex()
-                .items_center()
-                .gap_1()
-                .child(label)
-                .child(Icon::new(chevron, colors.text_muted).size(ICON_SIZE_SMALL)),
-        )
-        .child(hairline())
-        .into_any_element()
+    let hairline = || view! { <div flex_1 h=px(1.0) bg=theme.border_subtle/> };
+    let color = if failed { theme.destructive } else { theme.text_muted };
+    view! {
+        <div test_id={format!("turn-summary-{row}")} h=ROW_HEIGHT flex items_center gap=12.0 body text_color=color
+             on_press={move || on_toggle.call()}>
+            {hairline()}
+            <div flex_none flex items_center gap=4.0>
+                <text>{label}</text>
+                {Icon::new(chevron, theme.text_muted).size(ICON_SIZE_SMALL)}
+            </div>
+            {hairline()}
+        </div>
+    }
+    .into_any()
 }
 
-impl<'a> ToolRenderer<'a> {
-    pub(crate) fn new(theme: &'a ActiveTheme, preview: &'a ToolPreview, actions: ToolActions) -> Self {
-        Self { review: theme.review(), theme: theme.ui(), preview, actions }
-    }
+pub(crate) struct ToolCard<'a> {
+    pub(crate) review: &'a ReviewTheme,
+    pub(crate) theme: ReadSignal<ReviewTheme>,
+    pub(crate) preview: &'a ToolPreview,
+    pub(crate) actions: ToolActions,
+}
 
+impl ToolCard<'_> {
     pub(crate) fn render(
-        &mut self,
+        &self,
         tool: &ToolCall,
         index: usize,
         fold: ToolFold,
-        on_toggle: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-        on_show_all: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    ) -> AnyElement {
-        let theme = self.theme;
+        focus: FocusHandle,
+        on_toggle: Callback,
+        on_show_all: Callback,
+    ) -> AnyView {
+        let theme = UiTheme::current();
         let expanded = fold != ToolFold::Folded;
-        let on_show_all: ShowAll = Rc::new(on_show_all);
-        let diffs: Vec<_> = tool.diffs().collect();
-        let title = div().debug_selector(move || format!("tool-title-{index}")).min_w_0().truncate().child(title(tool));
+        let diffs: Vec<&acp::Diff> = tool.diffs().collect();
+        let title = view! {
+            <div test_id={format!("tool-title-{index}")} min_w=0.0 overflow_hidden><text no_wrap>{title(tool)}</text></div>
+        };
         let summary = self.summary(tool).map(|summary| match tool.locations().first() {
             Some(location) => self.location_link(location.clone(), index, summary),
             None => summary,
         });
-        let header = Disclosure::new(("tool-card", index), expanded, theme)
-            .h(rem(ROW_HEIGHT))
-            .overflow_hidden()
-            .on_toggle(on_toggle)
-            .children(tool_line(
-                status_icon(tool.status, tool.id(), &theme),
-                title,
-                summary,
-                tool.status == ToolStatus::Failed,
-                &theme,
-            ))
-            .when(!diffs.is_empty(), |header| header.child(self.change_summary(tool, index)));
-        div()
-            .flex()
-            .flex_col()
-            .min_w_0()
-            .child(header)
-            .when(expanded || !tool.sub_agents.is_empty(), |row| {
-                row.child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap_3()
-                        .ml_2()
-                        .mt_1()
-                        .mb_2()
-                        .pl_4()
-                        .pr_2()
-                        .py_1()
-                        .border_l_1()
-                        .border_color(theme.colors.border_subtle)
-                        .when(expanded, |body| {
-                            body.child(self.details(tool, index, fold == ToolFold::Full, &on_show_all))
-                        })
-                        .when(expanded && !diffs.is_empty(), |body| body.child(self.changes(&diffs, index)))
-                        .when(!tool.sub_agents.is_empty(), |body| body.child(self.sub_agent_tree(&tool.sub_agents))),
-                )
-            })
-            .into_any_element()
+        let [icon, title, summary] =
+            tool_line(status_icon(tool.status, tool.id()), title, summary, tool.status == ToolStatus::Failed);
+        let changes = (!diffs.is_empty()).then(|| self.change_summary(tool, index));
+        let header = view! {
+            <disclosure id={format!("tool-card-{index}")} expanded on_toggle h=ROW_HEIGHT overflow_hidden
+                        track_focus=focus>
+                <div flex items_center gap=8.0 min_w=0.0>{icon}{title}{summary}{changes}</div>
+            </disclosure>
+        };
+        let body = (expanded || !tool.sub_agents.is_empty()).then(|| {
+            let details = expanded.then(|| self.details(tool, index, fold == ToolFold::Full, on_show_all));
+            let changes = (expanded && !diffs.is_empty()).then(|| self.changes(&diffs, index));
+            let agents = (!tool.sub_agents.is_empty()).then(|| self.sub_agent_tree(&tool.sub_agents));
+            view! {
+                <div flex col gap=12.0 ml=8.0 mt=4.0 mb=8.0 pl=16.0 pr=8.0 py=4.0 border_l=px(1.0)
+                     border_color=theme.border_subtle>
+                    {details}
+                    {changes}
+                    {agents}
+                </div>
+            }
+        });
+        view! { <div flex col min_w=0.0>{header}{body}</div> }.into_any()
     }
 
-    fn command_highlights(&self, command: &str) -> Vec<(Range<usize>, HighlightStyle)> {
-        let syntax = self.preview.command.get(LanguageHint::Id("bash"), || command);
-        highlights(command, &syntax.highlights, &self.review.syntax)
-    }
-
-    fn summary(&mut self, tool: &ToolCall) -> Option<AnyElement> {
+    fn summary(&self, tool: &ToolCall) -> Option<AnyView> {
         if tool.status == ToolStatus::Failed
             && let Some(error) = output_headline(tool)
         {
-            return Some(error.to_owned().into_any_element());
+            return Some(view! { <text no_wrap>{error.to_owned()}</text> }.into_any());
         }
         if let Some(command) = tool.bash_command()
             && let Some(first) = command.lines().next()
         {
-            let highlights = self
+            let spans = self
                 .command_highlights(command)
                 .into_iter()
                 .filter_map(|(range, style)| {
                     (range.start < first.len()).then(|| (range.start + 2..range.end.min(first.len()) + 2, style))
                 })
                 .collect::<Vec<_>>();
-            let command = StyledText::new(format!("$ {first}")).with_highlights(highlights);
-            return Some(div().font_family(CODE_FONT).child(command).into_any_element());
+            return Some(rich_text(format!("$ {first}"), spans).font(CODE_FONT).no_wrap().into_any());
         }
         if let Some(value) = tool.display_value().and_then(first_line) {
-            return Some(value.to_owned().into_any_element());
+            return Some(view! { <text no_wrap>{value.to_owned()}</text> }.into_any());
         }
         let path = tool.changed_paths().first()?.display().to_string();
-        Some(div().font_family(CODE_FONT).child(path).into_any_element())
+        Some(view! { <text code no_wrap>{path}</text> }.into_any())
     }
 
-    fn location_link(&self, location: acp::ToolCallLocation, index: usize, summary: AnyElement) -> AnyElement {
-        let colors = self.theme.colors;
-        let open = self.actions.open_location.clone();
+    fn command_highlights(&self, command: &str) -> Vec<(Range<usize>, SpanStyle)> {
+        let syntax = self.preview.command.get(LanguageHint::Id("bash"), || command);
+        highlights(command, &syntax.highlights, &self.review.syntax)
+    }
+
+    fn location_link(&self, location: acp::ToolCallLocation, index: usize, summary: AnyView) -> AnyView {
+        let open = self.actions.open_location;
         let label = format!("Open {}", location.path.0.display());
-        div()
-            .id(("tool-location", index))
-            .debug_selector(move || format!("tool-location-{index}"))
-            .role(Role::Link)
-            .aria_label(label.clone())
-            .min_w_0()
-            .truncate()
-            .cursor_pointer()
-            .hover(move |link| link.text_color(colors.text))
-            .tooltip(Tooltip::text(label, self.theme))
-            .on_click(move |_, window, cx| {
-                cx.stop_propagation();
-                open(&location, window, cx);
-            })
-            .child(summary)
-            .into_any_element()
+        view! {
+            <div test_id={format!("tool-location-{index}")} min_w=0.0 overflow_hidden cursor=Cursor::Pointer
+                 on_click={move |event| {
+                     event.stop_propagation();
+                     open.call(location.clone());
+                 }}>
+                {summary}
+            </div>
+        }
+        .tooltip(label)
+        .into_any()
     }
 
-    fn details(&mut self, tool: &ToolCall, index: usize, full: bool, on_show_all: &ShowAll) -> Div {
-        let theme = self.theme;
+    fn details(&self, tool: &ToolCall, index: usize, full: bool, on_show_all: Callback) -> Div {
         let command = tool.bash_command().map(|command| {
-            let highlights = self.command_highlights(command);
-            section("Command", StyledText::new(command.to_owned()).with_highlights(highlights), &theme)
+            let spans = self.command_highlights(command);
+            section("Command", rich_text(command.to_owned(), spans).font(CODE_FONT).into_any())
         });
         let input = if tool.diffs().next().is_some() { String::new() } else { tool.raw_input() };
         let output = output_text(tool);
-        let clipped = |label: &'static str, text: &str| {
-            let (shown, hidden) = if full { (text, 0) } else { clip(text) };
-            let id = format!("tool-{}-more-{index}", label.to_lowercase());
-            section(label, shown.to_owned(), &theme)
-                .children((hidden > 0).then(|| show_all(id, hidden, &theme, on_show_all.clone())))
+        let clipped = |label: &'static str, source: &str| {
+            let (shown, hidden) = if full { (source, 0) } else { clip(source) };
+            let more = (hidden > 0)
+                .then(|| show_all(format!("tool-{}-more-{index}", label.to_lowercase()), hidden, on_show_all));
+            section(label, view! { <text code>{shown.to_owned()}</text> }.into_any()).child(more)
         };
-        div()
-            .debug_selector(move || format!("tool-details-{index}"))
-            .flex()
-            .flex_col()
-            .gap_3()
-            .children(command)
-            .when(!input.is_empty(), |details| details.child(clipped("Input", &input)))
-            .when(!output.is_empty(), |details| details.child(clipped("Output", &output)))
-    }
-
-    fn changes(&mut self, diffs: &[&acp::Diff], index: usize) -> Div {
-        let theme = self.theme;
-        let mut changes = div()
-            .debug_selector(move || format!("tool-changes-{index}"))
-            .flex()
-            .flex_col()
-            .gap_2()
-            .font_family(CODE_FONT)
-            .typography(Typography::Small);
-        for (position, diff) in diffs.iter().enumerate() {
-            let patch = diff.patch.as_ref().filter(|patch| !patch.text.trim().is_empty());
-            changes = match (patch, self.preview.patch(position)) {
-                (Some(_), Some(preview)) => {
-                    let id = ElementId::named_usize(format!("tool-diff-{index}"), position);
-                    let open = self.actions.open_diff.clone();
-                    let open = move |document: &Arc<DiffDocument>, window: &mut Window, cx: &mut App| {
-                        open(document, window, cx);
-                    };
-                    changes.child(preview.render(id, self.review, open))
-                }
-                (Some(patch), None) => changes.child(section("Patch", patch.text.clone(), &theme)),
-                (None, _) => changes.children(diff.changes.iter().map(|change| {
-                    div().text_color(theme.colors.text_secondary).child(diff_change_label(change)).into_any_element()
-                })),
-            };
+        let input = (!input.is_empty()).then(|| clipped("Input", &input));
+        let output = (!output.is_empty()).then(|| clipped("Output", &output));
+        view! {
+            <div test_id={format!("tool-details-{index}")} flex col gap=12.0>{command}{input}{output}</div>
         }
-        changes
     }
 
-    fn change_summary(&self, tool: &ToolCall, index: usize) -> impl IntoElement + use<> {
+    fn changes(&self, diffs: &[&acp::Diff], index: usize) -> Div {
+        let theme = UiTheme::current();
+        let changes = diffs.iter().enumerate().map(|(position, diff)| {
+            let patch = diff.patch.as_ref().filter(|patch| !patch.text.trim().is_empty());
+            match (patch, self.preview.patch(position)) {
+                (Some(_), Some(preview)) => {
+                    let open = self.actions.open_diff;
+                    preview
+                        .render(
+                            format!("tool-diff-{index}-{position}"),
+                            self.review,
+                            move |document: &Arc<DiffDocument>| {
+                                open.call(document.clone());
+                            },
+                        )
+                        .into_any()
+                }
+                (Some(patch), None) => {
+                    section("Patch", view! { <text code>{patch.text.clone()}</text> }.into_any()).into_any()
+                }
+                (None, _) => {
+                    let labels = diff.changes.iter().map(|change| {
+                        view! { <text small color=theme.text_secondary>{diff_change_label(change)}</text> }
+                    });
+                    view! { <div flex col>{..labels}</div> }.into_any()
+                }
+            }
+        });
+        view! {
+            <div test_id={format!("tool-changes-{index}")} flex col gap=8.0 font=CODE_FONT small>{..changes}</div>
+        }
+    }
+
+    fn change_summary(&self, tool: &ToolCall, index: usize) -> AnyView {
         let (added, removed) = self
             .preview
             .patches
@@ -337,61 +289,53 @@ impl<'a> ToolRenderer<'a> {
             .fold((0, 0), |(added, removed), (more, fewer)| (added + more, removed + fewer));
         let files = tool.changed_paths().len();
         let changed_lines = added > 0 || removed > 0;
-        div()
-            .debug_selector(move || format!("tool-change-summary-{index}"))
-            .flex()
-            .flex_none()
-            .items_center()
-            .gap_2()
-            .typography(Typography::Caption)
-            .text_color(self.theme.colors.text_muted)
-            .when(files > 1 || !changed_lines, |summary| {
-                summary.child(match files {
-                    0 => "File changes".to_owned(),
-                    1 => "1 file".to_owned(),
-                    _ => format!("{files} files"),
-                })
-            })
-            .when(changed_lines, |summary| {
-                summary.children(stat_badges(&self.review.diff, LineStat { added, deleted: removed, files }))
-            })
+        let count = (files > 1 || !changed_lines).then(|| {
+            let label = match files {
+                0 => "File changes".to_owned(),
+                1 => "1 file".to_owned(),
+                _ => format!("{files} files"),
+            };
+            view! { <text caption muted no_wrap>{label}</text> }
+        });
+        let badges = changed_lines.then(|| stat_badges(LineStat { added, deleted: removed, files }, self.theme));
+        view! {
+            <div test_id={format!("tool-change-summary-{index}")} flex flex_none items_center gap=8.0 caption>
+                {count}
+                {badges}
+            </div>
+        }
+        .into_any()
     }
 
-    fn sub_agent_tree(&mut self, sub_agents: &[SubAgent]) -> Div {
-        let theme = self.theme;
-        let mut tree = div().flex().flex_col().gap_1().typography(Typography::Small);
+    fn sub_agent_tree(&self, sub_agents: &[SubAgent]) -> Div {
+        let theme = UiTheme::current();
+        let mut rows: Vec<AnyView> = Vec::new();
         for agent in sub_agents {
             let agent_id = agent.session_id().0.to_string();
             let icon = agent.status().map_or_else(
-                || Icon::new(IconName::Circle, theme.colors.text_muted).size(ICON_SIZE_SMALL).into_any_element(),
-                |status| status_icon(status, &agent_id, &theme),
+                || Icon::new(IconName::Circle, theme.text_muted).size(ICON_SIZE_SMALL).into_any(),
+                |status| status_icon(status, &agent_id),
             );
-            tree =
-                tree.child(
-                    div().flex().items_center().gap_2().child(icon).child(
-                        div().typography(Typography::Label).child(agent.title().unwrap_or("sub-agent").to_owned()),
-                    ),
-                );
+            let name = agent.title().unwrap_or("sub-agent").to_owned();
+            rows.push(view! { <div flex items_center gap=8.0>{icon}<text label>{name}</text></div> }.into_any());
             let tool_calls: Vec<&ToolCall> = agent.tool_calls().collect();
             let hidden = tool_calls.len().saturating_sub(SUB_AGENT_VISIBLE_TOOLS);
             if hidden > 0 {
-                tree = tree.child(
-                    div().pl_6().text_color(theme.colors.text_muted).child(format!("{hidden} earlier tool calls")),
+                rows.push(
+                    view! { <div pl=24.0><text muted>{format!("{hidden} earlier tool calls")}</text></div> }.into_any(),
                 );
             }
             for tool in &tool_calls[hidden..] {
-                let icon = status_icon(tool.status, &format!("{agent_id}-{}", tool.id()), &theme);
+                let icon = status_icon(tool.status, &format!("{agent_id}-{}", tool.id()));
                 let failed = tool.status == ToolStatus::Failed;
-                tree = tree.child(div().pl_6().flex().items_center().gap_2().min_w_0().children(tool_line(
-                    icon,
-                    div().flex_none().child(title(tool)),
-                    self.summary(tool),
-                    failed,
-                    &theme,
-                )));
+                let title = view! { <div flex_none><text>{title(tool)}</text></div> };
+                let [icon, title, summary] = tool_line(icon, title, self.summary(tool), failed);
+                rows.push(
+                    view! { <div pl=24.0 flex items_center gap=8.0 min_w=0.0>{icon}{title}{summary}</div> }.into_any(),
+                );
             }
         }
-        tree
+        view! { <div flex col gap=4.0 small>{..rows}</div> }
     }
 }
 
@@ -401,23 +345,12 @@ const SECTION_MAX_LINES: usize = 200;
 
 const SECTION_MAX_BYTES: usize = 16 * 1024;
 
-fn tool_line(
-    icon: AnyElement,
-    title: Div,
-    summary: Option<AnyElement>,
-    failed: bool,
-    theme: &UiTheme,
-) -> [AnyElement; 3] {
-    let colors = theme.colors;
-    let title = title.typography(Typography::BodyStrong).text_color(colors.text_secondary);
-    let summary = div()
-        .flex_1()
-        .min_w_0()
-        .truncate()
-        .typography(Typography::Body)
-        .text_color(if failed { colors.destructive } else { colors.text_muted })
-        .children(summary);
-    [icon, title.into_any_element(), summary.into_any_element()]
+fn tool_line(icon: AnyView, title: Div, summary: Option<AnyView>, failed: bool) -> [AnyView; 3] {
+    let theme = UiTheme::current();
+    let title = title.typography(Typography::BodyStrong).text_color(theme.text_secondary);
+    let color = if failed { theme.destructive } else { theme.text_muted };
+    let summary = view! { <div flex_1 min_w=0.0 overflow_hidden body text_color=color>{summary}</div> };
+    [icon, title.into_any(), summary.into_any()]
 }
 
 fn output_text(tool: &ToolCall) -> String {
@@ -442,19 +375,14 @@ fn title(tool: &ToolCall) -> String {
     tool.headline().unwrap_or("Tool call").to_owned()
 }
 
-fn section(label: &'static str, text: impl IntoElement, theme: &UiTheme) -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .gap_1()
-        .child(div().typography(Typography::Label).text_color(theme.colors.text_muted).child(label))
-        .child(
-            div()
-                .text_color(theme.colors.text_secondary)
-                .font_family(CODE_FONT)
-                .typography(Typography::Small)
-                .child(text),
-        )
+fn section(label: &'static str, content: AnyView) -> Div {
+    let theme = UiTheme::current();
+    view! {
+        <div flex col gap=4.0>
+            <text label muted>{label}</text>
+            <div text_color=theme.text_secondary font=CODE_FONT small>{content}</div>
+        </div>
+    }
 }
 
 fn clip(text: &str) -> (&str, usize) {
@@ -469,24 +397,20 @@ fn clip(text: &str) -> (&str, usize) {
     (&text[..end], rest.strip_prefix('\n').unwrap_or(rest).lines().count())
 }
 
-fn show_all(id: String, hidden: usize, theme: &UiTheme, on_click: ShowAll) -> Button {
+fn show_all(id: String, hidden: usize, on_click: Callback) -> AnyView {
     let label = if hidden == 1 { "Show 1 more line".to_owned() } else { format!("Show {hidden} more lines") };
-    Button::new(id, label, *theme)
-        .variant(ButtonVariant::Ghost)
-        .size(ControlSize::Small)
-        .on_click(move |event, window, cx| on_click(event, window, cx))
+    view! { <button id label variant=ButtonVariant::Ghost size=ControlSize::Small on_click/> }
 }
 
-fn status_icon(status: ToolStatus, id: &str, theme: &UiTheme) -> AnyElement {
+fn status_icon(status: ToolStatus, id: &str) -> AnyView {
+    let theme = UiTheme::current();
     let (icon, color) = match status {
         ToolStatus::Running => {
-            return Waveform::new(format!("tool-waveform-{id}"), theme.colors.info)
-                .size(ICON_SIZE_SMALL)
-                .into_any_element();
+            return Waveform::new(format!("tool-waveform-{id}"), theme.info).size(ICON_SIZE_SMALL).into_any();
         }
-        ToolStatus::Success => (IconName::Check, theme.colors.text_muted),
-        ToolStatus::Failed => (IconName::CircleX, theme.colors.destructive),
-        ToolStatus::Cancelled => (IconName::CircleSlash, theme.colors.text_muted),
+        ToolStatus::Success => (IconName::Check, theme.text_muted),
+        ToolStatus::Failed => (IconName::CircleX, theme.destructive),
+        ToolStatus::Cancelled => (IconName::CircleSlash, theme.text_muted),
     };
-    Icon::new(icon, color).size(ICON_SIZE_SMALL).into_any_element()
+    Icon::new(icon, color).size(ICON_SIZE_SMALL).into_any()
 }

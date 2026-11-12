@@ -1,184 +1,88 @@
 use crate::registry::Registry;
 use crate::theme;
-use crate::ui::ActiveTheme;
 use crate::ui::{
-    Button, ButtonVariant, ControlSize, Modal, ModalSize, ThemePicker, ThemePickerEvent, Typography, TypographyExt,
-    UiTheme,
+    ButtonVariant, ControlSize, ModalSize, ThemePickerEvent, UiStyles, button, modal, theme_picker, theme_picker_view,
 };
-use clankerdiff_ui_core::{Appearance, AppearanceMode, ReviewTheme, ThemeChoice, ThemePreference};
-use gpui::{
-    Anchor, AnyElement, App, Context, Entity, EventEmitter, FocusHandle, KeyBinding, Subscription, Window, actions,
-    div, prelude::*,
-};
-use gpui_base::Popover;
+use clankerdiff_rouge_shell::rouge::core::{AnyView, Div, Styled, View, div, dynamic, text, view};
+use clankerdiff_rouge_shell::rouge::reactive::{Callback, Signal, effect, memo, signal, untrack};
+use clankerdiff_rouge_shell::rouge::widgets::{Placement, popover};
+use clankerdiff_ui_core::{Appearance, AppearanceMode, ReviewTheme, ThemeChoice};
 
-actions!(settings, [CloseSettings,]);
-
-pub(crate) struct Settings {
-    registry: Entity<Registry>,
-    picker: Option<(Appearance, Entity<ThemePicker>, Subscription)>,
-    focus_handle: FocusHandle,
+pub(crate) fn settings(registry: Registry, on_close: impl Fn() + 'static) -> impl View {
+    let on_close = Callback::from(on_close);
+    let close = move || {
+        show_saved_theme(registry);
+        on_close.call();
+    };
+    view! {
+        <modal id="settings" title="Settings" hint="Esc to close" size=ModalSize::Compact on_dismiss=close>
+            {row("Appearance", "Follow the system, or always look light or dark", mode(registry))}
+            {row("Light theme", "Shown when the app looks light", theme_choice(registry, Appearance::Light))}
+            {row("Dark theme", "Shown when the app looks dark", theme_choice(registry, Appearance::Dark))}
+        </modal>
+    }
 }
 
-pub(crate) struct Closed;
-
-impl Settings {
-    pub(crate) fn bind_keys(cx: &mut App) {
-        cx.bind_keys([KeyBinding::new("escape", CloseSettings, Some(CONTEXT))]);
-    }
-
-    pub(crate) fn new(registry: Entity<Registry>, cx: &mut Context<Self>) -> Self {
-        Self { registry, picker: None, focus_handle: cx.focus_handle() }
-    }
-
-    pub(crate) fn focus(&self, window: &mut Window, cx: &mut App) {
-        self.focus_handle.focus(window, cx);
-    }
-
-    fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.picker.take().is_some() {
-            self.show_saved_theme(window, cx);
-        }
-        cx.emit(Closed);
-    }
-
-    fn set_mode(&mut self, mode: AppearanceMode, window: &mut Window, cx: &mut Context<Self>) {
-        Registry::update(&self.registry, cx, |state| state.theme.mode = mode);
-        self.show_saved_theme(window, cx);
-    }
-
-    fn open_picker(&mut self, appearance: Appearance, window: &mut Window, cx: &mut Context<Self>) {
-        let id = self.preference(cx).pair.id(appearance).to_owned();
-        let current = ReviewTheme::builtin(&id).unwrap_or_default();
-        let ui = ActiveTheme::global(cx).ui();
-        let picker = cx.new(|cx| {
-            let themes = ThemeChoice::catalog_for(appearance);
-            ThemePicker::new(format!("{}-themes", key(appearance)), &current, themes, ui, window, cx)
-        });
-        let subscription = cx.subscribe_in(&picker, window, move |this, _, event: &ThemePickerEvent, window, cx| {
-            this.on_picker_event(appearance, event, window, cx);
-        });
-        self.picker = Some((appearance, picker, subscription));
-        cx.notify();
-    }
-
-    fn cancel_picker(&self, cx: &mut App) {
-        if let Some((_, picker, _)) = &self.picker {
-            picker.update(cx, ThemePicker::cancel);
-        }
-    }
-
-    fn on_picker_event(
-        &mut self,
-        appearance: Appearance,
-        event: &ThemePickerEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        match event {
-            ThemePickerEvent::Preview(theme) => theme::preview(theme.clone(), window, cx),
-            ThemePickerEvent::Commit(theme) => {
-                let id = theme.id().to_string();
-                Registry::update(&self.registry, cx, |state| state.theme.pair.set(appearance, id));
-                self.close_picker(window, cx);
-            }
-            ThemePickerEvent::Cancel(_) => self.close_picker(window, cx),
-        }
-    }
-
-    fn close_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.picker = None;
-        self.show_saved_theme(window, cx);
-        self.focus(window, cx);
-        cx.notify();
-    }
-
-    fn show_saved_theme(&self, window: &mut Window, cx: &mut App) {
-        let preference = self.preference(cx).clone();
-        theme::apply(&preference, window, cx);
-    }
-
-    fn preference<'a>(&self, cx: &'a App) -> &'a ThemePreference {
-        &self.registry.read(cx).state().theme
-    }
-
-    fn render_mode(&self, theme: &UiTheme, cx: &mut Context<Self>) -> impl IntoElement {
-        let current = self.preference(cx).mode;
-        div().flex().gap_1().children(
+fn mode(registry: Registry) -> AnyView {
+    let current = memo(move || registry.with(|state| state.theme.mode));
+    dynamic(move || {
+        let current = current.get();
+        let buttons =
             [(AppearanceMode::System, "System"), (AppearanceMode::Light, "Light"), (AppearanceMode::Dark, "Dark")].map(
                 |(mode, label)| {
-                    Button::new(format!("appearance-{}", label.to_lowercase()), label, *theme)
-                        .size(ControlSize::Small)
-                        .selected(mode == current)
-                        .on_click(cx.listener(move |this, _, window, cx| this.set_mode(mode, window, cx)))
-                },
-            ),
-        )
-    }
-
-    fn render_theme(&self, appearance: Appearance, theme: &UiTheme, cx: &mut Context<Self>) -> impl IntoElement {
-        let key = key(appearance);
-        let name = theme_name(self.preference(cx).pair.id(appearance));
-        let picker = self.picker.as_ref().filter(|(open, ..)| *open == appearance).map(|(_, picker, _)| picker.clone());
-        let settings = cx.entity().downgrade();
-        Popover::new(format!("{key}-theme-popover"))
-            .anchor(Anchor::TopRight)
-            .open(picker.is_some())
-            .on_open_change(move |open, window, cx| {
-                let _ = settings.update(cx, |this, cx| {
-                    if *open {
-                        this.open_picker(appearance, window, cx);
-                    } else {
-                        this.cancel_picker(cx);
+                    view! {
+                        <button id={format!("appearance-{}", label.to_lowercase())} label size=ControlSize::Small
+                                selected={mode == current} keyboard_focusable
+                                on_click={move || {
+                                    registry.update(|state| state.theme.mode = mode);
+                                    show_saved_theme(registry);
+                                }}/>
                     }
-                });
-            })
-            .trigger(Button::new(format!("{key}-theme"), name, *theme).variant(ButtonVariant::Secondary))
-            .content(move |_, _, _| div().children(picker))
-    }
+                },
+            );
+        view! { <div flex gap=4.0>{..buttons}</div> }
+    })
+    .into_any()
 }
 
-impl EventEmitter<Closed> for Settings {}
-
-impl Render for Settings {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = ActiveTheme::global(cx).ui();
-        let settings = cx.entity().downgrade();
-        let modal = Modal::new("settings", "Settings", theme)
-            .hint("Esc to close")
-            .size(ModalSize::Compact)
-            .on_dismiss(move |window, cx| {
-                let _ = settings.update(cx, |this, cx| this.close(window, cx));
-            })
-            .child(row(
-                "Appearance",
-                "Follow the system, or always look light or dark",
-                self.render_mode(&theme, cx),
-                &theme,
-            ))
-            .child(row(
-                "Light theme",
-                "Shown when the app looks light",
-                self.render_theme(Appearance::Light, &theme, cx),
-                &theme,
-            ))
-            .child(row(
-                "Dark theme",
-                "Shown when the app looks dark",
-                self.render_theme(Appearance::Dark, &theme, cx),
-                &theme,
-            ));
-        div()
-            .absolute()
-            .inset_0()
-            .key_context(CONTEXT)
-            .track_focus(&self.focus_handle)
-            .on_action(cx.listener(|this, _: &CloseSettings, window, cx| this.close(window, cx)))
-            .child(modal)
-    }
+fn theme_choice(registry: Registry, appearance: Appearance) -> AnyView {
+    let key = key(appearance);
+    let open = signal(false);
+    effect(move || {
+        if !open.get() {
+            untrack(|| show_saved_theme(registry));
+        }
+    });
+    let name = memo(move || registry.with(|state| theme_name(state.theme.pair.id(appearance))));
+    let trigger = dynamic(move || {
+        let label = name.get();
+        view! {
+            <button id={format!("{key}-theme")} label variant=ButtonVariant::Secondary keyboard_focusable
+                    on_click={move || open.set(true)}/>
+        }
+    });
+    popover(open, trigger, move || picker(registry, appearance, open)).placement(Placement::Below).into_any()
 }
 
-const CONTEXT: &str = "Settings";
+fn picker(registry: Registry, appearance: Appearance, open: Signal<bool>) -> impl View {
+    let id = registry.with_untracked(|state| state.theme.pair.id(appearance).to_owned());
+    let current = ReviewTheme::builtin(&id).unwrap_or_default();
+    let handle = theme_picker(&current, ThemeChoice::catalog_for(appearance), move |event| match event {
+        ThemePickerEvent::Preview(theme) => theme::preview(theme),
+        ThemePickerEvent::Commit(theme) => {
+            let id = theme.id().to_string();
+            registry.update(|state| state.theme.pair.set(appearance, id));
+            open.set(false);
+        }
+        ThemePickerEvent::Cancel(_) => open.set(false),
+    });
+    view! { <theme_picker_view id={format!("{}-themes", key(appearance))} handle/> }
+}
+
+fn show_saved_theme(registry: Registry) {
+    let preference = registry.with_untracked(|state| state.theme.clone());
+    theme::apply(&preference);
+}
 
 fn key(appearance: Appearance) -> &'static str {
     match appearance {
@@ -191,21 +95,14 @@ fn theme_name(id: &str) -> String {
     ReviewTheme::catalog().into_iter().find(|theme| theme.id == id).map_or_else(|| id.to_owned(), |theme| theme.name)
 }
 
-fn row(label: &'static str, detail: &'static str, control: impl IntoElement, theme: &UiTheme) -> AnyElement {
-    div()
-        .py_2()
-        .flex()
-        .items_center()
-        .justify_between()
-        .gap_4()
-        .child(
-            div()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .child(label)
-                .child(div().typography(Typography::Small).text_color(theme.colors.text_muted).child(detail)),
-        )
-        .child(control)
-        .into_any_element()
+fn row(label: &'static str, detail: &'static str, control: AnyView) -> Div {
+    view! {
+        <div py=8.0 flex items_center justify_between gap=16.0>
+            <div min_w=0.0 flex col>
+                <text body primary>{label}</text>
+                <text small muted>{detail}</text>
+            </div>
+            {control}
+        </div>
+    }
 }

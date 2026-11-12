@@ -27,9 +27,6 @@ required-features = ["testing"]
 
 [features]
 testing = [
-    "gpui/test-support",
-    "gpui-base/test-support",
-    "clankerdiff-gpui/test-support",
     "acp_utils/testing",
     "client_core/testing",
     "aether-sessions/testing",
@@ -50,21 +47,24 @@ workspace = true
 acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client", "websocket"], version = "0.5.19" }
 agent-client-protocol = { workspace = true, features = ["process"] }
 aether-sessions = { path = "../aether-sessions", version = "0.3.19" }
+arboard = { version = "3.7", default-features = false, features = ["image-data", "wayland-data-control"] }
 base64 = { workspace = true }
 chrono = { workspace = true }
 client_core = { package = "aether-client-core", path = "../client-core", version = "0.1.0" }
 clankerdiff-client = { workspace = true }
 clankerdiff-core = { workspace = true }
-clankerdiff-gpui = { workspace = true }
-clankerdiff-gpui-shell = { workspace = true }
 clankerdiff-lspd = { workspace = true, features = ["daemon"] }
 clankerdiff-markdown = { workspace = true }
 clankerdiff-remote = { workspace = true }
+clankerdiff-rouge = { workspace = true }
+clankerdiff-rouge-shell = { workspace = true }
+clankerdiff-rouge-ui = { workspace = true }
 clankerdiff-syntax = { workspace = true }
 clankerdiff-ui-core = { workspace = true }
-gpui = { workspace = true }
-gpui-base = { workspace = true }
 clap = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["png"] }
+rfd = { version = "0.16", default-features = false, features = ["xdg-portal", "tokio"] }
+rouge = { workspace = true, features = ["tokio-rt", "open-url"] }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -77,6 +77,9 @@ log = { workspace = true, features = ["release_max_level_info"] }
 tracing = { workspace = true, features = ["release_max_level_info"] }
 tracing-subscriber = { workspace = true }
 utils = { package = "aether-utils", path = "../utils", version = "0.3.1" }
+
+[target.'cfg(unix)'.dependencies]
+notify-rust = "4.18"
 
 [dev-dependencies]
 clankerdiff-server = { workspace = true }

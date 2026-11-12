@@ -1,18 +1,22 @@
 use agent_client_protocol::v2::schema::SessionId;
+use clankerdiff_rouge_shell::persist::Store;
+use clankerdiff_rouge_shell::rouge::reactive::{Signal, Stored, signal, stored};
 use clankerdiff_ui_core::ThemePreference;
-use gpui::{AppContext, Context, Entity, Pixels, Size, Subscription};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use utils::fs::{read_json, write_json_atomic};
+use std::io;
+use std::path::PathBuf;
+use tokio::runtime::Handle;
+use tokio::task::JoinHandle;
 
 pub const STATE_FILE: &str = "state.json";
 
+pub type Saved = Store<State>;
+
+#[derive(Clone, Copy)]
 pub struct Registry {
-    state: State,
-    saver: Option<Arc<Saver>>,
-    _quit: Subscription,
+    state: Signal<State>,
+    saved: Stored<Saved>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -23,12 +27,18 @@ pub struct State {
     pub last_agents: HashMap<PathBuf, String>,
     pub archived: HashSet<SessionId>,
     pub titles: HashMap<SessionId, String>,
-    pub window_size: Option<Size<Pixels>>,
+    pub window_size: Option<WindowSize>,
     pub last_selected: Option<SessionId>,
     pub interface_size: Option<f32>,
     pub sidebar_width: Option<f32>,
     pub sidebar_collapsed: bool,
     pub theme: ThemePreference,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct WindowSize {
+    pub width: f32,
+    pub height: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -42,37 +52,38 @@ pub fn default_state_file() -> Option<PathBuf> {
     utils::path::aether_home().map(|home| home.join("desktop").join(STATE_FILE))
 }
 
+pub fn load(file: Option<PathBuf>, runtime: &Handle) -> (Saved, JoinHandle<io::Result<()>>) {
+    Store::load(file, runtime)
+}
+
 impl Registry {
-    pub fn load(file: Option<PathBuf>, cx: &mut Context<Self>) -> Self {
-        let state = file.as_deref().map(read_state).unwrap_or_default();
-        let saver = file.map(|file| Arc::new(Saver { file, pending: Mutex::default(), writing: Mutex::default() }));
-        let quit = cx.on_app_quit(|this: &mut Self, _| {
-            if let Some(saver) = &this.saver {
-                *lock(&saver.pending) = Some(this.state.clone());
-                saver.save();
-            }
-            async {}
-        });
-        Self { state, saver, _quit: quit }
+    pub fn new(saved: Saved) -> Self {
+        Self { state: signal(saved.state()), saved: stored(saved) }
     }
 
-    pub fn state(&self) -> &State {
-        &self.state
+    pub fn with<T>(&self, read: impl FnOnce(&State) -> T) -> T {
+        self.state.with(read)
     }
 
-    pub fn update(registry: &Entity<Self>, cx: &mut impl AppContext, change: impl FnOnce(&mut State)) {
-        registry.update(cx, |this, cx| {
-            let before = this.state.clone();
-            change(&mut this.state);
-            if this.state == before {
-                return;
-            }
-            cx.notify();
-            if let Some(saver) = this.saver.clone() {
-                *lock(&saver.pending) = Some(this.state.clone());
-                cx.background_spawn(async move { saver.save() }).detach();
-            }
-        });
+    pub fn with_untracked<T>(&self, read: impl FnOnce(&State) -> T) -> T {
+        self.state.with_untracked(read)
+    }
+
+    pub fn get(&self) -> State {
+        self.state.get()
+    }
+
+    pub fn update(&self, change: impl FnOnce(&mut State)) {
+        let mut next = self.state.get_untracked();
+        change(&mut next);
+        if self.state.set_if_changed(next.clone()) {
+            self.saved.with(|saved| {
+                saved.update(|state| {
+                    *state = next;
+                    true
+                });
+            });
+        }
     }
 }
 
@@ -88,7 +99,9 @@ impl State {
     }
 
     pub fn toggle_collapsed(&mut self, group: Collapsed) {
-        toggle(&mut self.collapsed, group);
+        if !self.collapsed.remove(&group) {
+            self.collapsed.insert(group);
+        }
     }
 
     pub fn title(&self, session_id: Option<&SessionId>, derived: String) -> String {
@@ -103,38 +116,9 @@ impl State {
     }
 }
 
-struct Saver {
-    file: PathBuf,
-    pending: Mutex<Option<State>>,
-    writing: Mutex<()>,
-}
-
-impl Saver {
-    fn save(&self) {
-        let _writing = lock(&self.writing);
-        let Some(state) = lock(&self.pending).take() else {
-            return;
-        };
-        if let Err(error) = write_json_atomic(&self.file, &state) {
-            tracing::warn!(%error, "could not save the desktop state");
-        }
+impl WindowSize {
+    #[must_use]
+    pub fn at_least(self, minimum: Self) -> Self {
+        Self { width: self.width.max(minimum.width), height: self.height.max(minimum.height) }
     }
-}
-
-fn toggle<T: Eq + std::hash::Hash>(set: &mut HashSet<T>, value: T) {
-    if !set.remove(&value) {
-        set.insert(value);
-    }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-fn read_state(file: &Path) -> State {
-    read_json::<State>(file)
-        .inspect_err(|error| tracing::warn!(%error, "starting with no saved desktop state"))
-        .ok()
-        .flatten()
-        .unwrap_or_default()
 }

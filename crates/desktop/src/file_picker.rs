@@ -1,70 +1,51 @@
-use crate::threads::{Thread, observe_thread};
-use crate::ui::ActiveTheme;
-use crate::ui::tokens::{MODAL_WIDTH, PICKER_LIST_HEIGHT, rem};
-use crate::ui::{PickerItem, SearchPicker, SearchPickerEvent};
+use crate::threads::Thread;
+use crate::ui::tokens::{MODAL_WIDTH, PICKER_LIST_HEIGHT};
+use crate::ui::{PickerItem, SearchPickerEvent, SearchPickerHandle, backdrop, search_picker};
 use clankerdiff_core::RepoPath;
-use gpui::{Context, Entity, EventEmitter, Subscription, Window, prelude::*};
+use clankerdiff_rouge_shell::rouge::core::{Length, View, view};
+use clankerdiff_rouge_shell::rouge::reactive::{Callback, effect, memo, signal, untrack};
 
-pub(crate) struct FilePicker {
-    thread: Entity<Thread>,
-    picker: Entity<SearchPicker>,
-    _subscriptions: [Subscription; 2],
-}
-
-impl FilePicker {
-    pub(crate) fn new(thread: Entity<Thread>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let theme = ActiveTheme::global(cx).ui();
-        let picker = cx.new(|cx| {
-            SearchPicker::new("file-picker", Vec::new(), theme, cx)
-                .max_matches(MAX_MATCHES)
-                .searchable("Search files…", window, cx)
-                .empty("No matching files")
-                .footer("↑↓ Move    ↵ Open    Esc Close")
-                .width(rem(MODAL_WIDTH))
-                .height(rem(PICKER_LIST_HEIGHT))
+pub(crate) fn file_picker(thread: Thread, on_picked: impl Fn(Option<RepoPath>) + 'static) -> impl View {
+    let on_picked = Callback::from(on_picked);
+    let handle = SearchPickerHandle::new(Vec::new(), move |event| match event {
+        SearchPickerEvent::Chose(index) => {
+            let path = thread.listed_files().ok().and_then(|files| files.paths.get(index).cloned());
+            if path.is_some() {
+                on_picked.call(path);
+            }
+        }
+        SearchPickerEvent::Dismissed => on_picked.call(None),
+        SearchPickerEvent::Query(_) | SearchPickerEvent::Highlighted(_) => {}
+    })
+    .max_matches(MAX_MATCHES);
+    let status = signal(None);
+    let listing = memo(move || thread.listed_files());
+    effect(move || {
+        let listing = listing.get();
+        untrack(|| match listing {
+            Ok(files) => {
+                status.set(None);
+                handle.set_items(files.paths.iter().map(item).collect());
+            }
+            Err(problem) => {
+                status.set(Some(problem));
+                handle.set_items(Vec::new());
+            }
         });
-        let subscriptions = [
-            observe_thread(&thread, cx, Thread::listed_files, Self::refresh),
-            cx.subscribe(&picker, |this, _, event: &SearchPickerEvent, cx| match event {
-                SearchPickerEvent::Chose(index) => {
-                    let files = this.thread.read(cx).listed_files();
-                    if let Some(path) = files.ok().and_then(|files| files.paths.get(*index).cloned()) {
-                        cx.emit(Some(path));
-                    }
-                }
-                SearchPickerEvent::Dismissed => cx.emit(None),
-                SearchPickerEvent::Query(_) | SearchPickerEvent::Highlighted(_) => {}
-            }),
-        ];
-        let mut files = Self { thread, picker, _subscriptions: subscriptions };
-        files.refresh(cx);
-        files
-    }
-
-    fn refresh(&mut self, cx: &mut Context<Self>) {
-        let (items, status) = match self.thread.read(cx).listed_files() {
-            Ok(files) => (files.paths.iter().map(item).collect(), None),
-            Err(status) => (Vec::new(), Some(status.into())),
-        };
-        self.picker.update(cx, |picker, cx| {
-            picker.set_status(status, cx);
-            picker.set_items(items, cx);
-        });
-    }
-}
-
-impl EventEmitter<Option<RepoPath>> for FilePicker {}
-
-impl Render for FilePicker {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        self.picker.clone()
+    });
+    view! {
+        <backdrop id="file-picker-backdrop" align_top on_dismiss={move || on_picked.call(None)}>
+            <search_picker id="file-picker" handle searchable="Search files…" empty="No matching files"
+                           footer="↑↓ Move    ↵ Open    Esc Close" width={Length::design(MODAL_WIDTH)}
+                           height={Length::design(PICKER_LIST_HEIGHT)} status/>
+        </backdrop>
     }
 }
 
 const MAX_MATCHES: usize = 50;
 
 fn item(path: &RepoPath) -> PickerItem {
-    let item = PickerItem::new(path.to_string(), path.file_name().to_owned());
+    let item = PickerItem::new(format!("file-picker-{path}"), path.file_name().to_owned());
     match path.directory() {
         Some(directory) => item.detail(directory.to_owned()),
         None => item,

@@ -1,21 +1,16 @@
 use super::Sidebar;
 use super::listing::{Row, RowKind};
-use crate::registry::Registry;
 use crate::remotes::{InstanceState, Lifecycle};
-use crate::threads::{Thread, ThreadManager, ThreadStatus};
-use crate::ui::ActiveTheme;
-use crate::ui::tokens::{UNREAD_DOT_SIZE, rem};
+use crate::threads::ThreadStatus;
+use crate::ui::tokens::{ROW_HEIGHT, TWO_LINE_ROW_HEIGHT, UNREAD_DOT_SIZE};
 use crate::ui::{
-    Icon, IconButton, IconName, InlineEdit, ListRow, MenuItem, StyledExt, Typography, TypographyExt, UiTheme, Waveform,
-    hint, icon_slot, tagged, text_selector, with_menu,
+    Icon, IconName, SelectionState, UiStyles, UiTheme, Waveform, hint, icon_button, icon_slot, inline_edit, list_row,
 };
-use gpui::{AnyElement, App, ClickEvent, Context, Div, Entity, MouseButton, WeakEntity, Window, div, prelude::*};
-use gpui_base::input::InputState;
-
-pub(super) struct SidebarRow {
-    sidebar: WeakEntity<Sidebar>,
-    row: Row,
-}
+use clankerdiff_rouge_shell::rouge::core::{
+    AnyView, Apply, Div, MenuItem as WindowMenuItem, Styled, View, div, text, view,
+};
+use clankerdiff_rouge_shell::rouge::reactive::{Signal, signal};
+use clankerdiff_rouge_shell::rouge::widgets::context_menu;
 
 #[derive(Clone, PartialEq)]
 pub(super) enum RowIcon {
@@ -33,121 +28,100 @@ pub(super) enum RowAction {
     StopInstance,
 }
 
-impl SidebarRow {
-    pub(super) fn new(sidebar: WeakEntity<Sidebar>, row: Row) -> Self {
-        Self { sidebar, row }
-    }
-
-    pub(super) fn show(&mut self, row: Row, cx: &mut Context<Self>) {
-        if self.row != row {
-            self.row = row;
-            cx.notify();
-        }
-    }
-}
-
-impl Render for SidebarRow {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = ActiveTheme::global(cx).ui();
-        let colors = theme.colors;
-        let row = &self.row;
-        let Row { icon, unread, selected, actions, kind, .. } = row;
-        let editing = match kind {
-            RowKind::Local { editing, .. } => editing.as_ref(),
-            RowKind::Cloud { .. } => None,
-        };
-        let selector = row.key.selector();
-        let hover_group = ListRow::hover_group(&selector);
-        let hover_actions = actions.iter().filter(|action| action.hover()).map(|&action| {
+pub(super) fn row(sidebar: &Sidebar, row: &Row) -> AnyView {
+    let sidebar = *sidebar;
+    let theme = UiTheme::current();
+    let selector = row.key.selector();
+    let hovered = signal(false);
+    let editing = matches!(row.kind, RowKind::Local { editing: true, .. });
+    let hover_actions: Vec<AnyView> = row
+        .actions
+        .iter()
+        .filter(|action| action.hover())
+        .map(|&action| {
             let (id, label, icon) = action.spec();
-            let run = runner(&self.sidebar, row, action);
-            IconButton::new(format!("{selector}-{id}"), icon, label, theme)
-                .on_click(move |_, window, cx| run(window, cx))
-        });
-        let reconnect = row
-            .live()
-            .filter(|_| matches!(icon, RowIcon::Status(status) if status.problem().is_some()))
-            .map(|thread| {
-                let thread = thread.clone();
-                IconButton::new(format!("{selector}-reconnect"), IconName::RotateCw, "Reconnect", theme)
-                    .on_click(move |_, _, cx| thread.update(cx, Thread::reconnect))
-            });
-        let muted = matches!(icon, RowIcon::Status(ThreadStatus::Dormant) | RowIcon::Instance(_));
-        let title = if let Some(input) = editing {
-            editor(input, &self.sidebar, &theme)
-        } else {
-            let title_selector = format!("{selector}-title");
-            div()
-                .min_w_0()
-                .truncate()
-                .debug_selector(move || title_selector)
-                .when(muted, |title| title.text_color(colors.text_muted))
-                .child(row.title.clone())
-                .into_any_element()
-        };
-        let unread = unread.then(|| {
-            let dot = div().size(rem(UNREAD_DOT_SIZE)).rounded_full().bg(colors.accent);
-            hint(format!("{selector}-unread"), "Unread response", dot, &theme)
-        });
-        let title = div()
-            .when(editing.is_none(), |title| {
-                title.debug_selector(|| text_selector(&format!("{selector}-title"), &row.title))
-            })
-            .min_w_0()
-            .flex()
-            .items_center()
-            .gap_1()
-            .child(title)
-            .children(unread);
-        let icon = match icon {
-            RowIcon::Status(status) => status_icon(&selector, *status, &theme),
-            RowIcon::Instance(state) => instance_icon(&selector, *state, &theme),
-        };
-        let two_line = matches!(kind, RowKind::Cloud { .. });
-        let (body, trailing) = match kind {
-            RowKind::Local { age, .. } => {
-                (title.flex_1(), trailing(&selector, age.clone(), hover_actions, *selected, &theme).children(reconnect))
+            let target = row.clone();
+            view! {
+                <icon_button id={format!("{selector}-{id}")} icon label on_click={move || action.run(&target, &sidebar)}/>
             }
-            RowKind::Cloud { subtitle, expiring, .. } => {
-                let subtitle = div()
-                    .min_w_0()
-                    .truncate()
-                    .debug_selector(|| text_selector(&format!("{selector}-subtitle"), subtitle))
-                    .typography(Typography::Caption)
-                    .text_color(if *expiring { colors.warning } else { colors.text_muted })
-                    .child(subtitle.clone());
-                let actions = div().flex().items_center().reveal_on_hover(hover_group).children(hover_actions);
-                (
-                    div().flex_1().min_w_0().py_1().flex().flex_col().child(title).child(subtitle),
-                    div().flex_none().flex().items_center().children(reconnect).child(actions),
-                )
+        })
+        .collect();
+    let reconnect = row
+        .live()
+        .filter(|_| matches!(row.icon, RowIcon::Status(status) if status.problem().is_some()))
+        .map(|thread| {
+            view! {
+                <icon_button id={format!("{selector}-reconnect")} icon=IconName::RotateCw label="Reconnect"
+                             on_click={move || thread.reconnect()}/>
             }
-        };
-        let list_row = ListRow::new(selector.clone(), theme)
-            .when(!two_line, |list_row| list_row.depth(1))
-            .selected(*selected)
-            .child(icon_slot())
-            .child(icon_slot().when(two_line, |slot| slot.self_start().mt_2()).child(icon))
-            .child(body)
-            .child(trailing);
-        if editing.is_some() {
-            return div().w_full().child(list_row).into_any_element();
+        });
+    let title = if editing { rename_editor(&sidebar) } else { title(&selector, row) };
+    let unread = row.unread.then(|| {
+        let dot = view! { <div size=UNREAD_DOT_SIZE rounded={UNREAD_DOT_SIZE / 2.0} bg=theme.accent/> };
+        hint(format!("{selector}-unread"), "Unread response", dot)
+    });
+    let title = view! { <div min_w=0.0 flex items_center gap=4.0>{title}{unread}</div> };
+    let icon = match row.icon {
+        RowIcon::Status(status) => status_icon(&selector, status),
+        RowIcon::Instance(state) => instance_icon(&selector, state),
+    };
+    let two_line = matches!(row.kind, RowKind::Cloud { .. });
+    let (body, trailing) = match &row.kind {
+        RowKind::Local { age, .. } => {
+            (title.flex_1(), trailing(&selector, age.clone(), hover_actions, row.selected, hovered).child(reconnect))
         }
-        let (sidebar, opened) = (self.sidebar.clone(), row.clone());
-        let list_row = list_row.on_click(move |_: &ClickEvent, _, cx| {
-            let _ =
-                sidebar.update(cx, |sidebar, cx| sidebar.threads.update(cx, |threads, cx| open(&opened, threads, cx)));
-        });
-        let (sidebar, row, actions) = (self.sidebar.clone(), row.clone(), actions.clone());
-        let menu = move |_: &mut Window, _: &mut App| {
-            let items = actions.into_iter().map(|action| {
-                let (id, label, icon) = action.spec();
-                MenuItem::new(format!("menu-{id}"), label, runner(&sidebar, &row, action)).icon(icon)
-            });
-            items.collect()
-        };
-        with_menu(&selector, list_row, MouseButton::Right, menu, &theme).w_full().into_any_element()
+        RowKind::Cloud { subtitle, expiring, .. } => {
+            let color = if *expiring { theme.warning } else { theme.text_muted };
+            let body = view! {
+                <div flex_1 min_w=0.0 py=4.0 flex col>
+                    {title}
+                    <div test_id={format!("{selector}-subtitle")} min_w=0.0 overflow_hidden>
+                        <text caption no_wrap color=color>{subtitle.clone()}</text>
+                    </div>
+                </div>
+            };
+            let actions = view! {
+                <div flex_none flex items_center>
+                    {reconnect}
+                    <div flex items_center opacity={move || if hovered.get() { 1.0 } else { 0.0 }}>
+                        {..hover_actions}
+                    </div>
+                </div>
+            };
+            (body, actions)
+        }
+    };
+    let state = if row.selected { SelectionState::Selected } else { SelectionState::None };
+    let opened = row.clone();
+    let open = move || {
+        if !editing {
+            open_row(&opened, &sidebar);
+        }
+    };
+    let list = view! {
+        <list_row id={selector.clone()} depth={usize::from(!two_line)} state on_click=open
+                  h={if two_line { TWO_LINE_ROW_HEIGHT } else { ROW_HEIGHT }}>
+            {icon_slot()}
+            {icon_slot().when(two_line, |slot| slot.self_start().mt(8.0)).child(icon)}
+            {body}
+            {trailing}
+        </list_row>
     }
+    .on_hover(move |inside| {
+        hovered.set_if_changed(inside);
+    });
+    if editing {
+        return div().w_full().child(list).into_any();
+    }
+    let items: Vec<WindowMenuItem> = row
+        .actions
+        .iter()
+        .map(|&action| {
+            let target = row.clone();
+            WindowMenuItem::callback(action.spec().1, move || action.run(&target, &sidebar))
+        })
+        .collect();
+    context_menu(list, items).w_full().into_any()
 }
 
 impl RowAction {
@@ -166,22 +140,22 @@ impl RowAction {
         matches!(self, Self::Archive | Self::Stop | Self::StopInstance)
     }
 
-    fn run(self, row: &Row, sidebar: &mut Sidebar, window: &mut Window, cx: &mut Context<Sidebar>) {
-        let thread = row.live().cloned();
-        let stop = |sidebar: &mut Sidebar, cx: &mut Context<Sidebar>| {
-            if let Some(thread) = &thread {
-                sidebar.threads.update(cx, |threads, cx| threads.stop(thread, cx));
+    fn run(self, row: &Row, sidebar: &Sidebar) {
+        let thread = row.live();
+        let stop = || {
+            if let Some(thread) = thread {
+                sidebar.threads.stop(thread);
             }
         };
         match (self, &row.kind) {
             (Self::Rename, RowKind::Local { session_id: Some(session_id), .. }) => {
-                sidebar.start_rename(session_id.clone(), &row.title, window, cx);
+                sidebar.start_rename(session_id.clone(), &row.title);
             }
             (Self::Archive, RowKind::Local { session_id: Some(session_id), .. }) => {
-                Registry::update(&sidebar.registry, cx, |state| state.archive(session_id.clone()));
-                stop(sidebar, cx);
+                sidebar.registry.update(|state| state.archive(session_id.clone()));
+                stop();
             }
-            (Self::Stop, _) => stop(sidebar, cx),
+            (Self::Stop, _) => stop(),
             (
                 Self::Suspend | Self::Resume | Self::StopInstance,
                 RowKind::Cloud { remote, instance_id: Some(id), .. },
@@ -190,130 +164,129 @@ impl RowAction {
                     Self::Suspend => Lifecycle::Suspend,
                     Self::Resume => Lifecycle::Resume,
                     _ => {
-                        stop(sidebar, cx);
+                        stop();
                         Lifecycle::Stop
                     }
                 };
-                sidebar.fleet.update(cx, |fleet, cx| fleet.change(&remote.name, id, change, cx));
+                sidebar.fleet.change(&remote.name, id, change);
             }
             _ => {}
         }
     }
 }
 
-fn runner(sidebar: &WeakEntity<Sidebar>, row: &Row, action: RowAction) -> impl Fn(&mut Window, &mut App) + 'static {
-    let (sidebar, row) = (sidebar.clone(), row.clone());
-    move |window, cx| {
-        let _ = sidebar.update(cx, |sidebar, cx| action.run(&row, sidebar, window, cx));
-    }
-}
-
-fn open(row: &Row, threads: &mut ThreadManager, cx: &mut Context<ThreadManager>) {
+fn open_row(row: &Row, sidebar: &Sidebar) {
     match (&row.thread, &row.kind) {
-        (Some(thread), _) => threads.open(thread, cx),
-        (None, RowKind::Cloud { remote, instance_id: Some(id), .. }) => drop(threads.attach(remote, id, cx)),
+        (Some(thread), _) => sidebar.threads.open(thread),
+        (None, RowKind::Cloud { remote, instance_id: Some(id), .. }) => {
+            sidebar.threads.attach(remote, id);
+        }
         (None, _) => {}
     }
 }
 
-fn trailing(
-    selector: &str,
-    age: Option<String>,
-    actions: impl IntoIterator<Item = IconButton>,
-    selected: bool,
-    theme: &UiTheme,
-) -> Div {
-    let colors = theme.colors;
-    let hover_group = ListRow::hover_group(selector);
-    div()
-        .flex_none()
-        .relative()
-        .flex()
-        .items_center()
-        .justify_end()
-        .children(age.map(|age| {
-            let age_selector = format!("{selector}-age-{age}");
-            div()
-                .debug_selector(move || age_selector)
-                .typography(Typography::Caption)
-                .text_color(colors.text_muted)
-                .group_hover(hover_group.clone(), |age| age.opacity(0.0))
-                .child(age)
-        }))
-        .child(
-            div()
-                .absolute()
-                .right_0()
-                .pl_1()
-                .flex()
-                .items_center()
-                .bg(if selected { colors.surface_selected } else { colors.surface_hover })
-                .reveal_on_hover(hover_group)
-                .children(actions),
-        )
+fn title(selector: &str, row: &Row) -> AnyView {
+    let muted = matches!(row.icon, RowIcon::Status(ThreadStatus::Dormant) | RowIcon::Instance(_));
+    let theme = UiTheme::current();
+    let color = if muted { theme.text_muted } else { theme.text };
+    view! {
+        <div test_id={format!("{selector}-title")} min_w=0.0 overflow_hidden>
+            <text body no_wrap color=color>{row.title.clone()}</text>
+        </div>
+    }
+    .into_any()
 }
 
-fn editor(input: &Entity<InputState>, sidebar: &WeakEntity<Sidebar>, theme: &UiTheme) -> AnyElement {
-    let (commit, cancel) = (sidebar.clone(), sidebar.clone());
-    let edit = InlineEdit::new(input, *theme)
-        .on_commit(move |_, cx| {
-            let _ = commit.update(cx, Sidebar::commit_rename);
-        })
-        .on_cancel(move |_, cx| {
-            let _ = cancel.update(cx, Sidebar::cancel_rename);
-        });
-    div().debug_selector(|| "rename-input".to_owned()).w_full().min_w_0().child(edit).into_any_element()
+fn rename_editor(sidebar: &Sidebar) -> AnyView {
+    let sidebar = *sidebar;
+    let Some(value) = sidebar.sources.rename.with_untracked(|rename| rename.as_ref().map(|rename| rename.value)) else {
+        return ().into_any();
+    };
+    view! {
+        <div test_id="rename-input" w_full min_w=0.0>
+            <inline_edit value on_commit={move |_: String| sidebar.commit_rename()}
+                         on_cancel={move || sidebar.cancel_rename()}/>
+        </div>
+    }
+    .into_any()
 }
 
-fn status_icon(row: &str, status: ThreadStatus, theme: &UiTheme) -> AnyElement {
-    let colors = theme.colors;
+fn trailing(selector: &str, age: Option<String>, actions: Vec<AnyView>, selected: bool, hovered: Signal<bool>) -> Div {
+    let theme = UiTheme::current();
+    let age = age.map(|age| {
+        view! {
+            <div test_id={format!("{selector}-age-{age}")} opacity={move || if hovered.get() { 0.0 } else { 1.0 }}>
+                <text caption muted no_wrap>{age}</text>
+            </div>
+        }
+    });
+    let background = if selected { theme.surface_selected } else { theme.surface_hover };
+    view! {
+        <div flex_none relative flex items_center justify_end>
+            {age}
+            <div absolute right=0.0 top=0.0 bottom=0.0 pl=4.0 flex items_center bg=background
+                 opacity={move || if hovered.get() { 1.0 } else { 0.0 }}>
+                {..actions}
+            </div>
+        </div>
+    }
+}
+
+fn status_icon(row: &str, status: ThreadStatus) -> AnyView {
+    let theme = UiTheme::current();
     let (name, label, shape, icon, color) = match status {
-        ThreadStatus::Connecting => ("connecting", "Starting agent", "waveform", None, colors.text_muted),
-        ThreadStatus::Running => ("running", "Agent working", "waveform", None, colors.text_muted),
+        ThreadStatus::Connecting => ("connecting", "Starting agent", "waveform", None, theme.text_muted),
+        ThreadStatus::Running => ("running", "Agent working", "waveform", None, theme.text_muted),
         ThreadStatus::Background => {
-            ("background", "Background task still running", "dot", Some(IconName::CircleDot), colors.text_muted)
+            ("background", "Background task still running", "dot", Some(IconName::CircleDot), theme.text_muted)
         }
         ThreadStatus::NeedsInput => {
-            ("needs-input", "Waiting for your answer", "speech-bubble", Some(IconName::MessageCircle), colors.warning)
+            ("needs-input", "Waiting for your answer", "speech-bubble", Some(IconName::MessageCircle), theme.warning)
         }
         ThreadStatus::Errored => (
             "errored",
             "Unable to connect — reconnect to try again",
             "warning-triangle",
             Some(IconName::TriangleAlert),
-            colors.destructive,
+            theme.destructive,
         ),
         ThreadStatus::Disconnected => (
             "disconnected",
             "Disconnected — reconnect to continue",
             "warning-triangle",
             Some(IconName::TriangleAlert),
-            colors.destructive,
+            theme.destructive,
         ),
         ThreadStatus::Idle | ThreadStatus::Dormant => {
-            let icon = Icon::new(IconName::MessageSquareText, colors.text_muted);
-            return tagged(format!("{row}-conversation-icon"), icon).into_any_element();
+            return tagged(
+                format!("{row}-conversation-icon"),
+                Icon::new(IconName::MessageSquareText, theme.text_muted),
+            );
         }
     };
-    let selector = format!("{row}-status-{name}");
-    let icon = match icon {
-        Some(icon) => Icon::new(icon, color).into_any_element(),
-        None => Waveform::new(selector.clone(), color).into_any_element(),
+    let id = format!("{row}-status-{name}");
+    let mark = match icon {
+        Some(icon) => Icon::new(icon, color).into_any(),
+        None => Waveform::new(format!("{id}-bars"), color).into_any(),
     };
-    hint(selector.clone(), label, tagged(format!("{selector}-{shape}"), icon), theme)
+    hint(id.clone(), label, tagged(format!("{id}-{shape}"), mark))
 }
 
-fn instance_icon(row: &str, state: Option<InstanceState>, theme: &UiTheme) -> AnyElement {
-    let muted = theme.colors.text_muted;
+fn instance_icon(row: &str, state: Option<InstanceState>) -> AnyView {
+    let muted = UiTheme::current().text_muted;
     let (name, label, icon) = match state {
         Some(InstanceState::Suspended) => ("suspended", "Suspended", Some(IconName::Pause)),
         Some(InstanceState::Running) | None => ("unattached", "Running, with no thread on it", Some(IconName::Unplug)),
         Some(_) => ("settling", "Changing state", None),
     };
-    let selector = format!("{row}-instance-{name}");
-    let icon = match icon {
-        Some(icon) => Icon::new(icon, muted).into_any_element(),
-        None => Waveform::new(selector.clone(), muted).into_any_element(),
+    let id = format!("{row}-instance-{name}");
+    let mark = match icon {
+        Some(icon) => Icon::new(icon, muted).into_any(),
+        None => Waveform::new(format!("{id}-bars"), muted).into_any(),
     };
-    hint(selector.clone(), label, tagged(format!("{selector}-icon"), icon), theme)
+    hint(id.clone(), label, tagged(format!("{id}-icon"), mark))
+}
+
+fn tagged(id: String, child: impl View) -> AnyView {
+    div().test_id(id).flex().child(child).into_any()
 }

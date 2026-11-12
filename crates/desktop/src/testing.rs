@@ -1,42 +1,46 @@
 use crate::agents::{Agents, CommandLine, Endpoint, parse_command_line};
 use crate::clock::Clock;
 use crate::history::History;
-use crate::registry::{Registry, STATE_FILE};
+use crate::platform::{ClipboardMedia, Notification, PathPrompt, Platform, PlatformFuture};
+use crate::registry::{self, Registry, STATE_FILE};
 use crate::remotes::{Acp, Fleet, InstanceState, RemoteSpec};
 use crate::target::{ConnectError, Transport, TransportFuture, client_info};
 use crate::threads::{Thread, ThreadManager, ThreadStatus};
-use crate::ui::text_selector;
-use crate::{DesktopApp, DesktopConfig, cli::DEFAULT_AGENT_COMMAND, init, window_options, window_size};
+use crate::{ActiveTheme, DesktopApp, DesktopConfig, cli::DEFAULT_AGENT_COMMAND, window_size};
 use acp_utils::testing::{Channel, FakeAgent, FakeAgentRequests, QueuedTurns};
 use aether_sessions::SessionStore;
 use aether_sessions::testing::{TestStore, session_meta, user_message};
 use chrono::{DateTime, Utc};
-use clankerdiff_gpui::ui::testing::WindowDriver;
-use clankerdiff_gpui_shell::runtime;
 use clankerdiff_remote::RemotesFile;
 use clankerdiff_remote::testing::FakeRemotes;
+use clankerdiff_rouge::ui::testing::{TestError, TestUi, component_test};
+use clankerdiff_rouge_shell::rouge::core::{
+    Chord, Clipboard, FileDropPhase, Key, KeyEvent, Point, PointerButton, Rect, Size, WindowCommand, root_font_size,
+    window_focused,
+};
+use clankerdiff_rouge_shell::rouge::reactive::{Entered, ReadSignal, Runtime as Reactive, Signal};
+use clankerdiff_rouge_shell::runtime;
+use clankerdiff_ui_core::ReviewTheme;
 use client_core::connection::Connection;
 use client_core::testing::{FakeGit, git_diff_agent};
-use gpui::{
-    App, AppContext, Bounds, Entity, Pixels, Size, SystemNotificationResponse, TestAppContext, VisualTestContext,
-    WindowHandle, point, px, size,
-};
+use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::io;
-use std::ops::Deref;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime};
 use tempfile::TempDir;
 use tokio::runtime::{Builder, Runtime};
 use tokio::sync::mpsc::UnboundedReceiver;
-use tokio::task::{AbortHandle, yield_now};
+use tokio::sync::oneshot;
+use tokio::task::{AbortHandle, JoinHandle};
 
 pub const FAKE_AGENT_LOCK_FILE: &str = "agent.lock";
 
 pub struct DesktopHarnessBuilder {
-    window_size: Option<Size<Pixels>>,
+    window_size: Option<(f32, f32)>,
     connector: FakeConnector,
     projects: Vec<PathBuf>,
     sessions: TestStore,
@@ -50,6 +54,26 @@ pub struct DesktopHarnessBuilder {
 pub struct FakeConnector {
     state: Arc<Mutex<FakeConnectorState>>,
     remotes: FakeRemotes,
+}
+
+#[derive(Clone, Default)]
+pub struct FakePlatform {
+    state: Rc<RefCell<FakePlatformState>>,
+}
+
+pub struct DesktopHarness {
+    ui: TestUi,
+    app: DesktopApp,
+    focused: ReadSignal<bool>,
+    root_font_size: Signal<f32>,
+    theme: ActiveTheme,
+    platform: FakePlatform,
+    connector: FakeConnector,
+    sessions: TestStore,
+    remotes_dir: TempDir,
+    flush: Option<JoinHandle<io::Result<()>>>,
+    runtime: Option<Runtime>,
+    _entered: Entered,
 }
 
 pub fn launching_remote(name: &str, root: impl Into<PathBuf>) -> RemoteSpec {
@@ -91,7 +115,7 @@ impl Default for DesktopHarnessBuilder {
 
 impl DesktopHarnessBuilder {
     pub fn window_size(mut self, width: f32, height: f32) -> Self {
-        self.window_size = Some(size(px(width), px(height)));
+        self.window_size = Some((width, height));
         self
     }
 
@@ -156,30 +180,33 @@ impl DesktopHarnessBuilder {
         self
     }
 
-    pub fn start(self, cx: &mut TestAppContext, cwd: impl Into<PathBuf>) -> (DesktopHarness, Entity<Thread>) {
-        let harness = self.build(cx);
-        let thread = harness.start_thread(cx, cwd);
+    pub fn start(self, cwd: impl Into<PathBuf>) -> (DesktopHarness, Thread) {
+        let mut harness = self.build();
+        let thread = harness.start_thread(cwd);
         (harness, thread)
     }
 
-    pub fn build(self, cx: &mut TestAppContext) -> DesktopHarness {
-        let runtime = Builder::new_current_thread().enable_all().build().expect("start the test Tokio runtime");
-        cx.update(|cx| {
-            runtime::install(cx, runtime.handle().clone());
-            init(cx);
-        });
-        let registry = cx.new(|cx| Registry::load(self.state_dir.map(|dir| dir.join(STATE_FILE)), cx));
-        Registry::update(&registry, cx, |state| {
-            for root in self.projects {
-                state.add_project(root);
+    pub fn build(self) -> DesktopHarness {
+        let entered = Reactive::new().enter();
+        let runtime =
+            Builder::new_multi_thread().worker_threads(2).enable_all().build().expect("start the test Tokio runtime");
+        let (saved, flush) = registry::load(self.state_dir.map(|dir| dir.join(STATE_FILE)), runtime.handle());
+        saved.update(|state| {
+            let before = state.projects.len();
+            for root in &self.projects {
+                state.add_project(root.clone());
             }
+            state.projects.len() != before
         });
-        let window_size = self.window_size.unwrap_or_else(|| cx.read(|cx| window_size(&registry, cx)));
-        let bounds = Bounds::new(point(px(0.0), px(0.0)), window_size);
+        let (width, height) = self.window_size.unwrap_or_else(|| {
+            let size = window_size(&saved.state());
+            (size.width, size.height)
+        });
         let remotes_dir = tempfile::tempdir().expect("a directory for the remotes file");
         let remotes_file = remotes_dir.path().join("remotes.json");
         let file = serde_json::to_string(&RemotesFile { remotes: self.remotes }).expect("the remotes serialize");
         fs::write(&remotes_file, file).expect("the remotes file is written");
+        let platform = FakePlatform::default();
         let config = DesktopConfig {
             transport: Arc::new(self.connector.clone()),
             clock: Arc::new(FakeClock(self.now)),
@@ -190,38 +217,40 @@ impl DesktopHarnessBuilder {
             remotes: Arc::new(self.connector.remotes().clone()),
             remotes_file: Some(remotes_file),
             sessions: Some(SessionStore::from_path(self.sessions.path().to_path_buf())),
-            registry,
+            registry: saved,
+            platform: Rc::new(platform.clone()),
         };
-        let window = cx.update(|cx| {
-            cx.open_window(window_options(bounds), |window, cx| cx.new(|cx| DesktopApp::new(config, window, cx)))
-                .expect("open the gpui test window")
-        });
-        let harness = DesktopHarness {
-            window,
-            driver: WindowDriver::new(window),
-            runtime,
+        let handle = runtime.handle().clone();
+        let (mut ui, (app, focused, root_font_size, theme)) =
+            component_test().size(width, height).build_with(move || {
+                runtime::install(handle);
+                let app = DesktopApp::new(config);
+                (app.view(), (app, window_focused(), root_font_size(), ActiveTheme::current()))
+            });
+        ui.set_clipboard(platform.clone());
+        let mut harness = DesktopHarness {
+            ui,
+            app,
+            focused,
+            root_font_size,
+            theme,
+            platform,
             connector: self.connector,
             sessions: self.sessions,
             remotes_dir,
+            flush: Some(flush),
+            runtime: Some(runtime),
+            _entered: entered,
         };
-        harness.activate(cx);
+        harness.advance();
         if self.saved_sessions {
-            let history = harness.history(cx);
-            harness.run_until(cx, |cx| !history.read(cx).projects().is_empty());
+            let history = harness.history();
+            harness.run_until(|_| !history.with_projects(<[_]>::is_empty));
         }
-        let fleet = harness.fleet(cx);
-        harness.run_until(cx, |cx| fleet.read(cx).inventory().has_listed());
+        let fleet = harness.fleet();
+        harness.run_until(|_| fleet.with_inventory(clankerdiff_remote::Inventory::has_listed));
         harness
     }
-}
-
-pub struct DesktopHarness {
-    window: WindowHandle<DesktopApp>,
-    driver: WindowDriver,
-    runtime: Runtime,
-    connector: FakeConnector,
-    sessions: TestStore,
-    remotes_dir: TempDir,
 }
 
 impl FakeConnector {
@@ -297,77 +326,151 @@ impl Transport for FakeConnector {
     }
 }
 
-impl Deref for DesktopHarness {
-    type Target = WindowDriver;
+impl FakePlatform {
+    pub fn notifications(&self) -> Vec<Notification> {
+        self.state.borrow().notifications.clone()
+    }
 
-    fn deref(&self) -> &WindowDriver {
-        &self.driver
+    pub fn click_notification(&self, tag: &str) {
+        if let Some(clicked) = self.state.borrow_mut().clicks.remove(tag) {
+            let _ = clicked.send(true);
+        }
+    }
+
+    pub fn path_prompts(&self) -> Vec<PathPrompt> {
+        self.state.borrow().prompts.iter().map(|(prompt, _)| prompt.clone()).collect()
+    }
+
+    pub fn answer_path_prompt(&self, paths: Option<Vec<PathBuf>>) -> Option<PathPrompt> {
+        let (prompt, answer) = self.state.borrow_mut().prompts.pop_front()?;
+        let _ = answer.send(paths);
+        Some(prompt)
+    }
+
+    pub fn opened(&self) -> Vec<String> {
+        self.state.borrow().opened.clone()
+    }
+
+    pub fn copy_text(&self, text: &str) {
+        self.copy(Some(text.to_owned()), None);
+    }
+
+    pub fn copy_image(&self, png: &[u8]) {
+        self.copy(None, Some(ClipboardMedia::Png(png.to_vec())));
+    }
+
+    pub fn copy_files(&self, paths: Vec<PathBuf>) {
+        let names: Vec<_> =
+            paths.iter().filter_map(|path| path.file_name()).map(|name| name.to_string_lossy().into_owned()).collect();
+        self.copy(Some(names.join("\n")), Some(ClipboardMedia::Files(paths)));
+    }
+
+    pub fn copied_text(&self) -> Option<String> {
+        self.state.borrow().clipboard_text.clone()
+    }
+
+    fn copy(&self, text: Option<String>, media: Option<ClipboardMedia>) {
+        let mut state = self.state.borrow_mut();
+        state.clipboard_text = text;
+        state.clipboard_media = media;
+    }
+}
+
+impl Clipboard for FakePlatform {
+    fn read(&mut self) -> Option<String> {
+        self.copied_text()
+    }
+
+    fn write(&mut self, text: &str) {
+        self.copy_text(text);
+    }
+}
+
+impl Platform for FakePlatform {
+    fn notify(&self, notification: Notification) -> PlatformFuture<bool> {
+        let (clicked, response) = oneshot::channel();
+        let mut state = self.state.borrow_mut();
+        state.clicks.insert(notification.tag.clone(), clicked);
+        state.notifications.push(notification);
+        Box::pin(async move { response.await.unwrap_or(false) })
+    }
+
+    fn pick_paths(&self, prompt: PathPrompt) -> PlatformFuture<Option<Vec<PathBuf>>> {
+        let (answer, response) = oneshot::channel();
+        self.state.borrow_mut().prompts.push_back((prompt, answer));
+        Box::pin(async move { response.await.ok().flatten() })
+    }
+
+    fn open(&self, target: &str) {
+        self.state.borrow_mut().opened.push(target.to_owned());
+    }
+
+    fn clipboard_media(&self) -> Option<ClipboardMedia> {
+        self.state.borrow().clipboard_media.clone()
     }
 }
 
 impl DesktopHarness {
-    pub fn alpha(cx: &mut TestAppContext, agent: FakeAgent) -> (Self, Entity<Thread>) {
-        DesktopHarnessBuilder::default().agent("/alpha", agent).start(cx, "/alpha")
+    pub fn alpha(agent: FakeAgent) -> (Self, Thread) {
+        DesktopHarnessBuilder::default().agent("/alpha", agent).start("/alpha")
     }
 
-    pub fn threads(&self, cx: &TestAppContext) -> Entity<ThreadManager> {
-        cx.read(|cx| self.app(cx).threads().clone())
+    pub fn app(&self) -> DesktopApp {
+        self.app
     }
 
-    pub fn selected_thread(&self, cx: &TestAppContext) -> Option<Entity<Thread>> {
-        cx.read(|cx| self.app(cx).threads().read(cx).selected().cloned())
+    pub fn threads(&self) -> ThreadManager {
+        self.app.threads()
     }
 
-    pub fn new_thread(&self, cx: &mut TestAppContext, cwd: impl Into<PathBuf>) -> Entity<Thread> {
+    pub fn selected_thread(&self) -> Option<Thread> {
+        self.threads().selected()
+    }
+
+    pub fn new_thread(&mut self, cwd: impl Into<PathBuf>) -> Thread {
         let cwd = cwd.into();
-        self.threads(cx).update(cx, |threads, cx| {
-            let agent = threads.default_agent(&cwd, cx);
-            threads.new_thread(cwd, agent, cx)
-        })
-    }
-
-    pub fn start_thread(&self, cx: &mut TestAppContext, cwd: impl Into<PathBuf>) -> Entity<Thread> {
-        let thread = self.new_thread(cx, cwd);
-        self.run_until(cx, |cx| thread.read(cx).status() == ThreadStatus::Idle);
+        let threads = self.threads();
+        let agent = threads.default_agent(&cwd);
+        let thread = threads.new_thread(cwd, agent);
+        self.advance();
         thread
     }
 
-    pub fn connected_thread(&self, cx: &mut TestAppContext) -> Entity<Thread> {
-        let thread = self.selected_thread(cx).expect("a thread is selected");
-        self.run_until(cx, |cx| thread.read(cx).status() == ThreadStatus::Idle);
+    pub fn start_thread(&mut self, cwd: impl Into<PathBuf>) -> Thread {
+        let thread = self.new_thread(cwd);
+        self.run_until(|_| thread.status() == ThreadStatus::Idle);
         thread
     }
 
-    pub fn start_turn(
-        &self,
-        cx: &mut TestAppContext,
-        thread: &Entity<Thread>,
-        requests: &mut FakeAgentRequests,
-        prompt: &str,
-    ) -> QueuedTurns {
-        thread.update(cx, |thread, cx| thread.send(prompt.into(), cx));
-        self.next(cx, &mut requests.prompt);
-        self.run_until(cx, |cx| {
-            let thread = thread.read(cx);
+    pub fn connected_thread(&mut self) -> Thread {
+        let thread = self.selected_thread().expect("a thread is selected");
+        self.run_until(|_| thread.status() == ThreadStatus::Idle);
+        thread
+    }
+
+    pub fn start_turn(&mut self, thread: Thread, requests: &mut FakeAgentRequests, prompt: &str) -> QueuedTurns {
+        thread.send(prompt.into());
+        self.next(&mut requests.prompt);
+        self.run_until(|_| {
             thread.status() == ThreadStatus::Running
-                && thread.core().is_some_and(|core| core.queued_prompts().is_empty())
+                && thread.with_core(|core| core.queued_prompts().is_empty()).unwrap_or(false)
         });
         requests.turns.clone()
     }
 
-    pub fn send(&self, cx: &mut TestAppContext, thread: &Entity<Thread>, prompt: &str) {
-        self.until_answered(cx, thread, prompt, |harness, cx| {
-            harness.simulate_input(cx, prompt);
-            harness.simulate_keystrokes(cx, "enter");
+    pub fn send(&mut self, thread: Thread, prompt: &str) {
+        self.until_answered(thread, prompt, |harness| {
+            harness.type_text(prompt);
+            harness.press("enter");
         });
     }
 
-    pub fn submit(&self, cx: &mut TestAppContext, thread: &Entity<Thread>, prompt: &str) {
-        self.until_answered(cx, thread, prompt, |_, cx| thread.update(cx, |thread, cx| thread.send(prompt.into(), cx)));
+    pub fn submit(&mut self, thread: Thread, prompt: &str) {
+        self.until_answered(thread, prompt, |_| thread.send(prompt.into()));
     }
 
-    pub fn fleet(&self, cx: &TestAppContext) -> Entity<Fleet> {
-        cx.read(|cx| self.app(cx).fleet().clone())
+    pub fn fleet(&self) -> Fleet {
+        self.app.fleet()
     }
 
     pub fn remotes(&self) -> &FakeRemotes {
@@ -378,99 +481,278 @@ impl DesktopHarness {
         self.remotes_dir.path().join("remotes.json")
     }
 
-    pub fn history(&self, cx: &TestAppContext) -> Entity<History> {
-        cx.read(|cx| self.app(cx).history().clone())
+    pub fn history(&self) -> History {
+        self.app.history()
     }
 
-    pub fn registry(&self, cx: &TestAppContext) -> Entity<Registry> {
-        cx.read(|cx| self.app(cx).registry().clone())
+    pub fn registry(&self) -> Registry {
+        self.app.registry()
     }
 
-    pub fn projects(&self, cx: &TestAppContext) -> Vec<PathBuf> {
-        self.registry(cx).read_with(cx, |registry, _| registry.state().projects.clone())
+    pub fn projects(&self) -> Vec<PathBuf> {
+        self.registry().with(|state| state.projects.clone())
     }
 
     pub fn connector(&self) -> &FakeConnector {
         &self.connector
     }
 
+    pub fn platform(&self) -> &FakePlatform {
+        &self.platform
+    }
+
     pub fn save_session(&self, session_id: &str, cwd: &str, created_at: &str, prompt: Option<&str>) {
         save_session(&self.sessions, session_id, cwd, created_at, prompt);
     }
 
-    pub fn shows(&self, cx: &mut TestAppContext, selector: &str, text: &str) -> bool {
-        let selector: &'static str = text_selector(selector, text).leak();
-        self.bounds(cx, selector).is_some()
+    pub fn ui(&mut self) -> &mut TestUi {
+        &mut self.ui
     }
 
-    pub fn run_until(&self, cx: &mut TestAppContext, condition: impl Fn(&App) -> bool) {
+    pub fn bounds(&mut self, id: &str) -> Option<Rect> {
+        self.advance();
+        self.ui.bounds_of(id)
+    }
+
+    pub fn text(&mut self, id: &str) -> Option<String> {
+        self.advance();
+        self.ui.text_of(id)
+    }
+
+    pub fn shows(&mut self, id: &str, text: &str) -> bool {
+        self.text(id).as_deref() == Some(text)
+    }
+
+    pub fn click(&mut self, id: &str) -> Result<(), TestError> {
+        self.press_pointer(id, PointerButton::Primary)
+    }
+
+    pub fn click_at(&mut self, point: Point) {
+        self.advance();
+        self.ui.advance(CLICK_PAUSE);
+        self.settle_pointer(point);
+        self.ui.pointer_down(PointerButton::Primary);
+        self.ui.pointer_up(PointerButton::Primary);
+        self.advance();
+    }
+
+    pub fn theme(&mut self) -> ReviewTheme {
+        self.advance();
+        self.theme.review_signal().get_untracked()
+    }
+
+    pub fn right_click(&mut self, id: &str) -> Result<(), TestError> {
+        self.press_pointer(id, PointerButton::Secondary)
+    }
+
+    pub fn hover(&mut self, id: &str) -> Result<(), TestError> {
+        self.advance();
+        let point = self.ui.center_of(id)?;
+        self.settle_pointer(point);
+        Ok(())
+    }
+
+    pub fn drag(&mut self, id: &str, to: Point) -> Result<(), TestError> {
+        let from = self.ui.center_of(id)?;
+        self.ui.pointer_moved(from);
+        self.ui.pointer_down(PointerButton::Primary);
+        for step in 1..=DRAG_STEPS {
+            let progress = f32::from(step) / f32::from(DRAG_STEPS);
+            self.ui.pointer_moved(Point::new(from.x + (to.x - from.x) * progress, from.y + (to.y - from.y) * progress));
+            self.advance();
+        }
+        self.ui.pointer_up(PointerButton::Primary);
+        self.advance();
+        Ok(())
+    }
+
+    pub fn scroll(&mut self, id: &str, delta: Point) -> Result<(), TestError> {
+        let point = self.ui.center_of(id)?;
+        self.ui.pointer_moved(point);
+        self.ui.scroll(delta);
+        self.advance();
+        Ok(())
+    }
+
+    pub fn click_nth(&mut self, id: &str, index: usize) -> Result<(), TestError> {
+        self.advance();
+        let target = self.ui.bounds_of_all(id).get(index).map(Rect::center);
+        self.click_at(target.ok_or_else(|| TestError::NoTestId(format!("{id} #{index}")))?);
+        Ok(())
+    }
+
+    pub fn scroll_into_view(&mut self, scroller: &str, id: &str) -> Result<(), TestError> {
+        for _ in 0..MAX_SCROLLS {
+            let view = self.bounds(scroller).ok_or_else(|| TestError::NoTestId(scroller.to_owned()))?;
+            let target = self.bounds(id).ok_or_else(|| TestError::NoTestId(id.to_owned()))?;
+            let delta = if target.max().y > view.max().y {
+                view.max().y - target.max().y
+            } else if target.origin.y < view.origin.y {
+                view.origin.y - target.origin.y
+            } else {
+                return Ok(());
+            };
+            self.scroll(scroller, Point::new(0.0, delta))?;
+        }
+        panic!("`{id}` never scrolled into view in `{scroller}`");
+    }
+
+    pub fn type_text(&mut self, text: &str) {
+        self.ui.type_text(text);
+        self.advance();
+    }
+
+    pub fn press(&mut self, keys: &str) {
+        for keys in keys.split_whitespace() {
+            let chord = Chord::parse(keys).unwrap_or_else(|error| panic!("`{keys}` is not a chord: {error}"));
+            let mut down = KeyEvent::new(chord.key.clone()).with_modifiers(chord.modifiers);
+            let typed = match &chord.key {
+                Key::Character(text) => Some(text.clone()),
+                Key::Space => Some(" ".to_owned()),
+                _ => None,
+            };
+            if let Some(typed) = typed.filter(|_| !chord.modifiers.command()) {
+                down = down.with_text(typed);
+            }
+            self.ui.key_down(down);
+            self.ui.key_up(KeyEvent::new(chord.key).with_modifiers(chord.modifiers));
+            self.advance();
+        }
+    }
+
+    pub fn drop_files(&mut self, on: &str, paths: Vec<PathBuf>) -> Result<(), TestError> {
+        let point = self.ui.center_of(on)?;
+        self.ui.pointer_moved(point);
+        self.ui.file_drop(FileDropPhase::Hover, paths.clone());
+        self.ui.file_drop(FileDropPhase::Drop, paths);
+        self.advance();
+        Ok(())
+    }
+
+    pub fn resize(&mut self, width: f32, height: f32) {
+        self.ui.set_size(Size::new(width, height));
+        self.advance();
+    }
+
+    pub fn rem_size(&mut self) -> f32 {
+        self.advance();
+        self.root_font_size.get_untracked()
+    }
+
+    pub fn advance(&mut self) {
         loop {
-            cx.run_until_parked();
-            if cx.read(&condition) {
+            self.ui.advance(0.0);
+            let commands = self.ui.take_window_commands();
+            if commands.is_empty() {
                 return;
             }
-            self.runtime.block_on(yield_now());
+            for command in commands {
+                match command {
+                    WindowCommand::Menu(item) => {
+                        item.dispatch(&mut self.ui);
+                    }
+                    WindowCommand::Focus => self.ui.set_focused(true),
+                    _ => {}
+                }
+            }
         }
     }
 
-    pub fn next<T>(&self, cx: &mut TestAppContext, receiver: &mut UnboundedReceiver<T>) -> T {
-        self.run_until(cx, |_| !receiver.is_empty());
-        receiver.try_recv().expect("a message is waiting")
-    }
-
-    pub fn run_until_painted(&self, cx: &mut TestAppContext, selector: &'static str) {
-        while self.bounds(cx, selector).is_none() {
-            self.runtime.block_on(yield_now());
+    pub fn run_until(&mut self, condition: impl Fn(&mut Self) -> bool) {
+        loop {
+            self.advance();
+            if condition(self) {
+                return;
+            }
+            std::thread::sleep(POLL);
         }
     }
 
-    pub fn activate(&self, cx: &mut TestAppContext) {
-        cx.update_window(*self.window, |_, window, _| window.activate_window()).expect("the test window is open");
-        self.draw(cx);
+    pub fn next<T>(&mut self, receiver: &mut UnboundedReceiver<T>) -> T {
+        loop {
+            self.advance();
+            if let Ok(message) = receiver.try_recv() {
+                return message;
+            }
+            std::thread::sleep(POLL);
+        }
     }
 
-    pub fn deactivate(&self, cx: &mut TestAppContext) {
-        VisualTestContext::from_window(*self.window, cx).deactivate_window();
-        self.draw(cx);
+    pub fn run_until_painted(&mut self, id: &str) {
+        self.run_until(|harness| harness.ui.bounds_of(id).is_some());
     }
 
-    pub fn enter_full_screen(&self, cx: &mut TestAppContext, width: f32, height: f32) {
-        cx.update_window(*self.window, |_, window, _| window.toggle_fullscreen()).expect("the test window is open");
-        VisualTestContext::from_window(*self.window, cx).simulate_resize(size(px(width), px(height)));
-        self.draw(cx);
+    pub fn activate(&mut self) {
+        self.ui.set_focused(true);
+        self.advance();
     }
 
-    pub fn is_active(&self, cx: &mut TestAppContext) -> bool {
-        cx.update_window(*self.window, |_, window, _| window.is_window_active()).expect("the test window is open")
+    pub fn deactivate(&mut self) {
+        self.ui.set_focused(false);
+        self.advance();
     }
 
-    pub fn click_notification(&self, cx: &mut TestAppContext, tag: &str) {
-        cx.simulate_system_notification_response(SystemNotificationResponse {
-            tag: tag.to_owned().into(),
-            action_id: None,
-        });
-        self.draw(cx);
+    pub fn is_active(&mut self) -> bool {
+        self.advance();
+        self.focused.get_untracked()
     }
 
-    fn app<'a>(&self, cx: &'a App) -> &'a DesktopApp {
-        self.window.read(cx).expect("the test window is open")
+    pub fn click_notification(&mut self, tag: &str) {
+        self.platform.click_notification(tag);
+        self.advance();
     }
 
-    fn until_answered(
-        &self,
-        cx: &mut TestAppContext,
-        thread: &Entity<Thread>,
-        prompt: &str,
-        send: impl FnOnce(&Self, &mut TestAppContext),
-    ) {
-        let times_sent = |cx: &App| {
-            thread.read(cx).core().map_or(0, |core| {
-                core.conversation().items().iter().filter(|item| item.text().is_some_and(|text| text == prompt)).count()
-            })
+    pub fn quit(mut self) {
+        let (flush, runtime) = (self.flush.take(), self.runtime.take());
+        drop(self);
+        if let (Some(flush), Some(runtime)) = (flush, runtime) {
+            let _ = runtime.block_on(flush);
+            runtime.shutdown_background();
+        }
+    }
+
+    fn press_pointer(&mut self, id: &str, button: PointerButton) -> Result<(), TestError> {
+        self.advance();
+        let point = self.ui.center_of(id)?;
+        self.ui.advance(CLICK_PAUSE);
+        self.settle_pointer(point);
+        self.ui.pointer_down(button);
+        self.ui.pointer_up(button);
+        self.advance();
+        Ok(())
+    }
+
+    fn settle_pointer(&mut self, point: Point) {
+        self.ui.pointer_moved(point);
+        self.ui.advance(HOVER_PAUSE);
+        self.advance();
+        self.ui.pointer_moved(point);
+        self.advance();
+    }
+
+    fn until_answered(&mut self, thread: Thread, prompt: &str, send: impl FnOnce(&mut Self)) {
+        let times_sent = |thread: Thread| {
+            thread
+                .with_core(|core| {
+                    core.conversation()
+                        .items()
+                        .iter()
+                        .filter(|item| item.text().is_some_and(|text| text == prompt))
+                        .count()
+                })
+                .unwrap_or(0)
         };
-        let expected = cx.read(times_sent) + 1;
-        send(self, cx);
-        self.run_until(cx, |cx| thread.read(cx).status() == ThreadStatus::Idle && times_sent(cx) == expected);
+        let expected = times_sent(thread) + 1;
+        send(self);
+        self.run_until(|_| thread.status() == ThreadStatus::Idle && times_sent(thread) == expected);
+    }
+}
+
+impl Drop for DesktopHarness {
+    fn drop(&mut self) {
+        if let Some(runtime) = self.runtime.take() {
+            runtime.shutdown_background();
+        }
     }
 }
 
@@ -495,6 +777,16 @@ struct ServedAgent {
     task: AbortHandle,
 }
 
+#[derive(Default)]
+struct FakePlatformState {
+    notifications: Vec<Notification>,
+    clicks: HashMap<String, oneshot::Sender<bool>>,
+    prompts: VecDeque<(PathPrompt, oneshot::Sender<Option<Vec<PathBuf>>>)>,
+    opened: Vec<String>,
+    clipboard_text: Option<String>,
+    clipboard_media: Option<ClipboardMedia>,
+}
+
 impl FakeConnectorState {
     fn take(&mut self, cwd: &Path) -> Option<FakeAgent> {
         self.scripts.get_mut(cwd)?.pop_front()
@@ -517,6 +809,11 @@ fn save_session(store: &TestStore, session_id: &str, cwd: &str, created_at: &str
 }
 
 const DEFAULT_NOW: &str = "2026-01-07T12:00:00Z";
+const DRAG_STEPS: u8 = 8;
+const MAX_SCROLLS: usize = 100;
+const POLL: Duration = Duration::from_millis(1);
+const CLICK_PAUSE: f64 = 1.0;
+const HOVER_PAUSE: f64 = 0.5;
 
 fn parse_time(time: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(time).expect("an RFC 3339 time").to_utc()

@@ -9,11 +9,13 @@ mod file_picker;
 mod files;
 pub mod history;
 mod menus;
+pub mod platform;
 pub mod registry;
 pub mod remotes;
 mod settings;
 pub mod sidebar;
 pub mod target;
+mod tasks;
 #[cfg(feature = "testing")]
 pub mod testing;
 mod theme;
@@ -22,23 +24,23 @@ pub mod threads;
 pub mod ui;
 
 pub use app::{
-    DesktopApp, DesktopConfig, OpenFile, OpenSettings, OpenThreadSwitcher, SelectNextThread, SelectPreviousThread,
-    ShowChat, ShowFiles,
+    DesktopApp, DesktopConfig, NewCloudThread, NewThread, OpenFile, OpenSettings, OpenThreadSwitcher, SelectNextThread,
+    SelectPreviousThread, ShowChat, ShowFiles, ToggleSidebar,
 };
 pub use clankerdiff_ui_core::{AppearanceMode, ThemePreference};
 pub use ui::ActiveTheme;
 
 use aether_sessions::SessionStore;
 use agents::{Agents, default_agents_file};
-use clankerdiff_gpui::{DiffViewer, MarkdownReviewer};
-use clankerdiff_gpui_shell::runtime;
 use clankerdiff_remote::CommandRemotes;
+use clankerdiff_rouge_shell::rouge::{App, WindowOptions};
+use clankerdiff_rouge_shell::{launch, runtime};
 use cli::Cli;
 use clock::SystemClock;
-use gpui::{App, AppContext, Bounds, Entity, Pixels, Size, TitlebarOptions, WindowBounds, WindowOptions, px, size};
-use gpui_base::input::CursorBlink;
-use registry::{Registry, default_state_file};
+use platform::SystemPlatform;
+use registry::{State, WindowSize, default_state_file};
 use rustls::crypto::aws_lc_rs;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 use target::ProcessTransport;
@@ -47,62 +49,49 @@ pub fn run(cli: Cli) {
     aws_lc_rs::default_provider().install_default().expect("failed to install the Rustls AWS-LC crypto provider");
     let runtime = runtime::build();
     let handle = runtime.handle().clone();
-    clankerdiff_gpui_shell::launch(move |cx: &mut App| {
-        runtime::install(cx, handle);
-        init(cx);
-        let state_file = default_state_file();
-        if state_file.is_none() {
-            tracing::warn!("no home directory, so nothing is remembered between runs");
-        }
-        let registry = cx.new(|cx| Registry::load(state_file, cx));
-        let bounds = Bounds::centered(None, window_size(&registry, cx), cx);
-        let config = DesktopConfig {
-            transport: Arc::new(ProcessTransport),
-            clock: Arc::new(SystemClock),
-            agents: Agents::new(cli.agent, default_agents_file()),
-            remotes: Arc::new(CommandRemotes),
-            remotes_file: remotes::default_file(),
-            sessions: SessionStore::new().inspect_err(|error| tracing::warn!(%error, "showing no history")).ok(),
-            registry,
-        };
-        cx.open_window(window_options(bounds), |window, cx| cx.new(|cx| DesktopApp::new(config, window, cx)))
-            .expect("failed to open the main window");
+    let state_file = default_state_file();
+    if state_file.is_none() {
+        tracing::warn!("no home directory, so nothing is remembered between runs");
+    }
+    let (saved, flush) = registry::load(state_file, &handle);
+    let options = window_options(&saved.state());
+    let config = DesktopConfig {
+        transport: Arc::new(ProcessTransport),
+        clock: Arc::new(SystemClock),
+        agents: Agents::new(cli.agent, default_agents_file()),
+        remotes: Arc::new(CommandRemotes),
+        remotes_file: remotes::default_file(),
+        sessions: SessionStore::new().inspect_err(|error| tracing::warn!(%error, "showing no history")).ok(),
+        registry: saved,
+        platform: Rc::new(SystemPlatform),
+    };
+    let app = App::new().menus(menus::all()).window(options, move || {
+        runtime::install(handle);
+        DesktopApp::new(config).view()
+    });
+    if let Err(error) = launch(app) {
+        eprintln!("{}: {error}", menus::APP_NAME);
+    }
+    runtime.block_on(async {
+        let _ = tokio::time::timeout(SHUTDOWN_FLUSH, flush).await;
     });
     runtime.shutdown_background();
 }
 
-const APP_ID: &str = "aether-desktop";
-const DEFAULT_WINDOW_SIZE: Size<Pixels> = size(px(1280.0), px(840.0));
-const MIN_WINDOW_SIZE: Size<Pixels> = size(px(640.0), px(480.0));
-// Stop blinking after the user goes idle so a focused composer doesn't redraw the window forever.
-const CURSOR_BLINK: CursorBlink =
-    CursorBlink::blinking(Duration::from_millis(500)).with_idle_timeout(Duration::from_secs(5));
+pub const DEFAULT_WINDOW_SIZE: WindowSize = WindowSize { width: 1280.0, height: 840.0 };
+pub const MIN_WINDOW_SIZE: WindowSize = WindowSize { width: 640.0, height: 480.0 };
 
-fn init(cx: &mut App) {
-    cx.set_app_identity(APP_ID, menus::APP_NAME);
-    gpui_base::init(cx);
-    gpui_base::Theme::global_mut(cx).cursor_blink = CURSOR_BLINK;
-    ui::InterfaceSize::init(ui::interface_size::DEFAULT_INTERFACE_SIZE, cx);
-    DiffViewer::bind_keys(cx);
-    MarkdownReviewer::bind_keys(cx);
-    DesktopApp::bind_keys(cx);
-    menus::install(cx);
+const SHUTDOWN_FLUSH: Duration = Duration::from_secs(2);
+
+#[must_use]
+pub fn window_size(state: &State) -> WindowSize {
+    state.window_size.map_or(DEFAULT_WINDOW_SIZE, |size| size.at_least(MIN_WINDOW_SIZE))
 }
 
-fn window_size(registry: &Entity<Registry>, cx: &App) -> Size<Pixels> {
-    registry.read(cx).state().window_size.map_or(DEFAULT_WINDOW_SIZE, |size| size.max(&MIN_WINDOW_SIZE))
-}
-
-fn window_options(bounds: Bounds<Pixels>) -> WindowOptions {
-    WindowOptions {
-        titlebar: Some(TitlebarOptions {
-            title: Some(menus::APP_NAME.into()),
-            appears_transparent: cfg!(target_os = "macos"),
-            ..TitlebarOptions::default()
-        }),
-        window_bounds: Some(WindowBounds::Windowed(bounds)),
-        window_min_size: Some(MIN_WINDOW_SIZE),
-        app_id: Some(APP_ID.to_owned()),
-        ..WindowOptions::default()
-    }
+fn window_options(state: &State) -> WindowOptions {
+    let size = window_size(state);
+    WindowOptions::default()
+        .title(menus::APP_NAME)
+        .size(size.width, size.height)
+        .min_size(MIN_WINDOW_SIZE.width, MIN_WINDOW_SIZE.height)
 }

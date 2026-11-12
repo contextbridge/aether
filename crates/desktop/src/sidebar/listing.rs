@@ -1,4 +1,3 @@
-use super::Rename;
 use super::row::{RowAction, RowIcon};
 use crate::history::{ProjectHistory, SavedSession};
 use crate::registry::{Collapsed, State};
@@ -9,8 +8,6 @@ use crate::threads::{Thread, ThreadManager, ThreadRef, ThreadStatus};
 use agent_client_protocol::v2::schema::SessionId;
 use chrono::{DateTime, Duration, Utc};
 use clankerdiff_core::format_age;
-use gpui::{App, Entity};
-use gpui_base::input::InputState;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -21,14 +18,14 @@ pub(super) const SAVED_ROWS: usize = 5;
 
 pub(super) struct Listing<'a> {
     pub(super) state: &'a State,
-    pub(super) threads: &'a ThreadManager,
+    pub(super) threads: ThreadManager,
     pub(super) history: &'a [ProjectHistory],
-    pub(super) fleet: &'a Fleet,
-    pub(super) rename: Option<&'a Rename>,
+    pub(super) fleet: Fleet,
+    pub(super) renaming: Option<&'a SessionId>,
     pub(super) now: DateTime<Utc>,
-    pub(super) cx: &'a App,
 }
 
+#[derive(Clone, PartialEq)]
 pub(super) struct Section {
     pub(super) root: PathBuf,
     pub(super) collapsed: bool,
@@ -36,6 +33,7 @@ pub(super) struct Section {
     pub(super) hidden: usize,
 }
 
+#[derive(Clone, PartialEq)]
 pub(super) struct RemoteSection {
     pub(super) remote: RemoteSpec,
     pub(super) collapsed: bool,
@@ -57,7 +55,7 @@ pub(super) struct Row {
 
 #[derive(Clone, PartialEq)]
 pub(super) enum RowKind {
-    Local { session_id: Option<SessionId>, age: Option<String>, editing: Option<Entity<InputState>> },
+    Local { session_id: Option<SessionId>, age: Option<String>, editing: bool },
     Cloud { remote: Box<RemoteSpec>, instance_id: Option<String>, subtitle: String, expiring: bool },
 }
 
@@ -76,7 +74,7 @@ pub(crate) struct SwitcherEntry {
     pub(crate) thread: ThreadRef,
 }
 
-impl<'a> Listing<'a> {
+impl Listing<'_> {
     pub(super) fn roots(&self) -> Vec<&Path> {
         self.state.projects.iter().map(PathBuf::as_path).collect()
     }
@@ -84,6 +82,7 @@ impl<'a> Listing<'a> {
     pub(super) fn sections(&self, limits: &HashMap<PathBuf, usize>) -> Vec<Section> {
         let cutoff = self.now - RECENT;
         let live_sessions = self.live_sessions();
+        let live = self.live();
         self.roots()
             .into_iter()
             .map(|root| {
@@ -92,11 +91,10 @@ impl<'a> Listing<'a> {
                 if collapsed {
                     return section;
                 }
-                let live = self
-                    .live()
+                let live = live
                     .iter()
-                    .filter(|thread| thread.read(self.cx).project() == Some(root))
-                    .map(|thread| self.live_row(thread));
+                    .filter(|thread| thread.project().as_deref() == Some(root))
+                    .map(|thread| self.live_row(*thread));
                 let saved = self
                     .saved_sessions(root)
                     .filter(|session| {
@@ -112,15 +110,22 @@ impl<'a> Listing<'a> {
     }
 
     pub(super) fn remotes(&self) -> Vec<RemoteSection> {
-        let inventory = self.fleet.inventory();
-        inventory
-            .remotes()
-            .iter()
-            .map(|remote| {
-                let collapsed = self.state.collapsed.contains(&Collapsed::Remote(remote.name.clone()));
-                let problem = inventory.problem(&remote.name).map(str::to_owned);
-                let rows = if collapsed { Vec::new() } else { self.cloud_rows(remote) };
-                RemoteSection { remote: remote.clone(), collapsed, problem, rows }
+        self.fleet
+            .with_inventory(|inventory| {
+                inventory
+                    .remotes()
+                    .iter()
+                    .map(|remote| {
+                        let collapsed = self.state.collapsed.contains(&Collapsed::Remote(remote.name.clone()));
+                        let problem = inventory.problem(&remote.name).map(str::to_owned);
+                        (remote.clone(), collapsed, problem)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .into_iter()
+            .map(|(remote, collapsed, problem)| {
+                let rows = if collapsed { Vec::new() } else { self.cloud_rows(&remote) };
+                RemoteSection { remote, collapsed, problem, rows }
             })
             .collect()
     }
@@ -144,16 +149,16 @@ impl<'a> Listing<'a> {
             .collect()
     }
 
-    pub(super) fn switcher_entries(&self, live_order: &[Entity<Thread>]) -> Vec<SwitcherEntry> {
-        let live = live_order.iter().map(|entity| {
-            let thread = entity.read(self.cx);
+    pub(super) fn switcher_entries(&self, live_order: &[Thread]) -> Vec<SwitcherEntry> {
+        let live = live_order.iter().map(|thread| {
+            let target = thread.target();
             let project =
-                thread.target().remote_name().map(str::to_owned).or_else(|| thread.project().map(project_name));
+                target.remote_name().map(str::to_owned).or_else(|| thread.project().as_deref().map(project_name));
             SwitcherEntry {
                 key: RowKey::Live(thread.number()),
-                title: self.state.title(thread.session_id(), thread.title()),
+                title: self.state.title(thread.session_id().as_ref(), thread.title()),
                 project: project.unwrap_or_default(),
-                thread: ThreadRef::Live(entity.clone()),
+                thread: ThreadRef::Live(*thread),
             }
         });
         let live_sessions = self.live_sessions();
@@ -172,42 +177,40 @@ impl<'a> Listing<'a> {
 
     fn cloud_rows(&self, remote: &RemoteSpec) -> Vec<Row> {
         let listed = self.fleet.instances(&remote.name);
-        let on_remote: Vec<(&Entity<Thread>, &Thread)> = self
+        let on_remote: Vec<Thread> = self
             .live()
-            .iter()
-            .map(|entity| (entity, entity.read(self.cx)))
-            .filter(|(_, thread)| thread.target().remote_name() == Some(&remote.name))
+            .into_iter()
+            .filter(|thread| thread.target().remote_name() == Some(remote.name.as_str()))
             .collect();
-        let threads = on_remote.iter().map(|(entity, thread)| {
-            let instance_id = thread.target().instance();
+        let threads = on_remote.iter().map(|thread| {
+            let target = thread.target();
+            let instance_id = target.instance();
             let instance = listed.iter().find(|instance| Some(instance.id.as_str()) == instance_id);
             let key = RowKey::Live(thread.number());
-            let title = self.state.title(thread.session_id(), thread.title());
-            self.cloud_row(key, Some(entity), title, remote, instance_id, instance)
+            let title = self.state.title(thread.session_id().as_ref(), thread.title());
+            self.cloud_row(key, Some(*thread), title, remote, instance_id, instance)
         });
         let unattached = listed
             .iter()
             .filter(|_| !remote.is_static())
-            .filter(|instance| {
-                on_remote.iter().all(|(_, thread)| thread.target().instance() != Some(instance.id.as_str()))
-            })
+            .filter(|instance| on_remote.iter().all(|thread| thread.target().instance() != Some(instance.id.as_str())))
             .map(|instance| {
                 let (key, title) = (RowKey::Instance(instance.id.clone()), short_id(&instance.id).to_owned());
                 self.cloud_row(key, None, title, remote, Some(&instance.id), Some(instance))
             });
-        threads.chain(unattached).collect()
+        threads.collect::<Vec<_>>().into_iter().chain(unattached).collect()
     }
 
     fn cloud_row(
         &self,
         key: RowKey,
-        thread: Option<&Entity<Thread>>,
+        thread: Option<Thread>,
         title: String,
         remote: &RemoteSpec,
         instance_id: Option<&str>,
         instance: Option<&Instance>,
     ) -> Row {
-        let status = thread.map(|thread| thread.read(self.cx).status());
+        let status = thread.map(|thread| thread.status());
         let state = instance.map(|instance| instance.state);
         let stop_instance = instance_id.is_some() && remote.can_change(Lifecycle::Stop);
         let mut actions: Vec<RowAction> =
@@ -236,7 +239,7 @@ impl<'a> Listing<'a> {
         let (unread, selected) = self.attention(thread);
         Row {
             key,
-            thread: thread.cloned().map(ThreadRef::Live),
+            thread: thread.map(ThreadRef::Live),
             title,
             icon: status.map_or(RowIcon::Instance(state), RowIcon::Status),
             unread,
@@ -251,11 +254,10 @@ impl<'a> Listing<'a> {
         }
     }
 
-    fn live_row(&self, entity: &Entity<Thread>) -> Row {
-        let thread = entity.read(self.cx);
-        let session_id = thread.session_id().cloned();
+    fn live_row(&self, thread: Thread) -> Row {
+        let session_id = thread.session_id();
         let key = RowKey::Live(thread.number());
-        self.local_row(key, ThreadRef::Live(entity.clone()), session_id, thread.title(), Some(thread.opened_at()))
+        self.local_row(key, ThreadRef::Live(thread), session_id, thread.title(), Some(thread.opened_at()))
     }
 
     fn saved_row(&self, session: &SavedSession) -> Row {
@@ -278,25 +280,25 @@ impl<'a> Listing<'a> {
             actions.extend([RowAction::Rename, RowAction::Archive]);
         }
         actions.extend(live.map(|_| RowAction::Stop));
-        let editing = self.rename.filter(|rename| session_id.as_ref() == Some(&rename.session_id));
+        let editing = session_id.is_some() && self.renaming == session_id.as_ref();
         let (unread, selected) = self.attention(live);
         Row {
             key,
             title: self.state.title(session_id.as_ref(), title),
-            icon: RowIcon::Status(live.map_or(ThreadStatus::Dormant, |thread| thread.read(self.cx).status())),
+            icon: RowIcon::Status(live.map_or(ThreadStatus::Dormant, |thread| thread.status())),
             unread,
             selected,
             actions,
             kind: RowKind::Local {
                 session_id,
                 age: started_at.map(|started_at| relative_time(started_at, self.now)),
-                editing: editing.map(|rename| rename.input.clone()),
+                editing,
             },
             thread: Some(thread),
         }
     }
 
-    fn attention(&self, thread: Option<&Entity<Thread>>) -> (bool, bool) {
+    fn attention(&self, thread: Option<Thread>) -> (bool, bool) {
         thread
             .map_or((false, false), |thread| (self.threads.is_unread(thread), self.threads.selected() == Some(thread)))
     }
@@ -306,16 +308,16 @@ impl<'a> Listing<'a> {
     }
 
     fn live_sessions(&self) -> HashSet<SessionId> {
-        self.live().iter().filter_map(|thread| thread.read(self.cx).session_id().cloned()).collect()
+        self.live().iter().filter_map(Thread::session_id).collect()
     }
 
-    fn live(&self) -> &'a [Entity<Thread>] {
+    fn live(&self) -> Vec<Thread> {
         self.threads.threads()
     }
 }
 
 impl Row {
-    pub(super) fn live(&self) -> Option<&Entity<Thread>> {
+    pub(super) fn live(&self) -> Option<Thread> {
         self.thread.as_ref().and_then(ThreadRef::live)
     }
 }

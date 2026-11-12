@@ -1,18 +1,21 @@
+use crate::tasks::{blocking, spawn_in};
 use aether_sessions::{SessionStore, SessionSummary, SummaryCache};
 use agent_client_protocol::v2::schema::SessionId;
 use chrono::{DateTime, Utc};
-use gpui::{AppContext, Context, Task};
+use clankerdiff_rouge_shell::rouge::reactive::{Scope, Signal, Stored, signal, stored};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 
 pub const UNTITLED: &str = "New thread";
 
+#[derive(Clone, Copy)]
 pub struct History {
-    store: Option<Arc<SessionStore>>,
-    summaries: Arc<Mutex<SummaryCache>>,
-    projects: Vec<ProjectHistory>,
-    refresh: Option<Task<()>>,
+    store: Stored<Option<Arc<SessionStore>>>,
+    summaries: Stored<Option<SummaryCache>>,
+    projects: Signal<Vec<ProjectHistory>>,
+    refreshing: Stored<Refresh>,
+    scope: Scope,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -31,31 +34,74 @@ pub struct SavedSession {
 
 impl History {
     pub fn new(store: Option<SessionStore>) -> Self {
-        Self { store: store.map(Arc::new), summaries: Arc::default(), projects: Vec::new(), refresh: None }
+        Self {
+            store: stored(store.map(Arc::new)),
+            summaries: stored(Some(SummaryCache::default())),
+            projects: signal(Vec::new()),
+            refreshing: stored(Refresh::Idle),
+            scope: Scope::new(),
+        }
     }
 
-    pub fn projects(&self) -> &[ProjectHistory] {
-        &self.projects
+    pub fn projects(&self) -> Vec<ProjectHistory> {
+        self.projects.get()
     }
 
-    pub fn refresh(&mut self, cx: &mut Context<Self>) {
-        let Some(store) = self.store.clone() else {
+    pub fn with_projects<T>(&self, read: impl FnOnce(&[ProjectHistory]) -> T) -> T {
+        self.projects.with(|projects| read(projects))
+    }
+
+    pub fn refresh(&self) {
+        let Some(store) = self.store.get() else {
             return;
         };
-        let summaries = self.summaries.clone();
-        let read = cx.background_spawn(async move {
-            let sessions = store.list_cached(&mut summaries.lock().unwrap_or_else(PoisonError::into_inner));
-            let mut roots = HashMap::new();
-            group_by_project(sessions, |cwd| roots.entry(cwd.to_path_buf()).or_insert_with(|| git_root(cwd)).clone())
+        let busy = self.refreshing.update(|refreshing| match refreshing {
+            Refresh::Idle => {
+                *refreshing = Refresh::Running { again: false };
+                false
+            }
+            Refresh::Running { again } => {
+                *again = true;
+                true
+            }
         });
-        self.refresh = Some(cx.spawn(async move |this, cx| {
-            let projects = read.await;
-            let _ = this.update(cx, |this, cx| {
-                this.projects = projects;
-                cx.notify();
+        if busy {
+            return;
+        }
+        let history = *self;
+        let mut summaries = self.summaries.update(Option::take).unwrap_or_default();
+        spawn_in(self.scope, async move {
+            let read = blocking(move || {
+                let sessions = store.list_cached(&mut summaries);
+                let mut roots = HashMap::new();
+                let projects = group_by_project(sessions, |cwd| {
+                    roots.entry(cwd.to_path_buf()).or_insert_with(|| git_root(cwd)).clone()
+                });
+                (summaries, projects)
+            })
+            .await;
+            if !history.projects.is_alive() {
+                return;
+            }
+            if let Some((summaries, projects)) = read {
+                history.summaries.set(Some(summaries));
+                history.projects.set_if_changed(projects);
+            }
+            let again = history.refreshing.update(|refreshing| {
+                let again = matches!(refreshing, Refresh::Running { again: true });
+                *refreshing = Refresh::Idle;
+                again
             });
-        }));
+            if again {
+                history.refresh();
+            }
+        });
     }
+}
+
+enum Refresh {
+    Idle,
+    Running { again: bool },
 }
 
 impl From<SessionSummary> for SavedSession {

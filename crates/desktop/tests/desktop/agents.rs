@@ -4,7 +4,6 @@ use aether_desktop::agents::{
 };
 use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder};
 use aether_desktop::threads::Thread;
-use gpui::{AppContext, Entity, TestAppContext};
 use serde_json::json;
 use std::fs;
 use std::path::PathBuf;
@@ -141,68 +140,68 @@ fn an_agent_whose_fields_do_not_go_together_is_reported() {
     }
 }
 
-#[gpui::test]
-fn edits_to_an_agents_file_show_once_the_agents_are_reloaded(cx: &mut TestAppContext) {
+#[test]
+fn edits_to_an_agents_file_show_once_the_agents_are_reloaded() {
     let project = tempfile::tempdir().unwrap();
-    let agents = cx.new(|_| agents(None));
-    let before = agents.update(cx, |agents, _| names(&agents.catalog(project.path())));
+    let mut agents = agents(None);
+    let before = names(&agents.catalog(project.path()));
     write_agents_file(project.path(), &json!({ "agents": { "claude": { "type": "stdio", "command": "claude" } } }));
-    let unreloaded = agents.update(cx, |agents, _| names(&agents.catalog(project.path())));
+    let unreloaded = names(&agents.catalog(project.path()));
 
-    agents.update(cx, Agents::reload);
+    agents.reload();
 
     assert_eq!(before, ["aether"]);
     assert_eq!(unreloaded, ["aether"], "a catalog is read once");
-    assert_eq!(agents.update(cx, |agents, _| names(&agents.catalog(project.path()))), ["aether", "claude"]);
+    assert_eq!(names(&agents.catalog(project.path())), ["aether", "claude"]);
 }
 
-#[gpui::test]
-fn a_project_with_only_the_builtin_agent_starts_a_thread_with_it_at_once(cx: &mut TestAppContext) {
+#[test]
+fn a_project_with_only_the_builtin_agent_starts_a_thread_with_it_at_once() {
     let project = Project::new(&json!({}));
-    let harness = project.harness(&["s1"], cx);
+    let mut harness = project.harness(&["s1"]);
 
-    harness.click(cx, "project-alpha-new-thread").unwrap();
+    harness.click("project-alpha-new-thread").unwrap();
 
-    assert_eq!(agent_of(&harness.selected_thread(cx).unwrap(), cx), "aether");
+    assert_eq!(agent_of(harness.selected_thread().unwrap()), "aether");
 }
 
-#[gpui::test]
-fn a_project_with_several_agents_starts_a_thread_with_the_one_chosen_from_its_menu(cx: &mut TestAppContext) {
+#[test]
+fn a_project_with_several_agents_starts_a_thread_with_the_one_chosen_from_its_menu() {
     let project = Project::new(&json!({ "claude": { "type": "stdio", "command": "claude-code-acp" } }));
-    let harness = project.harness(&["s1"], cx);
+    let mut harness = project.harness(&["s1"]);
 
-    harness.click(cx, "project-alpha-new-thread").unwrap();
-    harness.click(cx, "new-thread-agent-claude").unwrap();
+    harness.click("project-alpha-new-thread").unwrap();
+    harness.click("new-thread-agent-claude").unwrap();
 
-    let thread = harness.connected_thread(cx);
-    assert_eq!(agent_of(&thread, cx), "claude");
+    let thread = harness.connected_thread();
+    assert_eq!(agent_of(thread), "claude");
 }
 
-#[gpui::test]
-fn the_new_thread_shortcut_starts_the_agent_last_chosen_in_the_project(cx: &mut TestAppContext) {
+#[test]
+fn the_new_thread_shortcut_starts_the_agent_last_chosen_in_the_project() {
     let project = Project::new(&json!({ "claude": { "type": "stdio", "command": "claude-code-acp" } }));
-    let harness = project.harness(&["s1", "s2"], cx);
-    harness.click(cx, "project-alpha-new-thread").unwrap();
-    harness.click(cx, "new-thread-agent-claude").unwrap();
-    let first = harness.connected_thread(cx);
+    let mut harness = project.harness(&["s1", "s2"]);
+    harness.click("project-alpha-new-thread").unwrap();
+    harness.click("new-thread-agent-claude").unwrap();
+    let first = harness.connected_thread();
 
-    harness.simulate_keystrokes(cx, "secondary-n");
+    harness.press("secondary-n");
 
-    let second = harness.selected_thread(cx).unwrap();
-    assert_ne!(first.entity_id(), second.entity_id());
-    assert_eq!(agent_of(&second, cx), "claude");
+    let second = harness.selected_thread().unwrap();
+    assert_ne!(first, second);
+    assert_eq!(agent_of(second), "claude");
 }
 
-#[gpui::test]
-fn an_agents_file_that_cannot_be_read_is_offered_for_fixing_in_the_new_thread_menu(cx: &mut TestAppContext) {
+#[test]
+fn an_agents_file_that_cannot_be_read_is_offered_for_fixing_in_the_new_thread_menu() {
     let project = Project::new(&json!({}));
     fs::write(project_agents_file(&project.root), "{ not json").unwrap();
-    let harness = project.harness(&[], cx);
+    let mut harness = project.harness(&[]);
 
-    harness.click(cx, "project-alpha-new-thread").unwrap();
+    harness.click("project-alpha-new-thread").unwrap();
 
-    assert!(harness.bounds(cx, "new-thread-agent-aether").is_some());
-    assert!(harness.bounds(cx, "new-thread-problem-0").is_some());
+    assert!(harness.bounds("new-thread-agent-aether").is_some());
+    assert!(harness.bounds("new-thread-problem-0").is_some());
 }
 
 struct Project {
@@ -219,9 +218,9 @@ impl Project {
         Self { _dir: dir, root }
     }
 
-    fn harness(&self, sessions: &[&str], cx: &mut TestAppContext) -> DesktopHarness {
+    fn harness(&self, sessions: &[&str]) -> DesktopHarness {
         let builder = DesktopHarnessBuilder::default().project(&self.root);
-        sessions.iter().fold(builder, |builder, session| builder.script(&self.root, replying(session, "hi"))).build(cx)
+        sessions.iter().fold(builder, |builder, session| builder.script(&self.root, replying(session, "hi"))).build()
     }
 }
 
@@ -233,6 +232,6 @@ fn names(catalog: &AgentCatalog) -> Vec<String> {
     catalog.agents().iter().map(|agent| agent.name.clone()).collect()
 }
 
-fn agent_of(thread: &Entity<Thread>, cx: &TestAppContext) -> String {
-    thread.read_with(cx, |thread, _| thread.target().label().to_owned())
+fn agent_of(thread: Thread) -> String {
+    thread.target().label().to_owned()
 }

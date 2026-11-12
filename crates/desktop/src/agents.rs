@@ -1,7 +1,7 @@
 pub use agent_client_protocol::AcpAgentConfig as CommandLine;
 
 use agent_client_protocol::AcpAgent;
-use gpui::Context;
+use clankerdiff_rouge_shell::rouge::reactive::{Signal, Stored, signal, stored};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -94,9 +94,34 @@ impl Agents {
         catalog
     }
 
-    pub fn reload(&mut self, cx: &mut Context<Self>) {
+    pub fn reload(&mut self) {
         self.catalogs.clear();
-        cx.notify();
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct Catalogs {
+    agents: Stored<Agents>,
+    revision: Signal<u64>,
+}
+
+impl Catalogs {
+    pub fn new(agents: Agents) -> Self {
+        Self { agents: stored(agents), revision: signal(0) }
+    }
+
+    pub fn catalog(&self, project: &Path) -> Rc<AgentCatalog> {
+        self.revision.get();
+        self.agents.update(|agents| agents.catalog(project))
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision.get()
+    }
+
+    pub fn reload(&self) {
+        self.agents.update(Agents::reload);
+        self.revision.update(|revision| *revision += 1);
     }
 }
 
