@@ -1,0 +1,723 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aether · New thread</title>
+<style>
+  :root {
+    --ink: #060808;
+    --chrome: #030404;
+    --text: #D4DDD6;
+    --text-secondary: #9CA5A0;
+    --text-muted: #5C7068;
+    --border: #464E4E;
+    --border-subtle: #252D2C;
+    --hover: #222E2D;
+    --selected: #202C2D;
+    --accent: #8FBCB0;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; display: flex; flex-direction: column; background: #020303; color: var(--text);
+    font: 13px/1.4 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .bar { display: flex; flex-direction: column; gap: 8px; padding: 12px 18px 0; }
+  .bar .top { display: grid; grid-template-columns: 1fr auto 1fr; align-items: start; gap: 16px; }
+  .bar .title b { font-weight: 600; font-size: 14px; letter-spacing: -0.01em; }
+  .bar .title b span { color: var(--text-muted); font-variant-numeric: tabular-nums; margin-right: 8px; }
+  .bar .title p { margin: 3px 0 0; color: var(--text-secondary); max-width: 560px; }
+  .pills { display: flex; gap: 2px; padding: 3px; border: 1px solid var(--border-subtle); border-radius: 10px; background: #070909; }
+  .pills button { all: unset; cursor: pointer; padding: 5px 9px; border-radius: 7px; color: var(--text-muted); font-variant-numeric: tabular-nums; font-size: 12px; }
+  .pills button:hover { color: var(--text); background: var(--hover); }
+  .pills button[aria-pressed="true"] { color: #000; background: var(--accent); }
+  .toggles { display: flex; justify-content: flex-end; gap: 14px; color: var(--text-secondary); font-size: 12px; flex-wrap: wrap; padding-top: 6px; }
+  .glass-row { display: flex; align-items: center; gap: 16px; color: var(--text-secondary); font-size: 12px; flex-wrap: wrap; }
+  .glass-row .seg { display: flex; border: 1px solid var(--border-subtle); border-radius: 8px; overflow: hidden; }
+  .glass-row .seg button { all: unset; cursor: pointer; padding: 4px 10px; color: var(--text-muted); }
+  .glass-row .seg button[aria-pressed="true"] { background: var(--selected); color: var(--text); }
+  label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  input[type="range"] { width: 76px; accent-color: var(--accent); }
+  input[type="checkbox"] { accent-color: var(--accent); }
+  output { color: var(--text-muted); font-variant-numeric: tabular-nums; min-width: 28px; }
+  .muted { color: var(--text-muted); }
+  kbd { font: inherit; border: 1px solid var(--border-subtle); border-radius: 4px; padding: 0 4px; }
+
+  .window { flex: 1; min-height: 0; margin: 12px 18px 18px; display: flex; overflow: hidden; border-radius: 12px; border: 1px solid #161c1b; box-shadow: 0 30px 80px rgba(0, 0, 0, .6); }
+  .sidebar { width: 248px; flex: none; display: flex; flex-direction: column; background: var(--chrome); border-right: 1px solid var(--border-subtle); }
+  .sidebar[hidden] { display: none; }
+  .lights { display: flex; gap: 8px; padding: 14px 14px 10px; }
+  .lights i { width: 12px; height: 12px; border-radius: 50%; background: #2a302e; }
+  .sidebar .new { margin: 4px 8px 10px; padding: 6px 10px; border-radius: 8px; background: var(--selected); display: flex; align-items: center; gap: 8px; }
+  .sidebar .group { padding: 10px 14px 4px; color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+  .row { height: 44px; margin: 0 8px; padding: 5px 10px; border-radius: 8px; display: flex; flex-direction: column; justify-content: center; }
+  .row:hover { background: var(--hover); }
+  .row b { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row small { color: var(--text-muted); font-size: 11px; }
+
+  .stage { flex: 1; position: relative; overflow: hidden; background: var(--ink); }
+  #gl { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .header { position: absolute; top: 0; left: 0; right: 0; height: 48px; display: flex; align-items: center; padding: 0 18px; color: var(--text-secondary); z-index: 2; }
+  .center { position: absolute; inset: 0; z-index: 2; pointer-events: none; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 0 24px 6vh; }
+  .center > * { pointer-events: auto; }
+  .greeting { margin: 0 0 24px; font-size: 22px; line-height: 28px; font-weight: 500; letter-spacing: -0.015em; }
+  .greeting[hidden] { display: none; }
+
+  .composer {
+    width: min(720px, 100%); display: flex; flex-direction: column; gap: 4px;
+    border-radius: 12px; border: 1px solid var(--border-subtle); background: transparent; transition: border-color .15s, box-shadow .2s;
+  }
+  .composer.frosted { box-shadow: 0 4px 6px -1px rgba(0, 0, 0, .3), 0 2px 4px -2px rgba(0, 0, 0, .25); }
+  .composer:focus-within { border-color: var(--border); }
+  .composer textarea { all: unset; display: block; width: 100%; padding: 8px 12px 0; box-sizing: border-box; font-size: 15px; line-height: 24px; color: var(--text); white-space: pre-wrap; overflow-y: auto; }
+  .composer textarea::placeholder { color: var(--text-muted); }
+  .actions { display: flex; align-items: center; justify-content: space-between; padding: 0 8px 8px; }
+  .icon-btn { all: unset; cursor: pointer; width: 24px; height: 24px; border-radius: 4px; display: grid; place-items: center; color: var(--text-secondary); }
+  .icon-btn:hover { background: var(--hover); color: var(--text); }
+  .send { all: unset; cursor: pointer; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: var(--hover); color: var(--text-muted); transition: background .15s, color .15s; }
+  .send.filled { background: var(--accent); color: #000; }
+  svg.i { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+</style>
+</head>
+<body>
+  <div class="bar">
+    <div class="top">
+      <div class="title"><b><span id="num">01</span><span id="name"></span></b><p id="blurb"></p></div>
+      <div class="pills" id="pills"></div>
+      <div class="toggles">
+        <label title="Background slows and dims while the composer is focused or has text"><input id="calm" type="checkbox" checked> Calm while writing</label>
+        <label><input id="motion" type="checkbox" checked> Motion</label>
+        <label><input id="greet" type="checkbox"> Greeting</label>
+        <label><input id="side" type="checkbox" checked> Sidebar</label>
+      </div>
+    </div>
+    <div class="glass-row">
+      <span class="muted">Glass</span>
+      <div class="seg" id="presets">
+        <button data-preset="frosted">Frosted · today</button>
+        <button data-preset="lit">Lit · rouge Glass</button>
+      </div>
+      <label>Blur <input id="blur" type="range" min="0" max="40" step="1"><output></output></label>
+      <label>Tint <input id="tint" type="range" min="0" max="0.95" step="0.01"><output></output></label>
+      <label>Refraction <input id="refraction" type="range" min="0" max="1.5" step="0.01"><output></output></label>
+      <label>Dispersion <input id="dispersion" type="range" min="0" max="0.5" step="0.01"><output></output></label>
+      <label>Highlight <input id="highlight" type="range" min="0" max="1" step="0.01"><output></output></label>
+      <label>Shadow <input id="shadow" type="range" min="0" max="0.6" step="0.01"><output></output></label>
+      <label title="Feed the scene's light source into Glass::light so the rim catches it"><input id="lightOn" type="checkbox" checked> Scene light on glass</label>
+      <span class="muted"><kbd>1</kbd>–<kbd>0</kbd> · <kbd>←</kbd><kbd>→</kbd> · <kbd>Enter</kbd> sends</span>
+    </div>
+  </div>
+
+  <div class="window">
+    <aside class="sidebar" id="sidebar">
+      <div class="lights"><i></i><i></i><i></i></div>
+      <div class="new"><svg class="i" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg> New thread</div>
+      <div class="group">Today</div>
+      <div class="row"><b>Wire composer focus ring</b><small>4m ago · aether</small></div>
+      <div class="row"><b>Fix transcript scroll jank</b><small>1h ago · aether</small></div>
+      <div class="row"><b>Theme preview picker</b><small>3h ago · rouge</small></div>
+      <div class="group">Earlier</div>
+      <div class="row"><b>Bump codex client version</b><small>Mon · aether</small></div>
+      <div class="row"><b>Remote agent attachments</b><small>Sun · aether</small></div>
+    </aside>
+    <main class="stage" id="stage">
+      <canvas id="gl"></canvas>
+      <div class="header">New thread</div>
+      <div class="center">
+        <h1 class="greeting" id="greeting" hidden>What should we work on?</h1>
+        <div class="composer" id="composer">
+          <textarea id="input" rows="1" placeholder="Message the agent…  / for commands, @ for files"></textarea>
+          <div class="actions">
+            <button class="icon-btn" title="Attach files"><svg class="i" viewBox="0 0 24 24"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
+            <button class="send" id="send" title="Send"><svg class="i" viewBox="0 0 24 24"><path d="m5 12 7-7 7 7M12 19V5"/></svg></button>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+<script>
+const TAU = Math.PI * 2;
+const $ = (s) => document.querySelector(s);
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+const mix = (a, b, k) => a + (b - a) * k;
+
+const env = {
+  w: 0, h: 0, rx: 0, ry: 0, rw: 0, rh: 0,
+  t: 20, calm: 0, calmTarget: 0, pulse: 0,
+  reduced: false, calmOn: true, lightOn: true, greeting: false, dirty: true,
+};
+const cx = () => env.rx + env.rw / 2;
+const cy = () => env.ry + env.rh / 2;
+
+const PRESETS = {
+  frosted: { blur: 12, tint: 0.86, refraction: 0, dispersion: 0, highlight: 0, shadow: 0 },
+  lit: { blur: 14, tint: 0.6, refraction: 0.7, dispersion: 0.12, highlight: 0.35, shadow: 0.25 },
+};
+const glass = { ...PRESETS.lit, edge: 14, saturation: 1 };
+
+/* Each scene: a shader plus state(t) -> { light, aux }. light is [x, y, strength, reach] in stage px and drives
+   both the shader and rouge's Glass::light, so the rim catches what the scene emits. aux carries per-scene extras. */
+const hz = () => env.h * 0.74;
+const frac = (v) => v - Math.floor(v);
+const rand = (k, seed) => frac(Math.sin(k * seed) * 43758.5453);
+const ss = (a, b, v) => { const x = clamp((v - a) / (b - a), 0, 1); return x * x * (3 - 2 * x); };
+const glow = (base) => base * (1 + 0.6 * env.pulse);
+
+const SCENES = [
+  {
+    name: 'Far Light',
+    blurb: 'One will-o’-the-wisp far off on a dark horizon. It crosses the view over 90 seconds, with a trace of ground fog and a reflection.',
+    state: (t) => ({ light: [cx() + env.w * 0.32 * Math.sin(t * TAU / 90), hz() - 26 + 4 * Math.sin(t * TAU / 7), glow(0.2), 520] }),
+    frag: `
+void main() {
+  vec2 P = css(), S = size(); float t = u_time, hz = HZ();
+  vec2 w = u_light.xy;
+  float fl = flicker(t, 3.);
+  vec3 col = land(P, hz) + horizonLine(P, hz, w.x, S.x * 0.5) + groundFog(P, hz, w, t);
+  col += orb(P, w, 1.) * fl;
+  if (P.y > hz) col += mirrored(P, w, hz, 1., t) * fl;
+  o = vec4(col, 1.);
+}`,
+  },
+  {
+    name: 'Will-o’-the-Wisp',
+    blurb: 'A marsh light that won’t hold still. It glows for a while, goes out, then reappears somewhere else, mirrored in the standing water between the reeds.',
+    state: (t) => {
+      const k = Math.floor(t / 14), ph = frac(t / 14);
+      const vis = ss(0, 0.12, ph) * (1 - ss(0.78, 0.95, ph));
+      const x = cx() + env.w * 0.38 * (rand(k, 12.9898) * 2 - 1) + 24 * Math.sin(ph * Math.PI + k);
+      const y = hz() - 16 - rand(k, 78.233) * 34 + 3 * Math.sin(t * TAU / 5);
+      return { light: [x, y, glow(0.22) * vis, 520], aux: [vis, 0, 0, 0] };
+    },
+    frag: `
+void main() {
+  vec2 P = css(), S = size(); float t = u_time, hz = HZ();
+  vec2 w = u_light.xy; float vis = u_aux.x * flicker(t, 5.);
+  vec3 col = land(P, hz);
+  float tuft = pow(noise(vec2(P.x / 2.5, 7.)), 5.) * 16. * smoothstep(0.35, 0.6, noise(vec2(P.x / 90., 2.)));
+  bool reed = P.y < hz && P.y > hz - tuft;
+  float v = P.y - hz;
+  float water = P.y > hz ? smoothstep(0.47, 0.55, fbm(vec2(P.x / (70. + v * 3.), 60. / (v + 6.)))) : 0.;
+  if (P.y > hz) col = mix(INK * 0.55, col + SAGE * 0.01, water);
+  col += groundFog(P, hz, w, t) * (0.4 + 0.6 * vis);
+  col += orb(P, w, 0.9) * vis;
+  if (P.y > hz) col += mirrored(P, w, hz, 0.9, t) * vis * water;
+  if (reed) col = INK * 0.45;
+  o = vec4(col, 1.);
+}`,
+  },
+  {
+    name: 'Companions',
+    blurb: 'Two lights on the horizon. One leads and the smaller one follows a few seconds behind, never quite catching up.',
+    state: (t) => {
+      const at = (s) => [cx() + env.w * 0.3 * Math.sin(s * TAU / 80), hz() - 26 + 5 * Math.sin(s * TAU / 11)];
+      const lead = at(t), follow = at(t - 7);
+      return { light: [lead[0], lead[1], glow(0.2), 520], aux: [follow[0], follow[1] + 6 * Math.sin(t * TAU / 9 + 1), 0, 0] };
+    },
+    frag: `
+void main() {
+  vec2 P = css(), S = size(); float t = u_time, hz = HZ();
+  vec2 a = u_light.xy, b = u_aux.xy;
+  vec3 col = land(P, hz) + horizonLine(P, hz, (a.x + b.x) * 0.5, S.x * 0.5) + groundFog(P, hz, a, t);
+  col += orb(P, a, 1.) * flicker(t, 3.) + orb(P, b, 0.65) * flicker(t, 9.) * 0.8;
+  if (P.y > hz) col += mirrored(P, a, hz, 1., t) * flicker(t, 3.) + mirrored(P, b, hz, 0.65, t) * 0.8;
+  o = vec4(col, 1.);
+}`,
+  },
+  {
+    name: 'Wanderer',
+    blurb: 'A small ghostflame walks the far shore over two minutes. You can see its flame, and its light pools on the ground mist around it.',
+    state: (t) => ({ light: [cx() + env.w * 0.4 * Math.sin(t * TAU / 120), hz() - 12, glow(0.22), 520] }),
+    frag: `
+void main() {
+  vec2 P = css(), S = size(); float t = u_time, hz = HZ();
+  vec2 w = u_light.xy;
+  vec3 col = land(P, hz) + horizonLine(P, hz, w.x, S.x * 0.4) + groundFog(P, hz, w, t);
+  col += flame(P, w, 0.75, t);
+  if (P.y > hz) {
+    col += SAGE * 0.05 * exp(-pow((P.x - w.x) / 170., 2.) - pow((P.y - hz - 5.) / 10., 2.));
+    vec2 m = vec2(P.x + 1.2 * sin(P.y * 0.7 + t * 1.5), 2. * hz - P.y - (P.y - hz) * 0.6);
+    col += flame(m, w, 0.75, t) * 0.28;
+  }
+  o = vec4(col, 1.);
+}`,
+  },
+  {
+    name: 'Fog Bank',
+    blurb: 'The light is somewhere inside a slow bank of fog. You mostly see the fog it lights, brightening and thinning as the fog drifts.',
+    state: (t) => ({ light: [cx() + env.w * 0.25 * Math.sin(t * TAU / 100), hz() - 40 + 10 * Math.sin(t * TAU / 23), glow(0.14), 600] }),
+    frag: `
+float bank(vec2 P, float hz, float t) {
+  return smoothstep(0.32, 0.8, fbm(vec2(P.x / 420. - t * 0.006, P.y / 90. + t * 0.002))) * exp(-pow((P.y - (hz - 30.)) / 110., 2.));
+}
+void main() {
+  vec2 P = css(); float t = u_time, hz = HZ();
+  vec2 w = u_light.xy;
+  float fog = bank(P, hz, t), veiled = bank(w, hz, t);
+  float r = length(P - w);
+  vec3 col = land(P, hz);
+  col += mix(SAGE, PALE, 0.3) * fog * exp(-r / 260.) * 0.24 + SAGE * fog * 0.014;
+  col += orb(P, w, 1.4) * (1. - 0.85 * veiled) * flicker(t, 2.);
+  o = vec4(col, 1.);
+}`,
+  },
+  {
+    name: 'Moonless Sea',
+    blurb: 'A light hangs low over a black sea and lays a long, faintly glittering path across the water toward you.',
+    state: (t) => ({ light: [cx() + env.w * 0.12 * Math.sin(t * TAU / 150), hz() - 22 + 3 * Math.sin(t * TAU / 8), glow(0.22), 560] }),
+    frag: `
+void main() {
+  vec2 P = css(), S = size(); float t = u_time, hz = HZ();
+  vec2 w = u_light.xy; float fl = flicker(t, 4.);
+  vec3 col = land(P, hz) + horizonLine(P, hz, w.x, S.x * 0.6);
+  col += orb(P, w, 1.) * fl;
+  if (P.y > hz) {
+    float v = P.y - hz;
+    float dx = (P.x - w.x) / (4. + v * 0.45);
+    float column = exp(-dx * dx);
+    float u = P.x / (2. + v * 0.09), depth = log(v + 3.) * 30.;
+    float wave = noise(vec2(u, depth + t * 0.4)) * noise(vec2(u * 0.37 + 11., depth * 0.61 - t * 0.3));
+    col += PALE * pow(wave, 3.) * column * exp(-v / 260.) * 1.1 * fl + COLD * column * exp(-v / 40.) * 0.03;
+  }
+  o = vec4(col, 1.);
+}`,
+  },
+  {
+    name: 'Ascension',
+    blurb: 'Every 70 seconds a wisp leaves the horizon and rises into the upper air, slowly becoming a star. Those that rose earlier stay on as faint stars.',
+    state: (t) => {
+      const k = Math.floor(t / 70), ph = frac(t / 70);
+      const x = cx() + (rand(k, 12.9898) - 0.5) * 0.6 * env.w;
+      const end = 80 + rand(k, 78.233) * 120;
+      const y = hz() - 10 - Math.pow(ph, 1.3) * (hz() - 10 - end);
+      const vis = ss(0, 0.05, ph);
+      return { light: [x, y, glow(0.24) * (1 - ph) * vis, 520], aux: [1 - 0.7 * ph, vis, ph, 0] };
+    },
+    frag: `
+void main() {
+  vec2 P = css(), S = size(), rc = rcenter(); float t = u_time, hz = HZ();
+  vec2 w = u_light.xy; float sc = u_aux.x, vis = u_aux.y, ph = u_aux.z;
+  vec3 col = land(P, hz) + horizonLine(P, hz, w.x, S.x * 0.5);
+  if (P.y < hz - 20.) {
+    vec2 g = P / 46., id = floor(g);
+    float h = hash(id);
+    float d = length((fract(g) - vec2(hash(id + 1.3), hash(id + 2.7))) * 46.);
+    col += PALE * step(0.988, h) * exp(-d * d / 0.6) * 0.3 * (0.7 + 0.3 * sin(t * 0.5 + h * 50.));
+  }
+  float k = floor(t / 70.);
+  for (int i = 1; i <= 5; i++) {
+    float kk = k - float(i);
+    vec2 s = vec2(rc.x + (fract(sin(kk * 12.9898) * 43758.5453) - 0.5) * 0.6 * S.x, 80. + fract(sin(kk * 78.233) * 43758.5453) * 120.);
+    float d = length(P - s);
+    col += PALE * exp(-d * d / 1.2) * (0.55 - float(i) * 0.08) + SAGE * exp(-d / 10.) * 0.03;
+  }
+  float along = P.y - w.y;
+  col += SAGE * exp(-pow(P.x - w.x, 2.) / 1.5) * exp(-max(along, 0.) / 70.) * step(0., along) * 0.09 * vis * (1. - ph);
+  col += orb(P, w, sc) * vis * flicker(t, 6.);
+  if (P.y > hz) col += mirrored(P, w, hz, sc, t) * vis * (1. - smoothstep(0., 0.15, ph));
+  o = vec4(col, 1.);
+}`,
+  },
+  {
+    name: 'Treeline',
+    blurb: 'Something luminous moves through a distant forest. You only glimpse it between the trunks, though its glow spills over the crowns.',
+    state: (t) => ({ light: [cx() + env.w * 0.36 * Math.sin(t * TAU / 110), hz() - 10, glow(0.2), 520] }),
+    frag: `
+void main() {
+  vec2 P = css(), S = size(); float t = u_time, hz = HZ();
+  vec2 w = u_light.xy;
+  vec3 col = land(P, hz) + orb(P, w, 1.1) * flicker(t, 7.);
+  float canopy = hz - 18. - 34. * fbm(vec2(P.x / 26., 3.)) - 26. * pow(noise(vec2(P.x / 5., 9.)), 3.);
+  float gaps = smoothstep(0.46, 0.54, noise(vec2(P.x / 7., 4.)) * (0.6 + 0.4 * noise(vec2(P.x / 60., 1.))));
+  float forest = P.y < hz - 18. ? smoothstep(canopy - 0.8, canopy + 0.8, P.y) : (P.y < hz ? 1. - gaps : 0.);
+  col = mix(col, INK * 0.5, forest * 0.94);
+  float r = length(P - w);
+  col += SAGE * exp(-r / 110.) * 0.06 * forest + groundFog(P, hz, w, t) * step(hz, P.y);
+  o = vec4(col, 1.);
+}`,
+  },
+  {
+    name: 'Still Lake',
+    blurb: 'A wisp hovers over a mirror-still lake. Every twelve seconds it dips toward its reflection, and one slow ring spreads across the water.',
+    state: (t) => {
+      const ph = frac(t / 12), dip = Math.exp(-Math.pow((ph - 0.5) / 0.08, 2));
+      const xAt = (s) => cx() + env.w * 0.18 * Math.sin(s * TAU / 140);
+      const age = ph > 0.5 ? (ph - 0.5) * 12 : ph * 12 + 6;
+      return { light: [xAt(t), hz() - 34 + 20 * dip, glow(0.22), 520], aux: [age, xAt(t - age), 0, 0] };
+    },
+    frag: `
+void main() {
+  vec2 P = css(), S = size(); float t = u_time, hz = HZ();
+  vec2 w = u_light.xy; float fl = flicker(t, 8.);
+  vec3 col = land(P, hz) + horizonLine(P, hz, w.x, S.x * 0.5);
+  col += orb(P, w, 1.) * fl;
+  if (P.y > hz) {
+    float age = u_aux.x;
+    float d = length(vec2(P.x - u_aux.y, (P.y - hz - 6.) * 7.));
+    float ring = exp(-pow((d - age * 40.) / 6., 2.)) * exp(-age / 2.5);
+    vec2 rq = vec2(P.x - w.x + ring * 3., ((2. * hz - P.y) - w.y) * 0.5);
+    float rr = length(rq);
+    col += (COLD * exp(-rr / 4.) * 0.2 + SAGE * exp(-rr / 36.) * 0.03) * fl + PALE * ring * 0.035;
+  }
+  o = vec4(col, 1.);
+}`,
+  },
+  {
+    name: 'Beacon',
+    blurb: 'A ghostfire burns on a far hill and doesn’t move. A thread of smoke leans away from it on a wind you can’t feel.',
+    state: (t) => ({ light: [cx() + env.w * 0.26, hz() - 46 - 9, glow(0.2) * (0.92 + 0.08 * Math.sin(t * 3.1)), 540] }),
+    frag: `
+void main() {
+  vec2 P = css(), S = size(); float t = u_time, hz = HZ();
+  vec2 w = u_light.xy;
+  float hx = w.x;
+  vec3 col = land(P, hz) + horizonLine(P, hz, hx, S.x * 0.5) + groundFog(P, hz, w, t) * 0.6;
+  float hill = hz - 46. * exp(-pow((P.x - hx) / 170., 2.)) - 3. * fbm(vec2(P.x / 30., 1.));
+  if (P.y > hill && P.y < hz) col = INK * 0.45;
+  float rise = w.y - P.y;
+  float dx = P.x - (hx + rise * 0.28 + 10. * sin((P.y + t * 10.) / 40.) * smoothstep(0., 80., rise));
+  float wid = 1. + rise * 0.05;
+  col += PALE * exp(-dx * dx / (wid * wid)) * smoothstep(10., 40., rise) * (1. - smoothstep(120., 300., rise)) * 0.07;
+  col += flame(P, w, 0.55, t);
+  o = vec4(col, 1.);
+}`,
+  },
+];
+
+/* ---------- GL pipeline: scene -> backdrop blur -> rouge Glass composite ---------- */
+
+const VERT = `#version 300 es
+void main() { vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2); gl_Position = vec4(p * 2. - 1., 0., 1.); }`;
+
+const COMMON = `#version 300 es
+precision highp float;
+uniform vec2 u_res; uniform float u_time; uniform vec4 u_rect; uniform float u_scale;
+uniform vec4 u_light; uniform vec4 u_aux; uniform float u_calm; uniform float u_pulse;
+out vec4 o;
+const float TAU = 6.2831853;
+const vec3 INK = vec3(0.022, 0.030, 0.030);
+const vec3 SAGE = vec3(0.561, 0.737, 0.690);
+const vec3 COLD = vec3(0.58, 0.86, 0.80);
+const vec3 PALE = vec3(0.88, 0.96, 0.93);
+vec2 css() { return vec2(gl_FragCoord.x, u_res.y - gl_FragCoord.y) / u_scale; }
+vec2 size() { return u_res / u_scale; }
+vec2 rcenter() { return u_rect.xy + u_rect.zw * 0.5; }
+float hash(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float noise(vec2 p) {
+  vec2 i = floor(p), f = fract(p); vec2 u = f * f * (3. - 2. * f);
+  return mix(mix(hash(i), hash(i + vec2(1, 0)), u.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), u.x), u.y);
+}
+float fbm(vec2 p) {
+  float v = 0., a = .5; mat2 r = mat2(.8, .6, -.6, .8);
+  for (int i = 0; i < 5; i++) { v += a * noise(p); p = r * p * 2.02; a *= .5; }
+  return v;
+}
+float sdRBox(vec2 p, vec2 b, float r) { vec2 q = abs(p) - b + r; return length(max(q, 0.)) + min(max(q.x, q.y), 0.) - r; }
+float HZ() { return size().y * 0.74; }
+float flicker(float t, float seed) { return (0.9 + 0.1 * noise(vec2(t * 2., seed))) * (1. + 0.6 * u_pulse); }
+vec3 land(vec2 P, float hz) { vec3 c = INK + SAGE * 0.018 * exp(-abs(P.y - hz) / 110.); return P.y > hz ? c * 0.7 : c; }
+vec3 horizonLine(vec2 P, float hz, float x, float span) { return SAGE * 0.03 * exp(-abs(P.y - hz) / 1.2) * exp(-pow((P.x - x) / span, 2.)); }
+vec3 orb(vec2 P, vec2 w, float s) {
+  float r = length(P - w);
+  return PALE * exp(-r * r / (4. * s * s)) * 0.9 + COLD * exp(-r / (9. * s)) * 0.22 + SAGE * exp(-r / (90. * s)) * 0.045;
+}
+vec3 mirrored(vec2 P, vec2 w, float hz, float s, float t) {
+  vec2 rq = vec2(P.x - w.x + 1.2 * sin(P.y * 0.7 + t * 1.5), ((2. * hz - P.y) - w.y) * 0.3);
+  float rr = length(rq);
+  return COLD * exp(-rr / (5. * s)) * 0.16 + SAGE * exp(-rr / (40. * s)) * 0.025;
+}
+vec3 groundFog(vec2 P, float hz, vec2 w, float t) {
+  float fog = fbm(vec2(P.x / 380. - t * 0.004, P.y / 36.));
+  return SAGE * fog * exp(-abs(P.y - hz + 8.) / 26.) * 0.05 * (0.25 + 1.6 * exp(-length(P - w) / 240.));
+}
+vec3 flame(vec2 P, vec2 base, float sc, float t) {
+  vec2 q = (P - base) / sc;
+  vec2 f = vec2(q.x, -q.y);
+  f.x -= 1.4 * sin(t * 1.1 + f.y * 0.1) * smoothstep(-2., 24., f.y);
+  float w = mix(6.2, 0.7, smoothstep(-6., 24., f.y));
+  float body = exp(-pow(f.x / w, 2.)) * smoothstep(-10., -3., f.y) * (1. - smoothstep(3., 26., f.y));
+  float core = exp(-pow(f.x / (w * 0.42), 2.)) * smoothstep(-7., -2., f.y) * (1. - smoothstep(-1., 9., f.y));
+  float r = length(q);
+  float fl = 0.93 + 0.07 * noise(vec2(t * 2.3, base.x * 0.01));
+  return (COLD * body * 0.75 + PALE * core * 0.9) * fl + SAGE * (exp(-r / 50.) * 0.07 + exp(-r / 220.) * 0.025) * (1. + 0.6 * u_pulse);
+}
+`;
+
+const BLUR = `#version 300 es
+precision highp float;
+uniform sampler2D u_src; uniform vec2 u_step; uniform vec2 u_out;
+out vec4 o;
+void main() {
+  vec2 uv = gl_FragCoord.xy / u_out;
+  vec3 acc = vec3(0.); float ws = 0.;
+  for (int i = -12; i <= 12; i++) {
+    float x = float(i) / 4.;
+    float w = exp(-x * x * 0.5);
+    acc += texture(u_src, uv + u_step * float(i)).rgb * w; ws += w;
+  }
+  o = vec4(acc / ws, 1.);
+}`;
+
+/* A direct port of rouge-render/src/shaders/glass.wgsl. */
+const COMPOSITE = COMMON + `
+uniform sampler2D u_scene; uniform sampler2D u_blur;
+uniform vec4 u_tint; uniform vec4 u_optics; uniform vec4 u_finish; uniform vec4 u_glassLight; uniform float u_dim;
+const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
+vec3 tex(sampler2D s, vec2 at) { vec2 S = size(); return texture(s, clamp(vec2(at.x / S.x, 1. - at.y / S.y), 0., 1.)).rgb * u_dim; }
+float shape(vec2 local) { vec2 hs = u_rect.zw * 0.5; return sdRBox(local - hs, hs, min(12., min(hs.x, hs.y))); }
+void main() {
+  vec2 P = css(), local = P - u_rect.xy;
+  vec3 bg = tex(u_scene, P);
+  float texel = 1. / u_scale;
+  float dist = shape(local);
+  float coverage = clamp(0.5 - dist / texel, 0., 1.);
+  float shadow = 0.;
+  if (u_finish.x > 0.) {
+    float soft = clamp(1. - shape(local - vec2(0., 6.)) / 22., 0., 1.);
+    float contact = clamp(1. - shape(local - vec2(0., 1.5)) / 5., 0., 1.);
+    shadow = u_finish.x * (0.75 * soft * soft * soft + 0.25 * contact * contact) * (1. - coverage);
+  }
+  vec3 color = bg * (1. - shadow);
+  if (coverage > 0.) {
+    vec2 e = vec2(texel, 0.);
+    vec2 g = vec2(shape(local + e.xy) - shape(local - e.xy), shape(local + e.yx) - shape(local - e.yx));
+    vec2 n = g / max(length(g), 1e-4 * texel);
+    float edge = max(u_optics.w, texel);
+    float depth = max(-dist, 0.);
+    float rim = clamp(1. - depth / edge, 0., 1.);
+    float bend = 1. - sqrt(1. - rim * rim);
+    vec2 off = -n * bend * u_optics.x * edge * 2.;
+    vec2 spread = off * u_optics.y;
+    vec3 c = vec3(tex(u_blur, P + off + spread).r, tex(u_blur, P + off).g, tex(u_blur, P + off - spread).b);
+    c = mix(vec3(dot(c, LUMA)), c, u_finish.y);
+    c = mix(c, u_tint.rgb, u_tint.a);
+    vec2 L = normalize(vec2(-0.6, -0.8));
+    float facing = dot(n, L);
+    float glint = 0.15 + 0.85 * max(facing, 0.) * max(facing, 0.) + 0.6 * max(-facing, 0.) * max(-facing, 0.);
+    float line = clamp(1. - depth / 1.5, 0., 1.);
+    float bloom = rim * rim * rim;
+    float sheen = line * glint + bloom * glint * 0.22 + bend * 0.12;
+    vec2 away = (local - u_glassLight.xy) / max(u_glassLight.w, 1.);
+    float caught = exp(-dot(away, away)) * u_glassLight.z * (line * 0.8 + bloom * 0.3 + 0.05);
+    c = clamp(c + vec3(sheen * u_optics.z + caught), 0., 1.);
+    color = c * coverage + bg * (1. - coverage - shadow);
+  }
+  color += (hash(gl_FragCoord.xy + fract(u_time * 7.)) - 0.5) / 255.;
+  o = vec4(color, 1.);
+}`;
+
+const canvas = $('#gl');
+const gl = canvas.getContext('webgl2', { antialias: false, alpha: false });
+
+function program(frag) {
+  const shader = (type, src) => {
+    const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) console.error(gl.getShaderInfoLog(s));
+    return s;
+  };
+  const p = gl.createProgram();
+  gl.attachShader(p, shader(gl.VERTEX_SHADER, VERT));
+  gl.attachShader(p, shader(gl.FRAGMENT_SHADER, frag));
+  gl.linkProgram(p);
+  const cache = {};
+  p.u = (name) => (name in cache ? cache[name] : (cache[name] = gl.getUniformLocation(p, name)));
+  return p;
+}
+
+function target() {
+  const tex = gl.createTexture();
+  const fbo = gl.createFramebuffer();
+  const t = { tex, fbo, w: 0, h: 0 };
+  t.resize = (w, h) => {
+    if (t.w === w && t.h === h) return;
+    t.w = w; t.h = h;
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+  };
+  return t;
+}
+
+const scenePrograms = SCENES.map(() => null);
+const blurProgram = program(BLUR);
+const compositeProgram = program(COMPOSITE);
+const sceneTarget = target(), blurA = target(), blurB = target();
+gl.bindVertexArray(gl.createVertexArray());
+
+function shared(p, W, H, k, light, aux) {
+  gl.uniform2f(p.u('u_res'), W, H);
+  gl.uniform1f(p.u('u_time'), env.t);
+  gl.uniform4f(p.u('u_rect'), env.rx, env.ry, env.rw, env.rh);
+  gl.uniform1f(p.u('u_scale'), k);
+  gl.uniform4f(p.u('u_light'), light[0], light[1], light[2], light[3]);
+  gl.uniform1f(p.u('u_calm'), env.calm);
+  gl.uniform1f(p.u('u_pulse'), env.pulse);
+  gl.uniform4f(p.u('u_aux'), aux[0], aux[1], aux[2], aux[3]);
+}
+
+function render(index) {
+  const k = window.devicePixelRatio || 1;
+  const W = Math.max(1, Math.round(env.w * k)), H = Math.max(1, Math.round(env.h * k));
+  if (canvas.width !== W || canvas.height !== H) { canvas.width = W; canvas.height = H; }
+  const bw = Math.max(1, Math.ceil(W / 2)), bh = Math.max(1, Math.ceil(H / 2));
+  sceneTarget.resize(W, H); blurA.resize(bw, bh); blurB.resize(bw, bh);
+  const scene = SCENES[index];
+  const state = scene.state(env.t);
+  const light = state.light, aux = state.aux || [0, 0, 0, 0];
+  const p = scenePrograms[index] || (scenePrograms[index] = program(COMMON + scene.frag));
+
+  gl.useProgram(p);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, sceneTarget.fbo);
+  gl.viewport(0, 0, W, H);
+  shared(p, W, H, k, light, aux);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+  gl.useProgram(blurProgram);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.uniform1i(blurProgram.u('u_src'), 0);
+  gl.uniform2f(blurProgram.u('u_out'), bw, bh);
+  const sigma = glass.blur;
+  for (const [src, dst, dx, dy] of [[sceneTarget, blurA, sigma / env.w / 4, 0], [blurA, blurB, 0, sigma / env.h / 4]]) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, dst.fbo);
+    gl.viewport(0, 0, bw, bh);
+    gl.bindTexture(gl.TEXTURE_2D, src.tex);
+    gl.uniform2f(blurProgram.u('u_step'), dx, dy);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
+  const c = compositeProgram;
+  gl.useProgram(c);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, W, H);
+  shared(c, W, H, k, light, aux);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, sceneTarget.tex); gl.uniform1i(c.u('u_scene'), 0);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, blurB.tex); gl.uniform1i(c.u('u_blur'), 1);
+  gl.uniform4f(c.u('u_tint'), 37 / 255, 42 / 255, 38 / 255, glass.tint);
+  gl.uniform4f(c.u('u_optics'), glass.refraction, glass.dispersion, glass.highlight, glass.edge);
+  gl.uniform4f(c.u('u_finish'), glass.shadow, glass.saturation, 0, 0);
+  gl.uniform4f(c.u('u_glassLight'), light[0] - env.rx, light[1] - env.ry, env.lightOn ? light[2] : 0, light[3]);
+  gl.uniform1f(c.u('u_dim'), env.calmOn ? 1 - 0.22 * env.calm : 1);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+
+/* ---------- shell ---------- */
+
+const stage = $('#stage'), composer = $('#composer'), input = $('#input'), send = $('#send');
+let current = 0, last = performance.now();
+
+function measure() {
+  const s = stage.getBoundingClientRect(), c = composer.getBoundingClientRect();
+  Object.assign(env, { w: s.width, h: s.height, rx: c.left - s.left, ry: c.top - s.top, rw: c.width, rh: c.height, dirty: true });
+}
+
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  const calmBefore = env.calm, pulseBefore = env.pulse;
+  env.calm += (env.calmTarget - env.calm) * (1 - Math.exp(-dt * 2.5));
+  if (Math.abs(env.calm - env.calmTarget) < 0.002) env.calm = env.calmTarget;
+  env.pulse = env.pulse < 0.002 ? 0 : env.pulse * Math.exp(-dt * 1.6);
+  const settling = env.calm !== calmBefore || env.pulse !== pulseBefore;
+  if (!env.reduced) env.t += dt * (env.calmOn ? mix(1, 0.35, env.calm) : 1);
+  if (!env.reduced || env.dirty || settling) render(current);
+  env.dirty = false;
+  requestAnimationFrame(frame);
+}
+
+function select(i) {
+  current = (i + SCENES.length) % SCENES.length;
+  const scene = SCENES[current];
+  $('#num').textContent = String(current + 1).padStart(2, '0');
+  $('#name').textContent = scene.name;
+  $('#blurb').textContent = scene.blurb;
+  document.querySelectorAll('#pills button').forEach((b, j) => b.setAttribute('aria-pressed', j === current));
+  history.replaceState(null, '', '#' + (current + 1));
+  env.dirty = true;
+}
+
+SCENES.forEach((s, i) => {
+  const b = document.createElement('button');
+  b.textContent = String(i + 1).padStart(2, '0');
+  b.title = s.name;
+  b.onclick = () => select(i);
+  $('#pills').appendChild(b);
+});
+
+const sliders = ['blur', 'tint', 'refraction', 'dispersion', 'highlight', 'shadow'];
+function syncSliders() {
+  for (const id of sliders) {
+    const el = $('#' + id);
+    el.value = glass[id];
+    el.nextElementSibling.textContent = glass[id];
+  }
+}
+for (const id of sliders) {
+  $('#' + id).addEventListener('input', (ev) => {
+    glass[id] = Number(ev.target.value);
+    ev.target.nextElementSibling.textContent = ev.target.value;
+    document.querySelectorAll('#presets button').forEach((b) => b.setAttribute('aria-pressed', false));
+    env.dirty = true;
+  });
+}
+function preset(name) {
+  Object.assign(glass, PRESETS[name]);
+  composer.classList.toggle('frosted', name === 'frosted');
+  document.querySelectorAll('#presets button').forEach((b) => b.setAttribute('aria-pressed', b.dataset.preset === name));
+  syncSliders();
+  env.dirty = true;
+}
+document.querySelectorAll('#presets button').forEach((b) => (b.onclick = () => preset(b.dataset.preset)));
+
+const toggle = (id, apply) => $(id).addEventListener('change', (ev) => { apply(ev.target.checked); env.dirty = true; });
+toggle('#calm', (on) => (env.calmOn = on));
+toggle('#motion', (on) => (env.reduced = !on));
+toggle('#lightOn', (on) => (env.lightOn = on));
+toggle('#greet', (on) => { env.greeting = on; $('#greeting').hidden = !on; });
+toggle('#side', (on) => ($('#sidebar').hidden = !on));
+
+const updateCalm = () => { env.calmTarget = document.activeElement === input || input.value.trim() ? 1 : 0; };
+input.addEventListener('focus', updateCalm);
+input.addEventListener('blur', updateCalm);
+input.addEventListener('input', () => {
+  input.style.height = 'auto';
+  input.style.height = Math.min(input.scrollHeight, 24 * 12 + 8) + 'px';
+  send.classList.toggle('filled', input.value.trim().length > 0);
+  updateCalm();
+});
+const submit = () => {
+  if (!input.value.trim()) return;
+  input.value = '';
+  input.dispatchEvent(new Event('input'));
+  env.pulse = 1;
+};
+input.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); submit(); } });
+send.addEventListener('click', submit);
+
+document.addEventListener('keydown', (ev) => {
+  const typing = document.activeElement === input;
+  if ((ev.key === 'ArrowRight' || ev.key === 'ArrowLeft') && (!typing || ev.altKey)) {
+    ev.preventDefault();
+    select(current + (ev.key === 'ArrowRight' ? 1 : -1));
+  } else if (!typing && /^[0-9]$/.test(ev.key)) {
+    select(ev.key === '0' ? 9 : Number(ev.key) - 1);
+  }
+});
+
+new ResizeObserver(measure).observe(stage);
+new ResizeObserver(measure).observe(composer);
+measure();
+preset('lit');
+select(clamp((parseInt(location.hash.slice(1), 10) || 1) - 1, 0, SCENES.length - 1));
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
