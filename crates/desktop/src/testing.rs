@@ -528,6 +528,11 @@ impl DesktopHarness {
         self.ui.click_at(point.x, point.y);
     }
 
+    pub fn click_text(&mut self, text: &str) -> Result<(), TestError> {
+        self.advance();
+        self.ui.click_text(text)
+    }
+
     pub fn theme(&mut self) -> ReviewTheme {
         self.advance();
         self.theme.review_signal().get_untracked()

@@ -21,6 +21,18 @@ fn each_code_block_in_a_reply_copies_its_own_code() {
 }
 
 #[test]
+fn links_in_a_reply_open_when_clicked() {
+    let reply = "Read [the guide](https://example.com/guide) or https://docs.rs/rouge.";
+    let mut harness = answered(vec![message(reply)]);
+
+    harness.click_text("the guide").unwrap();
+    harness.click_text("docs.rs").unwrap();
+    harness.click_text("Read").unwrap();
+
+    assert_eq!(harness.platform().opened(), ["https://example.com/guide", "https://docs.rs/rouge"]);
+}
+
+#[test]
 fn a_reply_streamed_in_chunks_is_as_tall_as_the_same_reply_sent_whole() {
     let chunks = ["# Plan\n\nFirst ", "step.\n\n- one\n", "- two\n\n```sh\nls\n```\n"];
     let height = |updates| answered(updates).bounds("transcript-row-1").unwrap().size.height;
