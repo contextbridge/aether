@@ -10,7 +10,7 @@ use crate::threads::{Thread, ThreadEvent, ThreadStatus};
 use crate::ui::tokens::{COMPOSER_POPUP_HEIGHT, ICON_SIZE, ROW_HEIGHT};
 use crate::ui::typography::READING;
 use crate::ui::{
-    Hint, Icon, IconName, Material, MaterialExt, PickerItem, SearchPickerEvent, SearchPickerHandle, Theme, UI_FONT,
+    Hint, Icon, IconName, LiquidGlassExt, Material, PickerItem, SearchPickerEvent, SearchPickerHandle, Theme, UI_FONT,
     icon_button, picker_closed, search_picker,
 };
 use client_core::composer::attachment::{AttachedFile, PromptAttachment, attach_missing, classify_paths};
@@ -139,7 +139,7 @@ impl Composer {
         let search = memo(move || self.popup.with(|popup| matches!(popup, Popup::Search(_))));
         let theme = Theme::current();
         let editor = view! {
-            <div w_full flex col gap=4.0 material=Material::GlassPanel
+            <div w_full flex col gap=4.0 liquid_glass
                  border_color={move || if self.focus.is_focused() { theme.border.get() } else { theme.border_subtle.get() }}>
                 <dynamic>{self.attachments()}</dynamic>
                 {self.input()}

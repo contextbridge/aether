@@ -1,7 +1,8 @@
 use crate::chat::attachment::{Attachment, chip, chip_icon, thumbnail};
 use crate::threads::{Thread, ThreadStatus};
 use crate::ui::{
-    ButtonVariant, Icon, IconName, Material, MaterialExt, Theme, UiStyles, backdrop, button, disclosure, icon_button,
+    ButtonVariant, Icon, IconName, LiquidGlassExt, Material, MaterialExt, Theme, UiStyles, backdrop, button,
+    disclosure, icon_button,
 };
 use clankerdiff_rouge::{ReviewHandle, diff_view};
 use rouge::core::{
@@ -39,8 +40,7 @@ pub(crate) fn prompt(
     let body = (!body.is_empty()).then(|| view! { <text reading>{body}</text> });
     let files = (!attachments.is_empty()).then(|| view! { <div flex flex_wrap gap=8.0>{..attachments}</div> });
     view! {
-        <div test_id={format!("prompt-{row}")} max_w=pct(PROMPT_MAX_WIDTH) px=16.0 py=8.0 flex col gap=8.0 material=Material::Surface
-             bg=Theme::current().elevated>
+        <div test_id={format!("prompt-{row}")} max_w=pct(PROMPT_MAX_WIDTH) px=16.0 py=8.0 flex col gap=8.0 liquid_glass>
             {body}
             {files}
         </div>

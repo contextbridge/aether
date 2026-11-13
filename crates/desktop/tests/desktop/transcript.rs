@@ -1,4 +1,4 @@
-use crate::support::Edges;
+use crate::support::{Edges, replying};
 use acp_utils::testing::{
     FakeAgent, FakeAgentRequests, announced, message_chunk, plan, running_state, thought_chunk, tool_call,
 };
@@ -51,6 +51,17 @@ fn a_prompt_or_reply_copies_its_text() {
 
     harness.click("copy-message-0").unwrap();
     assert_eq!(harness.platform().copied_text().as_deref(), Some("go"));
+}
+
+#[test]
+fn a_prompt_is_frosted_glass_like_the_composer() {
+    let (mut harness, thread) = DesktopHarness::alpha(replying("alpha-session", "ok"));
+    let before = harness.ui().draw().unwrap().backdrop_passes;
+
+    harness.send(thread, "go");
+
+    assert!(harness.bounds("prompt-0").is_some());
+    assert_eq!(harness.ui().draw().unwrap().backdrop_passes, before + 1, "the prompt blurs what is behind it");
 }
 
 #[test]
