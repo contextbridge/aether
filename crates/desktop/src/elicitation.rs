@@ -1,13 +1,11 @@
 use crate::platform::Platform;
 use crate::threads::Thread;
-use crate::ui::{ButtonVariant, GlassExt, UiStyles, UiTheme, button, text_field};
-use clankerdiff_rouge_shell::rouge::core::{AnyView, Styled, View, div, dynamic, px, text, view};
-use clankerdiff_rouge_shell::rouge::reactive::{
-    Callback, Scope, Signal, Stored, effect, memo, signal, stored, untrack,
-};
+use crate::ui::{ButtonVariant, Material, MaterialExt, Theme, UiStyles, button, text_field};
 use client_core::elicitation::{
     Elicitation, ElicitationAnswer, ElicitationId, FieldInput, FormError, FormField, FormFieldKind, accept_content,
 };
+use rouge::core::{AnyView, Styled, View, div, dynamic, px, text, view};
+use rouge::reactive::{Callback, Scope, Signal, Stored, effect, memo, signal, stored, untrack};
 use std::rc::Rc;
 
 #[derive(Clone, Copy)]
@@ -67,7 +65,7 @@ impl ElicitationCard {
     }
 
     fn card(self, elicitation: &Elicitation) -> AnyView {
-        let theme = UiTheme::current();
+        let theme = Theme::current();
         let (primary_id, primary_label) = primary(elicitation);
         let body = match elicitation {
             Elicitation::Url { url, .. } => view! { <div><text small muted>{url.clone()}</text></div> }.into_any(),
@@ -88,7 +86,7 @@ impl ElicitationCard {
             }
         };
         view! {
-            <div test_id="elicitation" mt=8.0 p=16.0 flex col gap=16.0 glass_sheet border=px(1.0) border_color=theme.accent>
+            <div test_id="elicitation" mt=8.0 p=16.0 flex col gap=16.0 material=Material::Glass border=px(1.0) border_color=theme.accent>
                 <text title primary>{elicitation.question()}</text>
                 {body}
                 <div flex justify_end gap=8.0>
@@ -123,7 +121,7 @@ impl ElicitationCard {
             }
             (FieldAnswer::Picked(_), _) => ().into_any(),
         };
-        let theme = UiTheme::current();
+        let theme = Theme::current();
         let error = refused.filter(|refused| refused.index == index).map(|refused| {
             view! {
                 <div test_id={format!("elicitation-error-{name}")}>

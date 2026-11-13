@@ -11,22 +11,22 @@ use crate::target::{AgentConnector, Transport};
 use crate::tasks::spawn_in;
 use crate::thread_view::{ThreadTab, ThreadView};
 use crate::threads::{Attention, Thread, ThreadEvent, ThreadManager};
-use crate::ui::interface_size::DEFAULT_INTERFACE_SIZE;
+use crate::ui::DEFAULT_INTERFACE_SIZE;
 use crate::ui::tokens::{HEADER_HEIGHT, MODAL_WIDTH, PANEL_INSET, PICKER_LIST_HEIGHT};
 use crate::ui::{
-    ActiveTheme, IconName, IndicatorLayer, InterfaceSize, PickerItem, SearchPickerHandle, StyledExt, UI_FONT, UiStyles,
-    UiTheme, WispMotion, backdrop, empty_state, key_binding, on_glass, picker_closed, search_picker, window_appearance,
+    ActiveReviewTheme, IconName, InterfaceSize, Material, PickerItem, SearchPickerHandle, StyledExt, Theme, UI_FONT,
+    UiStyles, WispMotion, appearance, backdrop, empty_state, picker_closed, search_picker,
 };
 use aether_sessions::SessionStore;
 use agent_client_protocol::v2::schema::SessionId;
 use clankerdiff_core::RepoPath;
 use clankerdiff_remote::Remotes;
 use clankerdiff_rouge::ReviewHandle;
-use clankerdiff_rouge_shell::rouge::core::{
+use rouge::core::{
     AnyView, Chord, Div, Length, Styled, View, WindowHandle, div, dynamic, view, window_focused, window_handle,
     window_size,
 };
-use clankerdiff_rouge_shell::rouge::reactive::{Scope, Signal, Stored, effect, memo, signal, spawn, stored, untrack};
+use rouge::reactive::{Scope, Signal, Stored, effect, memo, signal, spawn, stored, untrack};
 use std::cell::Cell;
 use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
@@ -104,7 +104,7 @@ impl DesktopApp {
         let DesktopConfig { transport, clock, agents, remotes, remotes_file, sessions, registry, platform } = config;
         let registry = Registry::new(registry);
         let preference = memo(move || registry.with(|state| state.theme.clone()));
-        let active = ActiveTheme::install(preference.get_untracked().theme(window_appearance()));
+        let active = ActiveReviewTheme::install(preference.get_untracked().theme(appearance().get_untracked()));
         effect(move || active.apply(&preference.get()));
         let motion = WispMotion::install(registry.with_untracked(|state| state.reduced_motion));
         effect(move || motion.set_reduced(registry.with(|state| state.reduced_motion)));
@@ -119,7 +119,6 @@ impl DesktopApp {
                     .update(|state| state.interface_size = (committed != DEFAULT_INTERFACE_SIZE).then_some(committed));
             });
         });
-        let _ = IndicatorLayer::install();
         let agents = Catalogs::new(agents);
         let connector = Arc::new(AgentConnector::new(remotes.clone(), transport));
         let threads = ThreadManager::new(connector, agents, clock.clone());
@@ -167,7 +166,7 @@ impl DesktopApp {
     }
 
     pub fn view(self) -> impl View {
-        let theme = UiTheme::current();
+        let theme = Theme::current();
         let collapsed = memo(move || self.registry.with(|state| state.sidebar_collapsed));
         let selected = memo(move || self.threads.selected());
         let root = view! {
@@ -430,11 +429,9 @@ impl DesktopApp {
                 });
                 view! {
                     <backdrop id="switcher-backdrop" align_top on_dismiss={move || self.close_modal()}>
-                        {on_glass(|| view! {
-                            <search_picker id="switcher" handle searchable="Search threads…" empty="No matching threads"
-                                           footer=FOOTER width={Length::design(MODAL_WIDTH)}
-                                           height={Length::design(PICKER_LIST_HEIGHT)}/>
-                        })}
+                        <search_picker id="switcher" handle material={Material::Glass} searchable="Search threads…"
+                                       empty="No matching threads" footer=FOOTER width={Length::design(MODAL_WIDTH)}
+                                       height={Length::design(PICKER_LIST_HEIGHT)}/>
                     </backdrop>
                 }
                 .into_any()
@@ -452,7 +449,7 @@ impl DesktopApp {
 }
 
 pub(crate) fn chord(keys: &str) -> Chord {
-    key_binding(keys).unwrap_or_else(|error| unreachable!("built-in chord {keys}: {error}"))
+    Chord::parse(keys).unwrap_or_else(|error| unreachable!("built-in chord {keys}: {error}"))
 }
 
 fn no_thread(collapsed: bool) -> impl View {

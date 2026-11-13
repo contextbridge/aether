@@ -1,9 +1,9 @@
 use crate::threads::{Thread, ThreadEvent};
-use crate::ui::{ActiveTheme, IconName, empty_state};
+use crate::ui::{ActiveReviewTheme, IconName, empty_state};
 use clankerdiff_core::{DiffReviewCommand, DiffReviewEvent, DiffSide, FilesMode, RepoPath, SourcePath, TargetLocation};
 use clankerdiff_rouge::{DiffClientView, DiffViewerOptions, ReviewHandle, ReviewOutput};
-use clankerdiff_rouge_shell::rouge::core::{Styled, View, WindowHandle, div, dynamic, view, window_handle};
-use clankerdiff_rouge_shell::rouge::reactive::{Callback, Memo, Scope, Signal, effect, memo, signal, untrack};
+use rouge::core::{Styled, View, WindowHandle, div, dynamic, view, window_handle};
+use rouge::reactive::{Callback, Memo, Scope, Signal, effect, memo, signal, untrack};
 use std::sync::Arc;
 
 #[derive(Clone, Copy)]
@@ -39,7 +39,7 @@ impl Files {
             untrack(|| files.sync());
         });
         effect(move || {
-            let theme = ActiveTheme::current().review();
+            let theme = ActiveReviewTheme::current().review();
             untrack(|| {
                 if let Some(client) = files.client.get_untracked() {
                     client.review().set_theme(theme);
@@ -110,7 +110,7 @@ impl Files {
             return;
         };
         let client = self.client.get_untracked().unwrap_or_else(|| {
-            let theme = ActiveTheme::current().review();
+            let theme = ActiveReviewTheme::current().review();
             let options = DiffViewerOptions { themes: false, review_bar: false, ..DiffViewerOptions::default() };
             let client = self.scope.run(|| DiffClientView::mount(theme, options, move |output| self.on_output(output)));
             self.client.set(Some(client));

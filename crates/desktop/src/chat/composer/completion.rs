@@ -1,12 +1,12 @@
 use crate::ui::tokens::COMPOSER_POPUP_HEIGHT;
-use crate::ui::{GlassExt, PickerItem, picker_list};
-use clankerdiff_rouge_shell::rouge::core::{Div, Length, Styled, div, view};
-use clankerdiff_rouge_shell::rouge::reactive::Callback;
+use crate::ui::{Material, MaterialExt, PickerItem, picker_list};
 use clankerdiff_ui_core::{PickerOption, PickerState};
 use client_core::composer::attachment::PromptAttachment;
 use client_core::composer::completion_token::{CompletionToken, Trigger};
 use client_core::composer::file_listing::RepoFiles;
 use client_core::session_core::CommandEntry;
+use rouge::core::{Div, Length, Styled, div, view};
+use rouge::reactive::Callback;
 use std::ops::Range;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -83,7 +83,7 @@ impl CompletionMenu {
             .collect();
         let highlighted = self.highlighted;
         view! {
-            <div test_id="completion-menu" glass_sheet p=4.0>
+            <div test_id="completion-menu" material=Material::Glass p=4.0>
                 <picker_list id="completion" items highlighted empty
                              max_height={Length::design(COMPOSER_POPUP_HEIGHT)} on_choose/>
             </div>

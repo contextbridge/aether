@@ -2,7 +2,7 @@ use crate::tasks::{blocking, spawn_in};
 use aether_sessions::{SessionStore, SessionSummary, SummaryCache};
 use agent_client_protocol::v2::schema::SessionId;
 use chrono::{DateTime, Utc};
-use clankerdiff_rouge_shell::rouge::reactive::{Scope, Signal, Stored, signal, stored};
+use rouge::reactive::{Scope, Signal, Stored, signal, stored};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

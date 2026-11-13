@@ -1,7 +1,7 @@
 use clankerdiff_rouge::style;
-use clankerdiff_rouge_shell::rouge::core::SpanStyle;
 use clankerdiff_syntax::DocumentHighlights;
 use clankerdiff_ui_core::SyntaxTheme;
+use rouge::core::SpanStyle;
 use std::ops::Range;
 
 pub(crate) fn highlights(

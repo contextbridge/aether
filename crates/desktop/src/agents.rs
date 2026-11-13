@@ -1,7 +1,7 @@
 pub use agent_client_protocol::AcpAgentConfig as CommandLine;
 
 use agent_client_protocol::AcpAgent;
-use clankerdiff_rouge_shell::rouge::reactive::{Signal, Stored, signal, stored};
+use rouge::reactive::{Signal, Stored, signal, stored};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};

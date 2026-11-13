@@ -1,16 +1,18 @@
 use aether_desktop::ui::{
-    ActiveTheme, ButtonVariant, ControlSize, Icon, IconName, UI_FONT, UiStyles, WispMotion, WispState, button, wisp,
+    ActiveReviewTheme, ButtonVariant, ControlSize, Icon, IconName, UI_FONT, UiStyles, WispMotion, WispState, button,
+    wisp,
 };
-use clankerdiff_rouge::ui::testing::component_test;
-use clankerdiff_rouge_shell::rouge::core::{Color, Styled, View, div, scroll, text, view};
-use clankerdiff_rouge_shell::rouge::reactive::{Runtime, signal, sleep, spawn};
-use clankerdiff_rouge_shell::rouge::{App, WindowOptions};
-use clankerdiff_rouge_shell::{launch, runtime};
 use clankerdiff_ui_core::ReviewTheme;
 use clap::Parser;
+use rouge::core::{Color, Styled, View, div, scroll, text, view};
+use rouge::reactive::{Runtime, signal, sleep, spawn};
+use rouge::{App, WindowOptions};
+use rouge_widgets::bundled_fonts;
+use rouge_widgets::testing::component_test;
 use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
+use tokio::runtime::Runtime as TokioRuntime;
 
 #[derive(Parser)]
 #[command(about = "Preview the actual desktop shader, capture a deterministic frame, or measure rendering work")]
@@ -64,16 +66,19 @@ fn main() {
         }
         return;
     }
-    let runtime = runtime::build();
-    let app = App::new()
+    let runtime = TokioRuntime::new().expect("start the Tokio runtime");
+    App::new()
+        .fonts(bundled_fonts())
+        .tokio(runtime.handle().clone())
         .window(WindowOptions::default().title("Aether · Activity motion").size(960.0, 840.0), move || {
             preview(options.reduced)
-        });
-    launch(app, &runtime).expect("open the wisp preview");
+        })
+        .run()
+        .expect("open the wisp preview");
 }
 
 fn preview(reduced: bool) -> impl View {
-    let _ = ActiveTheme::install(ReviewTheme::default());
+    let _ = ActiveReviewTheme::install(ReviewTheme::default());
     let motion = WispMotion::install(reduced);
     let selected = signal(WispState::Thinking);
     let cycling = signal(false);

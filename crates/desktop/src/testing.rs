@@ -1,27 +1,25 @@
 use crate::agents::{Agents, CommandLine, Endpoint, parse_command_line};
 use crate::clock::Clock;
 use crate::history::History;
-use crate::platform::{ClipboardMedia, Notification, PathPrompt, Platform, PlatformFuture};
+use crate::platform::{Notification, PathPrompt, Platform, PlatformFuture};
 use crate::registry::{self, Registry, STATE_FILE};
 use crate::remotes::{Acp, Fleet, InstanceState, RemoteSpec};
 use crate::target::{ConnectError, Transport, TransportFuture, client_info};
 use crate::threads::{Thread, ThreadManager, ThreadStatus};
-use crate::{ActiveTheme, DesktopApp, DesktopConfig, cli::DEFAULT_AGENT_COMMAND, window_size};
+use crate::{ActiveReviewTheme, DesktopApp, DesktopConfig, cli::DEFAULT_AGENT_COMMAND, window_size};
 use acp_utils::testing::{Channel, FakeAgent, FakeAgentRequests, QueuedTurns};
 use aether_sessions::SessionStore;
 use aether_sessions::testing::{TestStore, session_meta, user_message};
 use chrono::{DateTime, Utc};
 use clankerdiff_remote::RemotesFile;
 use clankerdiff_remote::testing::FakeRemotes;
-use clankerdiff_rouge::ui::testing::{TestError, TestUi, component_test};
-use clankerdiff_rouge_shell::rouge::core::{
-    Chord, Clipboard, FileDropPhase, Key, KeyEvent, Point, PointerButton, Rect, Size, WindowCommand, root_font_size,
-    window_focused,
-};
-use clankerdiff_rouge_shell::rouge::reactive::{Entered, ReadSignal, Runtime as Reactive, Signal, set_tokio};
 use clankerdiff_ui_core::ReviewTheme;
 use client_core::connection::Connection;
 use client_core::testing::{FakeGit, git_diff_agent};
+use rouge::core::testing::{TestError, TestUi};
+use rouge::core::{Clipboard, ClipboardMedia, Point, Rect, Size, root_font_size, window_focused};
+use rouge::reactive::{Entered, ReadSignal, Runtime as Reactive, Signal, set_tokio};
+use rouge_widgets::testing::component_test;
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::fs;
@@ -65,7 +63,7 @@ pub struct DesktopHarness {
     app: DesktopApp,
     focused: ReadSignal<bool>,
     root_font_size: Signal<f32>,
-    theme: ActiveTheme,
+    theme: ActiveReviewTheme,
     platform: FakePlatform,
     connector: FakeConnector,
     sessions: TestStore,
@@ -224,7 +222,7 @@ impl DesktopHarnessBuilder {
             component_test().size(width, height).build_with(move || {
                 set_tokio(handle);
                 let app = DesktopApp::new(config);
-                (app.view(), (app, window_focused(), root_font_size(), ActiveTheme::current()))
+                (app.view(), (app, window_focused(), root_font_size(), ActiveReviewTheme::current()))
             });
         ui.set_clipboard(platform.clone());
         let mut harness = DesktopHarness {
@@ -383,6 +381,10 @@ impl Clipboard for FakePlatform {
     fn write(&mut self, text: &str) {
         self.copy_text(text);
     }
+
+    fn read_media(&mut self) -> Option<ClipboardMedia> {
+        self.state.borrow().clipboard_media.clone()
+    }
 }
 
 impl Platform for FakePlatform {
@@ -402,10 +404,6 @@ impl Platform for FakePlatform {
 
     fn open(&self, target: &str) {
         self.state.borrow_mut().opened.push(target.to_owned());
-    }
-
-    fn clipboard_media(&self) -> Option<ClipboardMedia> {
-        self.state.borrow().clipboard_media.clone()
     }
 }
 
@@ -523,16 +521,11 @@ impl DesktopHarness {
     }
 
     pub fn click(&mut self, id: &str) -> Result<(), TestError> {
-        self.press_pointer(id, PointerButton::Primary)
+        self.ui.click_on(id)
     }
 
     pub fn click_at(&mut self, point: Point) {
-        self.advance();
-        self.ui.advance(CLICK_PAUSE);
-        self.settle_pointer(point);
-        self.ui.pointer_down(PointerButton::Primary);
-        self.ui.pointer_up(PointerButton::Primary);
-        self.advance();
+        self.ui.click_at(point.x, point.y);
     }
 
     pub fn theme(&mut self) -> ReviewTheme {
@@ -541,91 +534,40 @@ impl DesktopHarness {
     }
 
     pub fn right_click(&mut self, id: &str) -> Result<(), TestError> {
-        self.press_pointer(id, PointerButton::Secondary)
+        self.ui.right_click_on(id)
     }
 
     pub fn hover(&mut self, id: &str) -> Result<(), TestError> {
-        self.advance();
-        let point = self.ui.center_of(id)?;
-        self.settle_pointer(point);
-        Ok(())
+        self.ui.hover_on(id)
     }
 
     pub fn drag(&mut self, id: &str, to: Point) -> Result<(), TestError> {
-        let from = self.ui.center_of(id)?;
-        self.ui.pointer_moved(from);
-        self.ui.pointer_down(PointerButton::Primary);
-        for step in 1..=DRAG_STEPS {
-            let progress = f32::from(step) / f32::from(DRAG_STEPS);
-            self.ui.pointer_moved(Point::new(from.x + (to.x - from.x) * progress, from.y + (to.y - from.y) * progress));
-            self.advance();
-        }
-        self.ui.pointer_up(PointerButton::Primary);
-        self.advance();
-        Ok(())
+        self.ui.drag_on(id, to)
     }
 
     pub fn scroll(&mut self, id: &str, delta: Point) -> Result<(), TestError> {
-        let point = self.ui.center_of(id)?;
-        self.ui.pointer_moved(point);
-        self.ui.scroll(delta);
-        self.advance();
-        Ok(())
+        self.ui.scroll_on(id, delta)
     }
 
     pub fn click_nth(&mut self, id: &str, index: usize) -> Result<(), TestError> {
-        self.advance();
-        let target = self.ui.bounds_of_all(id).get(index).map(Rect::center);
-        self.click_at(target.ok_or_else(|| TestError::NoTestId(format!("{id} #{index}")))?);
-        Ok(())
+        self.ui.click_nth(id, index)
     }
 
     pub fn scroll_into_view(&mut self, scroller: &str, id: &str) -> Result<(), TestError> {
-        for _ in 0..MAX_SCROLLS {
-            let view = self.bounds(scroller).ok_or_else(|| TestError::NoTestId(scroller.to_owned()))?;
-            let target = self.bounds(id).ok_or_else(|| TestError::NoTestId(id.to_owned()))?;
-            let delta = if target.max().y > view.max().y {
-                view.max().y - target.max().y
-            } else if target.origin.y < view.origin.y {
-                view.origin.y - target.origin.y
-            } else {
-                return Ok(());
-            };
-            self.scroll(scroller, Point::new(0.0, delta))?;
-        }
-        panic!("`{id}` never scrolled into view in `{scroller}`");
+        self.ui.scroll_into_view(scroller, id)
     }
 
     pub fn type_text(&mut self, text: &str) {
         self.ui.type_text(text);
-        self.advance();
     }
 
     pub fn press(&mut self, keys: &str) {
-        for keys in keys.split_whitespace() {
-            let chord = Chord::parse(keys).unwrap_or_else(|error| panic!("`{keys}` is not a chord: {error}"));
-            let mut down = KeyEvent::new(chord.key.clone()).with_modifiers(chord.modifiers);
-            let typed = match &chord.key {
-                Key::Character(text) => Some(text.clone()),
-                Key::Space => Some(" ".to_owned()),
-                _ => None,
-            };
-            if let Some(typed) = typed.filter(|_| !chord.modifiers.command()) {
-                down = down.with_text(typed);
-            }
-            self.ui.key_down(down);
-            self.ui.key_up(KeyEvent::new(chord.key).with_modifiers(chord.modifiers));
-            self.advance();
-        }
+        self.ui.press(keys);
+        self.advance();
     }
 
     pub fn drop_files(&mut self, on: &str, paths: Vec<PathBuf>) -> Result<(), TestError> {
-        let point = self.ui.center_of(on)?;
-        self.ui.pointer_moved(point);
-        self.ui.file_drop(FileDropPhase::Hover, paths.clone());
-        self.ui.file_drop(FileDropPhase::Drop, paths);
-        self.advance();
-        Ok(())
+        self.ui.drop_files_on(on, paths)
     }
 
     pub fn resize(&mut self, width: f32, height: f32) {
@@ -639,21 +581,9 @@ impl DesktopHarness {
     }
 
     pub fn advance(&mut self) {
-        loop {
+        self.ui.advance(0.0);
+        while !self.ui.take_window_commands().is_empty() {
             self.ui.advance(0.0);
-            let commands = self.ui.take_window_commands();
-            if commands.is_empty() {
-                return;
-            }
-            for command in commands {
-                match command {
-                    WindowCommand::Menu(item) => {
-                        item.dispatch(&mut self.ui);
-                    }
-                    WindowCommand::Focus => self.ui.set_focused(true),
-                    _ => {}
-                }
-            }
         }
     }
 
@@ -708,25 +638,6 @@ impl DesktopHarness {
             let _ = runtime.block_on(flush);
             runtime.shutdown_background();
         }
-    }
-
-    fn press_pointer(&mut self, id: &str, button: PointerButton) -> Result<(), TestError> {
-        self.advance();
-        let point = self.ui.center_of(id)?;
-        self.ui.advance(CLICK_PAUSE);
-        self.settle_pointer(point);
-        self.ui.pointer_down(button);
-        self.ui.pointer_up(button);
-        self.advance();
-        Ok(())
-    }
-
-    fn settle_pointer(&mut self, point: Point) {
-        self.ui.pointer_moved(point);
-        self.ui.advance(HOVER_PAUSE);
-        self.advance();
-        self.ui.pointer_moved(point);
-        self.advance();
     }
 
     fn until_answered(&mut self, thread: Thread, prompt: &str, send: impl FnOnce(&mut Self)) {
@@ -808,11 +719,7 @@ fn save_session(store: &TestStore, session_id: &str, cwd: &str, created_at: &str
 }
 
 const DEFAULT_NOW: &str = "2026-01-07T12:00:00Z";
-const DRAG_STEPS: u8 = 8;
-const MAX_SCROLLS: usize = 100;
 const POLL: Duration = Duration::from_millis(1);
-const CLICK_PAUSE: f64 = 1.0;
-const HOVER_PAUSE: f64 = 0.5;
 
 fn parse_time(time: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(time).expect("an RFC 3339 time").to_utc()

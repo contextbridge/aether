@@ -1,7 +1,7 @@
 use agent_client_protocol::v2::schema::SessionId;
-use clankerdiff_rouge_shell::persist::Store;
-use clankerdiff_rouge_shell::rouge::reactive::{Signal, Stored, signal, stored};
 use clankerdiff_ui_core::ThemePreference;
+use rouge::persist::Store;
+use rouge::reactive::{Signal, Stored, signal, stored};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::io;

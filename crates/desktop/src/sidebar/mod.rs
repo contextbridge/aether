@@ -13,17 +13,15 @@ use crate::remotes::{Action, Fleet, RemoteSpec};
 use crate::tasks::spawn_in;
 use crate::threads::{Thread, ThreadManager};
 use crate::ui::{
-    Icon, IconName, MenuItem, PanelSide, StyledExt, UiStyles, UiTheme, dispatch, icon_button, icon_slot, list_row,
-    panel_toggle, resizable_panel, section_header, tree_row, with_menu,
+    Icon, IconName, MenuItem, Side, StyledExt, Theme, UiStyles, context_menu, dispatch, icon_button, icon_slot,
+    list_row, panel_toggle, resizable_panel, section_header, tree_row,
 };
 use agent_client_protocol::v2::schema::SessionId;
-use clankerdiff_rouge_shell::rouge::core::{
+use listing::{Listing, RemoteSection, Row, Section, project_name};
+use rouge::core::{
     AnyView, Div, Styled, View, div, dynamic, each, root_font_size, scroll, show, text, view, window_size,
 };
-use clankerdiff_rouge_shell::rouge::reactive::{
-    Callback, Memo, ReadSignal, Scope, Signal, Stored, effect, memo, signal, stored, untrack,
-};
-use listing::{Listing, RemoteSection, Row, Section, project_name};
+use rouge::reactive::{Callback, Memo, ReadSignal, Scope, Signal, Stored, effect, memo, signal, stored, untrack};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -64,7 +62,7 @@ struct Rename {
 pub(crate) fn toggle_button(open: bool) -> AnyView {
     view! {
         <div flex_none flex items_center>
-            <panel_toggle side=PanelSide::Left id="toggle-sidebar" open name="sidebar"
+            <panel_toggle side=Side::Left id="toggle-sidebar" open name="sidebar"
                           on_click={|| dispatch(crate::ToggleSidebar)}/>
         </div>
     }
@@ -126,7 +124,7 @@ impl Sidebar {
     }
 
     pub(crate) fn view(self) -> impl View {
-        let theme = UiTheme::current();
+        let theme = Theme::current();
         let stored_width = memo(move || self.registry.with(|state| state.sidebar_width));
         let width = signal(stored_width.get_untracked().unwrap_or(DEFAULT_SIDEBAR_WIDTH));
         effect(move || {
@@ -142,8 +140,8 @@ impl Sidebar {
         };
         let on_reset = move || self.registry.update(|state| state.sidebar_width = None);
         view! {
-            <resizable_panel id="sidebar" side=PanelSide::Left width_in_rem=width min_width=MIN_SIDEBAR_WIDTH
-                             max_width=MAX_SIDEBAR_WIDTH on_resize on_reset h_full flex col bg=theme.chrome>
+            <resizable_panel test_id="sidebar" edge=Side::Left size=width min_size=MIN_SIDEBAR_WIDTH
+                             max_size=MAX_SIDEBAR_WIDTH on_resize=on_resize on_reset=on_reset h_full flex col bg=theme.chrome>
                 <div top_bar pr=8.0 gap=4.0>
                     <div flex_1/>
                     <icon_button id="search-threads" icon=IconName::Search label="Search threads"
@@ -265,9 +263,9 @@ impl Sidebar {
         let header = move || {
             let items = self.add_project_items();
             let add = view! {
-                <with_menu items>
+                <context_menu items dropdown>
                     <icon_button id="add-project" icon=IconName::FolderPlus label="Add project"/>
-                </with_menu>
+                </context_menu>
             };
             view! {
                 <section_header id="section-local" title="Local" expanded={!collapsed.get()}
@@ -301,12 +299,12 @@ impl Sidebar {
             .into_iter()
             .map(|root| {
                 let name = project_name(&root);
-                MenuItem::new(name.clone(), move || self.add_project(root.clone()))
+                MenuItem::callback(name.clone(), move || self.add_project(root.clone()))
                     .id(format!("add-project-recent-{name}"))
             })
             .collect();
         items.push(
-            MenuItem::new("Choose folder…", move || self.browse_for_project())
+            MenuItem::callback("Choose folder…", move || self.browse_for_project())
                 .id("add-project-browse")
                 .icon(IconName::FolderPlus),
         );
@@ -373,7 +371,7 @@ impl Sidebar {
                 let root = root.clone();
                 view! {
                     <tree_row id={format!("{id}-show-more")} label={format!("Show {hidden} more")} depth=1
-                              leading={icon_slot().into_any()} label_color=UiTheme::current().text_muted
+                              leading={icon_slot().into_any()} label_color=Theme::current().text_muted
                               on_click={move || self.show_more(root.clone())}/>
                 }
             })
@@ -398,17 +396,17 @@ impl Sidebar {
             let agents = catalog.agents().iter().map(|agent| {
                 let (root, agent) = (root.to_path_buf(), agent.clone());
                 let id = format!("new-thread-agent-{}", agent.name);
-                MenuItem::new(agent.name.clone(), move || self.new_thread_with(root.clone(), agent.clone())).id(id)
+                MenuItem::callback(agent.name.clone(), move || self.new_thread_with(root.clone(), agent.clone())).id(id)
             });
             let problems = catalog.problems().iter().enumerate().map(|(index, problem)| {
                 let file = problem.path().to_path_buf();
-                MenuItem::new(problem.to_string(), move || self.open_path(&file))
+                MenuItem::callback(problem.to_string(), move || self.open_path(&file))
                     .id(format!("new-thread-problem-{index}"))
                     .icon(IconName::CircleX)
             });
             let items: Vec<MenuItem> = agents.chain(problems).collect();
             view! {
-                <with_menu items><icon_button id=button_id icon=IconName::Plus label/></with_menu>
+                <context_menu items dropdown><icon_button id=button_id icon=IconName::Plus label/></context_menu>
             }
             .into_any()
         } else {
@@ -488,7 +486,7 @@ impl Sidebar {
 
     fn group_header(self, header: Header) -> Div {
         let Header { id, label, icon: (icon_id, icon), group, collapsed, actions, new_thread } = header;
-        let muted = UiTheme::current().text_muted;
+        let muted = Theme::current().text_muted;
         let hovered = signal(false);
         let (actions_label, items) = actions;
         let actions_id = format!("{id}-actions");
@@ -505,7 +503,7 @@ impl Sidebar {
         })
         .child(view! {
             <div flex items_center opacity={move || if hovered.get() { 1.0 } else { 0.0 }}>
-                <with_menu items><icon_button id=actions_id icon=IconName::Ellipsis label=actions_label/></with_menu>
+                <context_menu items dropdown><icon_button id=actions_id icon=IconName::Ellipsis label=actions_label/></context_menu>
                 {new_thread}
             </div>
         })
@@ -514,10 +512,10 @@ impl Sidebar {
     fn project_actions(self, root: &Path) -> Vec<MenuItem> {
         let (archive_root, remove_root) = (root.to_path_buf(), root.to_path_buf());
         vec![
-            MenuItem::new("Archive inactive threads", move || self.archive_inactive(&archive_root))
+            MenuItem::callback("Archive inactive threads", move || self.archive_inactive(&archive_root))
                 .id("menu-archive-inactive")
                 .icon(IconName::Archive),
-            MenuItem::new("Remove from sidebar", move || self.remove_project(&remove_root))
+            MenuItem::callback("Remove from sidebar", move || self.remove_project(&remove_root))
                 .id("menu-remove-project")
                 .icon(IconName::X),
         ]
@@ -525,10 +523,11 @@ impl Sidebar {
 
     fn remote_actions(self) -> Vec<MenuItem> {
         let fleet = self.fleet;
-        let refresh =
-            MenuItem::new("Refresh", move || fleet.refresh()).id("menu-refresh-instances").icon(IconName::RotateCw);
+        let refresh = MenuItem::callback("Refresh", move || fleet.refresh())
+            .id("menu-refresh-instances")
+            .icon(IconName::RotateCw);
         let open = fleet.file().map(|file| {
-            MenuItem::new("Open remotes.json", move || self.open_path(&file))
+            MenuItem::callback("Open remotes.json", move || self.open_path(&file))
                 .id("menu-open-remotes-file")
                 .icon(IconName::FileText)
         });

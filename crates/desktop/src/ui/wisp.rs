@@ -1,9 +1,7 @@
-use clankerdiff_rouge_shell::rouge::core::{
+use rouge::core::{
     Color, Div, Ease, Effect, Inputs, IntoProp, PaintRegion, Prop, Styled, Tween, div, switch, window_focused,
 };
-use clankerdiff_rouge_shell::rouge::reactive::{
-    Signal, expect_context, memo, provide_context, signal, stored, use_context,
-};
+use rouge::reactive::{Signal, expect_context, memo, provide_context, signal, stored, use_context};
 
 /// Activity, not progress: each state has a distinct silhouette and direction of motion.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

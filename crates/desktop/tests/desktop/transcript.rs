@@ -5,7 +5,7 @@ use acp_utils::testing::{
 use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder};
 use aether_desktop::threads::{Thread, ThreadStatus};
 use agent_client_protocol::v2::schema as acp;
-use clankerdiff_rouge_shell::rouge::core::Point;
+use rouge::core::Point;
 use std::fmt::Write;
 
 #[test]

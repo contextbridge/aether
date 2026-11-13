@@ -1,9 +1,9 @@
 use crate::platform::Platform;
-use crate::ui::ActiveTheme;
+use crate::ui::ActiveReviewTheme;
 use clankerdiff_markdown::{MarkdownBlock, MarkdownStream};
 use clankerdiff_rouge::{MarkdownOutput, markdown_blocks};
-use clankerdiff_rouge_shell::rouge::core::{Styled, View, WindowHandle, div, dynamic, each, view};
-use clankerdiff_rouge_shell::rouge::reactive::{Callback, Memo, Stored, memo, stored};
+use rouge::core::{Styled, View, WindowHandle, div, dynamic, each, view};
+use rouge::reactive::{Callback, Memo, Stored, memo, stored};
 use std::rc::Rc;
 
 pub(crate) fn reply(text: Memo<String>, window: WindowHandle, platform: Stored<Rc<dyn Platform>>) -> impl View {
@@ -21,7 +21,7 @@ pub(crate) fn reply(text: Memo<String>, window: WindowHandle, platform: Stored<R
             })
         })
     });
-    let theme = ActiveTheme::current().review_signal();
+    let theme = ActiveReviewTheme::current().review_signal();
     let emit = Callback::from(move |output: MarkdownOutput| match output {
         MarkdownOutput::CopyCode(code) => window.copy_text(code),
         MarkdownOutput::OpenLink(url) => platform.with(|platform| platform.open(&url)),

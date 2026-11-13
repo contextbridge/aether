@@ -1,9 +1,9 @@
 use super::code::highlights;
 use super::groups::{GroupKind, Work};
 use crate::ui::tokens::{ICON_SIZE_SMALL, ROW_HEIGHT};
-use crate::ui::typography::Typography;
+use crate::ui::typography::BODY_STRONG;
 use crate::ui::{
-    ButtonVariant, CODE_FONT, ControlSize, Hint, Icon, IconName, UiStyles, UiTheme, WispState, button, disclosure, wisp,
+    ButtonVariant, CODE_FONT, ControlSize, Hint, Icon, IconName, Theme, UiStyles, WispState, button, disclosure, wisp,
 };
 use acp_utils::content::first_line;
 use acp_utils::conversation::{
@@ -13,12 +13,10 @@ use agent_client_protocol::v2::schema as acp;
 use clankerdiff_core::{DiffDocument, LineStat};
 use clankerdiff_rouge::PatchPreview;
 use clankerdiff_rouge::style::stat_badges;
-use clankerdiff_rouge_shell::rouge::core::{
-    AnyView, Cursor, Div, FocusHandle, SpanStyle, Styled, View, div, px, rich_text, text, view,
-};
-use clankerdiff_rouge_shell::rouge::reactive::{Callback, ReadSignal};
 use clankerdiff_syntax::{LanguageHint, SyntaxCell};
 use clankerdiff_ui_core::ReviewTheme;
+use rouge::core::{AnyView, Cursor, Div, FocusHandle, SpanStyle, Styled, View, div, px, rich_text, text, view};
+use rouge::reactive::{Callback, ReadSignal};
 use std::collections::HashMap;
 use std::ops::Range;
 use std::rc::Rc;
@@ -86,7 +84,7 @@ pub(crate) fn fold_header(
     expanded: bool,
     on_toggle: Callback,
 ) -> AnyView {
-    let theme = UiTheme::current();
+    let theme = Theme::current();
     let work = Work::of(items);
     let failed = work.failed > 0;
     if kind == GroupKind::Run {
@@ -145,7 +143,7 @@ impl ToolCard<'_> {
         on_toggle: Callback,
         on_show_all: Callback,
     ) -> AnyView {
-        let theme = UiTheme::current();
+        let theme = Theme::current();
         let expanded = fold != ToolFold::Folded;
         let diffs: Vec<&acp::Diff> = tool.diffs().collect();
         let title = view! {
@@ -247,7 +245,7 @@ impl ToolCard<'_> {
     }
 
     fn changes(&self, diffs: &[&acp::Diff], index: usize) -> Div {
-        let theme = UiTheme::current();
+        let theme = Theme::current();
         let changes = diffs.iter().enumerate().map(|(position, diff)| {
             let patch = diff.patch.as_ref().filter(|patch| !patch.text.trim().is_empty());
             match (patch, self.preview.patch(position)) {
@@ -308,7 +306,7 @@ impl ToolCard<'_> {
     }
 
     fn sub_agent_tree(&self, sub_agents: &[SubAgent]) -> Div {
-        let theme = UiTheme::current();
+        let theme = Theme::current();
         let mut rows: Vec<AnyView> = Vec::new();
         for agent in sub_agents {
             let agent_id = agent.session_id().0.to_string();
@@ -346,8 +344,8 @@ const SECTION_MAX_LINES: usize = 200;
 const SECTION_MAX_BYTES: usize = 16 * 1024;
 
 fn tool_line(icon: AnyView, title: Div, summary: Option<AnyView>, failed: bool) -> [AnyView; 3] {
-    let theme = UiTheme::current();
-    let title = title.typography(Typography::BodyStrong).text_color(theme.text_secondary);
+    let theme = Theme::current();
+    let title = title.typography(BODY_STRONG).text_color(theme.text_secondary);
     let color = if failed { theme.destructive } else { theme.text_muted };
     let summary = view! { <div flex_1 min_w=0.0 overflow_hidden body text_color=color>{summary}</div> };
     [icon, title.into_any(), summary.into_any()]
@@ -376,7 +374,7 @@ fn title(tool: &ToolCall) -> String {
 }
 
 fn section(label: &'static str, content: AnyView) -> Div {
-    let theme = UiTheme::current();
+    let theme = Theme::current();
     view! {
         <div flex col gap=4.0>
             <text label muted>{label}</text>
@@ -403,7 +401,7 @@ fn show_all(id: String, hidden: usize, on_click: Callback) -> AnyView {
 }
 
 fn status_icon(status: ToolStatus, id: &str) -> AnyView {
-    let theme = UiTheme::current();
+    let theme = Theme::current();
     let (icon, color) = match status {
         ToolStatus::Running => {
             return view! {

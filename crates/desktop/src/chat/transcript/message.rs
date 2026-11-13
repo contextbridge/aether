@@ -1,13 +1,13 @@
 use crate::chat::attachment::{Attachment, chip, chip_icon, thumbnail};
 use crate::threads::{Thread, ThreadStatus};
 use crate::ui::{
-    ButtonVariant, Icon, IconName, SurfaceExt, UiStyles, UiTheme, backdrop, button, disclosure, icon_button,
+    ButtonVariant, Icon, IconName, Material, MaterialExt, Theme, UiStyles, backdrop, button, disclosure, icon_button,
 };
 use clankerdiff_rouge::{ReviewHandle, diff_view};
-use clankerdiff_rouge_shell::rouge::core::{
+use rouge::core::{
     AnyView, Color, Cursor, Div, Fit, ImageSource, Styled, View, WindowHandle, div, image, pct, px, text, view,
 };
-use clankerdiff_rouge_shell::rouge::reactive::{Callback, Signal};
+use rouge::reactive::{Callback, Signal};
 use std::sync::Arc;
 
 pub(crate) fn prompt(
@@ -39,8 +39,8 @@ pub(crate) fn prompt(
     let body = (!body.is_empty()).then(|| view! { <text reading>{body}</text> });
     let files = (!attachments.is_empty()).then(|| view! { <div flex flex_wrap gap=8.0>{..attachments}</div> });
     view! {
-        <div test_id={format!("prompt-{row}")} max_w=pct(PROMPT_MAX_WIDTH) px=16.0 py=8.0 flex col gap=8.0 surface
-             bg=UiTheme::current().elevated>
+        <div test_id={format!("prompt-{row}")} max_w=pct(PROMPT_MAX_WIDTH) px=16.0 py=8.0 flex col gap=8.0 material=Material::Surface
+             bg=Theme::current().elevated>
             {body}
             {files}
         </div>
@@ -69,7 +69,7 @@ pub(crate) fn image_preview(bytes: Arc<[u8]>, on_close: Callback) -> impl View {
 pub(crate) fn full_diff(handle: &ReviewHandle, on_close: Callback) -> impl View + use<> {
     view! {
         <backdrop id="full-diff" on_dismiss=on_close>
-            <div test_id="full-diff-panel" w=pct(100.0) h=pct(100.0) min_h=0.0 flex col overflow_hidden floating>
+            <div test_id="full-diff-panel" w=pct(100.0) h=pct(100.0) min_h=0.0 flex col overflow_hidden material=Material::Floating>
                 <div flex justify_end p=4.0>
                     <icon_button id="close-full-diff" icon=IconName::X label="Close" on_click=on_close/>
                 </div>
@@ -86,7 +86,7 @@ pub(crate) fn thinking_block(
     expanded: bool,
     on_toggle: Callback,
 ) -> AnyView {
-    let theme = UiTheme::current();
+    let theme = Theme::current();
     let body = expanded.then(|| {
         view! {
             <div test_id={format!("thinking-text-{index}")} pl=12.0 border_l=px(2.0) border_color=theme.border_subtle>
@@ -106,20 +106,20 @@ pub(crate) fn thinking_block(
 }
 
 pub(crate) fn notice(text: &str) -> AnyView {
-    line(IconName::Info, UiTheme::current().text_muted.get_untracked(), text).into_any()
+    line(IconName::Info, Theme::current().text_muted.get_untracked(), text).into_any()
 }
 
 pub(crate) fn error(index: usize, text: &str) -> AnyView {
-    line(IconName::TriangleAlert, UiTheme::current().destructive.get_untracked(), text)
+    line(IconName::TriangleAlert, Theme::current().destructive.get_untracked(), text)
         .test_id(format!("transcript-error-{index}"))
         .into_any()
 }
 
 pub(crate) fn reconnect_banner(thread: Thread, status: ThreadStatus) -> Option<Div> {
     let problem = status.problem()?;
-    let warning = UiTheme::current().warning.get_untracked();
+    let warning = Theme::current().warning.get_untracked();
     Some(view! {
-        <div px=12.0 py=8.0 flex items_center gap=8.0 surface bg=UiTheme::current().elevated>
+        <div px=12.0 py=8.0 flex items_center gap=8.0 material=Material::Surface bg=Theme::current().elevated>
             {line(IconName::TriangleAlert, warning, problem).flex_1().min_w(0.0)}
             {reconnect_button(thread)}
         </div>

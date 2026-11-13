@@ -1,6 +1,6 @@
 use crate::tasks::{blocking, spawn_in};
 use clankerdiff_remote::{Remotes, RemotesFile};
-use clankerdiff_rouge_shell::rouge::reactive::{Scope, Signal, Stored, signal, sleep, stored};
+use rouge::reactive::{Scope, Signal, Stored, signal, sleep, stored};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};

@@ -1,9 +1,9 @@
 use super::tokens::{BAR_HEIGHT, CONTENT_MAX_WIDTH, ICON_SIZE, RADIUS_CONTROL};
-use super::{Hint, SearchPickerEvent, UI_FONT, UiTheme};
-use clankerdiff_rouge_shell::rouge::core::{
+use super::{Hint, SearchPickerEvent, Theme, UI_FONT};
+use rouge::core::{
     AnyView, Div, MenuItem as WindowMenuItem, Styled, View, auto, div, editable, px, styles, text, view, window_handle,
 };
-use clankerdiff_rouge_shell::rouge::reactive::Signal;
+use rouge::reactive::Signal;
 use std::any::Any;
 
 styles! {
@@ -18,7 +18,7 @@ pub(crate) fn icon_slot() -> Div {
 }
 
 pub(crate) fn with_middots(parts: impl IntoIterator<Item = AnyView>) -> Vec<AnyView> {
-    let muted = UiTheme::current().text_muted;
+    let muted = Theme::current().text_muted;
     let mut separated = Vec::new();
     for part in parts {
         if !separated.is_empty() {
@@ -34,7 +34,7 @@ pub(crate) fn hint(id: impl Into<String>, label: &'static str, child: impl View)
 }
 
 pub(crate) fn text_field(id: impl Into<String>, value: Signal<String>, on_submit: impl Fn(&str) + 'static) -> Div {
-    let theme = UiTheme::current();
+    let theme = Theme::current();
     view! {
         <div min_w=0.0 px=8.0 py=4.0 rounded=RADIUS_CONTROL border=px(1.0) border_color=theme.border bg=theme.canvas>
             <editable value test_id=id font=UI_FONT text_size=13.0 color=theme.text w_full on_submit=on_submit/>

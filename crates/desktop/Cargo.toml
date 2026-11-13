@@ -47,7 +47,6 @@ workspace = true
 acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client", "websocket"], version = "0.5.19" }
 agent-client-protocol = { workspace = true, features = ["process"] }
 aether-sessions = { path = "../aether-sessions", version = "0.3.19" }
-arboard = { version = "3.7", default-features = false, features = ["image-data", "wayland-data-control"] }
 base64 = { workspace = true }
 chrono = { workspace = true }
 client_core = { package = "aether-client-core", path = "../client-core", version = "0.1.0" }
@@ -57,14 +56,12 @@ clankerdiff-lspd = { workspace = true, features = ["daemon"] }
 clankerdiff-markdown = { workspace = true }
 clankerdiff-remote = { workspace = true }
 clankerdiff-rouge = { workspace = true }
-clankerdiff-rouge-shell = { workspace = true }
-clankerdiff-rouge-ui = { workspace = true }
 clankerdiff-syntax = { workspace = true }
 clankerdiff-ui-core = { workspace = true }
 clap = { workspace = true }
-image = { version = "0.25", default-features = false, features = ["png"] }
 rfd = { version = "0.16", default-features = false, features = ["xdg-portal", "tokio"] }
 rouge = { workspace = true, features = ["tokio-rt", "open-url"] }
+rouge-widgets = { workspace = true }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 serde = { workspace = true }
 serde_json = { workspace = true }

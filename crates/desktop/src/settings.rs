@@ -1,13 +1,13 @@
 use crate::registry::Registry;
 use crate::theme;
 use crate::ui::{
-    ButtonVariant, ControlSize, GlassExt, ModalSize, ThemePickerEvent, UiStyles, backdrop, bare, button, modal_width,
-    theme_picker, theme_picker_view,
+    ButtonVariant, ControlSize, Material, MaterialExt, ModalSize, ThemePickerEvent, UiStyles, backdrop, button,
+    modal_width, theme_picker, theme_picker_view,
 };
-use clankerdiff_rouge_shell::rouge::core::{AnyView, Div, Styled, View, div, dynamic, pct, text, view};
-use clankerdiff_rouge_shell::rouge::reactive::{Callback, Signal, effect, memo, signal, untrack};
-use clankerdiff_rouge_shell::rouge::widgets::{Placement, popover};
 use clankerdiff_ui_core::{Appearance, AppearanceMode, ReviewTheme, ThemeChoice};
+use rouge::core::{AnyView, Div, Styled, View, div, dynamic, pct, text, view};
+use rouge::reactive::{Callback, Signal, effect, memo, signal, untrack};
+use rouge::widgets::{Placement, popover};
 
 pub(crate) fn settings(registry: Registry, on_close: impl Fn() + 'static) -> impl View {
     let on_close = Callback::from(on_close);
@@ -18,7 +18,7 @@ pub(crate) fn settings(registry: Registry, on_close: impl Fn() + 'static) -> imp
     view! {
         <backdrop id="settings-backdrop" on_dismiss=close>
             <div test_id="settings" w={modal_width(ModalSize::Compact)} max_w=pct(100.0) p=16.0 flex col gap=8.0
-                 overflow_hidden glass_sheet>
+                 overflow_hidden material=Material::Glass>
                 <text heading primary>"Settings"</text>
                 <text small muted>"Esc to close"</text>
                 <div flex col min_h=0.0>
@@ -101,7 +101,7 @@ fn picker(registry: Registry, appearance: Appearance, open: Signal<bool>) -> imp
         }
         ThemePickerEvent::Cancel(_) => open.set(false),
     });
-    bare(|| view! { <theme_picker_view id={format!("{}-themes", key(appearance))} handle/> })
+    view! { <theme_picker_view id={format!("{}-themes", key(appearance))} handle material={Material::Bare}/> }
 }
 
 fn show_saved_theme(registry: Registry) {

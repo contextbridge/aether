@@ -4,14 +4,12 @@ use crate::remotes::{InstanceState, Lifecycle};
 use crate::threads::ThreadStatus;
 use crate::ui::tokens::{ICON_SIZE, ROW_HEIGHT, TWO_LINE_ROW_HEIGHT, UNREAD_DOT_SIZE};
 use crate::ui::{
-    Icon, IconName, SelectionState, UiStyles, UiTheme, WispState, hint, icon_button, icon_slot, inline_edit, list_row,
+    Icon, IconName, SelectionState, Theme, UiStyles, WispState, hint, icon_button, icon_slot, inline_edit, list_row,
     wisp,
 };
-use clankerdiff_rouge_shell::rouge::core::{
-    AnyView, Apply, Div, MenuItem as WindowMenuItem, Styled, View, div, text, view,
-};
-use clankerdiff_rouge_shell::rouge::reactive::{Signal, signal};
-use clankerdiff_rouge_shell::rouge::widgets::context_menu;
+use rouge::core::{AnyView, Apply, Div, MenuItem as WindowMenuItem, Styled, View, div, text, view};
+use rouge::reactive::{Signal, signal};
+use rouge::widgets::context_menu;
 
 #[derive(Clone, PartialEq)]
 pub(super) enum RowIcon {
@@ -31,7 +29,7 @@ pub(super) enum RowAction {
 
 pub(super) fn row(sidebar: &Sidebar, row: &Row) -> AnyView {
     let sidebar = *sidebar;
-    let theme = UiTheme::current();
+    let theme = Theme::current();
     let selector = row.key.selector();
     let hovered = signal(false);
     let editing = matches!(row.kind, RowKind::Local { editing: true, .. });
@@ -188,7 +186,7 @@ fn open_row(row: &Row, sidebar: &Sidebar) {
 
 fn title(selector: &str, row: &Row) -> AnyView {
     let muted = matches!(row.icon, RowIcon::Status(ThreadStatus::Dormant) | RowIcon::Instance(_));
-    let theme = UiTheme::current();
+    let theme = Theme::current();
     let color = if muted { theme.text_muted } else { theme.text };
     view! {
         <div test_id={format!("{selector}-title")} min_w=0.0 overflow_hidden>
@@ -213,7 +211,7 @@ fn rename_editor(sidebar: &Sidebar) -> AnyView {
 }
 
 fn trailing(selector: &str, age: Option<String>, actions: Vec<AnyView>, selected: bool, hovered: Signal<bool>) -> Div {
-    let theme = UiTheme::current();
+    let theme = Theme::current();
     let age = age.map(|age| {
         view! {
             <div test_id={format!("{selector}-age-{age}")} opacity={move || if hovered.get() { 0.0 } else { 1.0 }}>
@@ -234,7 +232,7 @@ fn trailing(selector: &str, age: Option<String>, actions: Vec<AnyView>, selected
 }
 
 fn status_icon(row: &str, status: ThreadStatus) -> AnyView {
-    let theme = UiTheme::current();
+    let theme = Theme::current();
     let (name, label, shape, icon, color) = match status {
         ThreadStatus::Connecting => ("connecting", "Starting agent", "wisp", None, theme.text_muted),
         ThreadStatus::Running => ("running", "Agent working", "wisp", None, theme.info),
@@ -275,7 +273,7 @@ fn status_icon(row: &str, status: ThreadStatus) -> AnyView {
 }
 
 fn instance_icon(row: &str, state: Option<InstanceState>) -> AnyView {
-    let muted = UiTheme::current().text_muted;
+    let muted = Theme::current().text_muted;
     let (name, label, icon) = match state {
         Some(InstanceState::Suspended) => ("suspended", "Suspended", Some(IconName::Pause)),
         Some(InstanceState::Running) | None => ("unattached", "Running, with no thread on it", Some(IconName::Unplug)),

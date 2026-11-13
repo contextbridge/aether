@@ -4,8 +4,8 @@ use crate::app::{
     SWITCHER_KEYS, SelectNextThread, SelectPreviousThread, ShowChat, ShowFiles, TOGGLE_SIDEBAR_KEYS, ToggleSidebar,
     chord,
 };
-use crate::ui::interface_size::SizeAction;
-use clankerdiff_rouge_shell::rouge::{Menu, MenuItem};
+use crate::ui::SizeAction;
+use rouge::{Menu, MenuItem};
 
 pub(crate) const APP_NAME: &str = "Aether";
 
@@ -36,5 +36,5 @@ pub(crate) fn all() -> Vec<Menu> {
         ],
     );
     let app = vec![MenuItem::action("Settings…", OpenSettings).shortcut(chord(SETTINGS_KEYS))];
-    clankerdiff_rouge_shell::menus::build(APP_NAME, app, vec![view, threads])
+    vec![Menu::app(APP_NAME, app), view, threads]
 }

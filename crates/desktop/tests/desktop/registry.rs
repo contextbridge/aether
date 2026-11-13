@@ -1,6 +1,6 @@
 use aether_desktop::registry::{Registry, STATE_FILE, State, load};
 use agent_client_protocol::v2::schema::SessionId;
-use clankerdiff_rouge_shell::rouge::reactive::Runtime as Reactive;
+use rouge::reactive::Runtime as Reactive;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tokio::runtime::Builder;

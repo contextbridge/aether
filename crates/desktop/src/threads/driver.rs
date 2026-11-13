@@ -1,10 +1,10 @@
 use super::thread::Thread;
 use crate::target::{AgentConnector, ConnectError, SessionTarget};
 use agent_client_protocol::v2::schema::SessionId;
-use clankerdiff_rouge_shell::rouge::reactive::{Task, spawn, spawn_tokio};
 use client_core::command::{Command, ReviewSource};
 use client_core::runtime::{Input, SessionRuntime};
 use client_core::session_core::SessionCoreConfig;
+use rouge::reactive::{Task, spawn, spawn_tokio};
 use std::future::Future;
 use std::pin::pin;
 use std::sync::Arc;

@@ -3,9 +3,9 @@ use acp_utils::testing::FakeAgent;
 use aether_desktop::registry::{STATE_FILE, load};
 use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder};
 use aether_desktop::threads::ThreadStatus;
-use aether_desktop::ui::interface_size::DEFAULT_INTERFACE_SIZE;
+use aether_desktop::ui::DEFAULT_INTERFACE_SIZE;
 use agent_client_protocol::v2::schema::SessionId;
-use clankerdiff_rouge_shell::rouge::core::Point;
+use rouge::core::Point;
 use std::path::{Path, PathBuf};
 use tokio::runtime::Builder;
 

@@ -28,26 +28,31 @@ pub use app::{
     SelectPreviousThread, ShowChat, ShowFiles, ToggleSidebar,
 };
 pub use clankerdiff_ui_core::{AppearanceMode, ThemePreference};
-pub use ui::ActiveTheme;
+pub use ui::ActiveReviewTheme;
 
 use aether_sessions::SessionStore;
 use agents::{Agents, default_agents_file};
 use clankerdiff_remote::CommandRemotes;
-use clankerdiff_rouge_shell::rouge::{App, WindowOptions};
-use clankerdiff_rouge_shell::{launch, runtime};
 use cli::Cli;
 use clock::SystemClock;
 use platform::SystemPlatform;
 use registry::{State, WindowSize, default_state_file};
+use rouge::{App, WindowOptions};
+use rouge_widgets::bundled_fonts;
 use rustls::crypto::aws_lc_rs;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 use target::ProcessTransport;
+use tokio::runtime::Builder;
 
 pub fn run(cli: Cli) {
     aws_lc_rs::default_provider().install_default().expect("failed to install the Rustls AWS-LC crypto provider");
-    let runtime = runtime::build();
+    let runtime = Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("failed to start the desktop Tokio runtime");
     let state_file = default_state_file();
     if state_file.is_none() {
         tracing::warn!("no home directory, so nothing is remembered between runs");
@@ -64,8 +69,12 @@ pub fn run(cli: Cli) {
         registry: saved,
         platform: Rc::new(SystemPlatform),
     };
-    let app = App::new().menus(menus::all()).window(options, move || DesktopApp::new(config).view());
-    if let Err(error) = launch(app, &runtime) {
+    let app = App::new()
+        .fonts(bundled_fonts())
+        .tokio(runtime.handle().clone())
+        .menus(menus::all())
+        .window(options, move || DesktopApp::new(config).view());
+    if let Err(error) = app.run() {
         eprintln!("{}: {error}", menus::APP_NAME);
     }
     runtime.block_on(async {

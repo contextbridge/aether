@@ -5,7 +5,7 @@ use crate::history::git_root;
 use crate::remotes::RemoteSpec;
 use crate::target::{AgentConnector, SessionTarget};
 use agent_client_protocol::v2::schema::SessionId;
-use clankerdiff_rouge_shell::rouge::reactive::{Callback, Scope, Signal, Stored, signal, stored};
+use rouge::reactive::{Callback, Scope, Signal, Stored, signal, stored};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

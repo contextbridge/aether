@@ -1,14 +1,12 @@
 use crate::platform::Platform;
 use crate::threads::Thread;
-use crate::ui::ActiveTheme;
+use crate::ui::ActiveReviewTheme;
 use clankerdiff_core::ReviewCapabilities;
 use clankerdiff_markdown::{MarkdownDocument, MarkdownReviewDecision, MarkdownReviewEvent, MarkdownReviewSubmission};
 use clankerdiff_rouge::{MarkdownController, MarkdownHandle, MarkdownOutput, markdown_review_view};
-use clankerdiff_rouge_shell::rouge::core::{Styled, View, WindowHandle, div, dynamic, view, window_handle};
-use clankerdiff_rouge_shell::rouge::reactive::{
-    Callback, Scope, Signal, Stored, effect, memo, signal, spawn, stored, untrack,
-};
 use client_core::elicitation::{ElicitationAnswer, ElicitationId};
+use rouge::core::{Styled, View, WindowHandle, div, dynamic, view, window_handle};
+use rouge::reactive::{Callback, Scope, Signal, Stored, effect, memo, signal, spawn, stored, untrack};
 use std::rc::Rc;
 use std::sync::Arc;
 use utils::artifact_review::{ArtifactReviewElicitationMeta, ArtifactReviewSubmission};
@@ -46,7 +44,7 @@ impl ArtifactReview {
             untrack(|| review.sync(pending));
         });
         effect(move || {
-            let theme = ActiveTheme::current().review();
+            let theme = ActiveReviewTheme::current().review();
             untrack(|| {
                 if let Some(reviewer) = review.reviewer.get_untracked() {
                     reviewer.handle.set_theme(theme);
@@ -85,7 +83,7 @@ impl ArtifactReview {
         let ArtifactReviewElicitationMeta { path, title, markdown, .. } = meta;
         let document =
             MarkdownDocument::parse_with_metadata(path.map(|path| path.display().to_string()), Some(title), markdown);
-        let theme = ActiveTheme::current().review();
+        let theme = ActiveReviewTheme::current().review();
         let scope = self.scope.child();
         let handle = scope.run(|| {
             let handle =

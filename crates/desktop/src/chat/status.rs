@@ -1,16 +1,16 @@
 use crate::tasks::spawn_in;
 use crate::threads::{Thread, ThreadStatus};
 use crate::ui::tokens::{ICON_SIZE, ICON_SIZE_SMALL, ROW_HEIGHT};
-use crate::ui::{Hint, Icon, IconName, UiStyles, UiTheme, WispMotion, WispState, wisp};
+use crate::ui::{Hint, Icon, IconName, Theme, UiStyles, WispMotion, WispState, wisp};
 use acp_utils::conversation::{Activity, Conversation, ConversationContent, ToolStatus, is_plan_entry_finished};
 use agent_client_protocol::v2::schema as acp;
-use clankerdiff_rouge_shell::rouge::core::{
+use client_core::format::token_count;
+use rouge::core::{
     AnyView, Cursor, Div, Ease, Keyframes, PaintRegion, Path, Point, Pose, Styled, TextAlign, Tween, View, canvas, div,
     dynamic, pct, show, switch, text, view, window_focused,
 };
-use clankerdiff_rouge_shell::rouge::reactive::{Memo, Scope, Signal, effect, memo, signal, sleep, stored, untrack};
-use clankerdiff_rouge_shell::rouge::widgets::{Placement, popover};
-use client_core::format::token_count;
+use rouge::reactive::{Memo, Scope, Signal, effect, memo, signal, sleep, stored, untrack};
+use rouge::widgets::{Placement, popover};
 use std::cell::Cell;
 use std::f32::consts::TAU;
 use std::time::{Duration, Instant};
@@ -124,7 +124,7 @@ impl StatusLine {
     }
 
     fn activity(self, doing: Memo<Option<Doing>>, plan: Memo<Option<Vec<acp::PlanEntry>>>) -> impl View {
-        let theme = UiTheme::current();
+        let theme = Theme::current();
         let motion = WispMotion::current();
         let details = signal(false);
         let restoring_focus = stored(false);
@@ -196,7 +196,7 @@ impl StatusLine {
 
     fn plan(self, plan: Memo<Option<Vec<acp::PlanEntry>>>) -> impl View {
         let open = self.plan_open;
-        let theme = UiTheme::current();
+        let theme = Theme::current();
         let toggle = dynamic(move || {
             let entries = plan.get().unwrap_or_default();
             let total = entries.len().max(1);
@@ -268,7 +268,7 @@ impl Doing {
 }
 
 fn indicator(doing: Memo<Option<Doing>>, plan: Memo<Option<Vec<acp::PlanEntry>>>) -> impl View {
-    let theme = UiTheme::current();
+    let theme = Theme::current();
     let motion = WispMotion::current();
     let focused = window_focused();
     let region = signal(PaintRegion::default());
@@ -375,7 +375,7 @@ fn activity_detail(thread: Thread, doing: Memo<Option<Doing>>, plan: Memo<Option
 }
 
 fn plan_entries(entries: &[acp::PlanEntry]) -> Div {
-    let theme = UiTheme::current();
+    let theme = Theme::current();
     let rows = entries.iter().enumerate().map(|(index, entry)| {
         let (icon, color) = match entry.status {
             acp::PlanEntryStatus::InProgress => (IconName::CircleDot, theme.accent),
@@ -407,7 +407,7 @@ fn elapsed(elapsed: Signal<Duration>) -> impl View {
 }
 
 fn context_meter(usage: Memo<Option<acp::UsageUpdate>>) -> impl View {
-    let theme = UiTheme::current();
+    let theme = Theme::current();
     dynamic(move || {
         let usage = usage.get()?;
         #[allow(

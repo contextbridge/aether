@@ -2,7 +2,7 @@ use crate::support::{Edges, replying};
 use aether_desktop::sidebar::MIN_MAIN_WIDTH;
 use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder};
 use aether_desktop::threads::{Thread, ThreadStatus};
-use clankerdiff_rouge_shell::rouge::core::Point;
+use rouge::core::Point;
 
 #[test]
 fn widening_the_sidebar_leaves_room_for_the_thread() {

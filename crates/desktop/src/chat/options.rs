@@ -1,13 +1,14 @@
 use crate::threads::Thread;
 use crate::ui::tokens::{COMPOSER_POPUP_HEIGHT, ICON_SIZE_SMALL, RADIUS_INNER, ROW_HEIGHT};
 use crate::ui::{
-    Icon, IconName, PickerItem, SearchPickerHandle, UiStyles, UiTheme, bare, picker_closed, search_picker, with_middots,
+    Icon, IconName, Material, PickerItem, SearchPickerHandle, Theme, UiStyles, picker_closed, search_picker,
+    with_middots,
 };
 use agent_client_protocol::v2::schema as acp;
-use clankerdiff_rouge_shell::rouge::core::{AnyView, Color, Cursor, Length, Styled, View, div, dynamic, text, view};
-use clankerdiff_rouge_shell::rouge::reactive::{memo, signal};
-use clankerdiff_rouge_shell::rouge::widgets::{Placement, popover};
 use client_core::session_config_view::LocalConfigOption;
+use rouge::core::{AnyView, Color, Cursor, Length, Styled, View, div, dynamic, text, view};
+use rouge::reactive::{memo, signal};
+use rouge::widgets::{Placement, popover};
 
 #[derive(Clone, Copy)]
 pub(crate) struct SessionOptions {
@@ -33,7 +34,7 @@ impl SessionOptions {
 
     fn selector(self, option: &LocalConfigOption) -> Option<AnyView> {
         let label = option.display_value()?.to_owned();
-        let theme = UiTheme::current();
+        let theme = Theme::current();
         let id = format!("config-{}", option.id);
         let open = signal(false);
         let hovered = signal(false);
@@ -100,13 +101,11 @@ impl SessionOptions {
             .highlighted(current);
             let searchable =
                 (select.values.len() > SEARCH_THRESHOLD).then(|| format!("Search {}…", option.name.to_lowercase()));
-            bare(|| {
-                view! {
-                    <search_picker id=picker handle searchable?=searchable title={option.name.clone()}
-                                   width={Length::design(PICKER_WIDTH)}
-                                   max_list_height={Length::design(COMPOSER_POPUP_HEIGHT)}/>
-                }
-            })
+            view! {
+                <search_picker id=picker handle material={Material::Bare} searchable?=searchable
+                               title={option.name.clone()} width={Length::design(PICKER_WIDTH)}
+                               max_list_height={Length::design(COMPOSER_POPUP_HEIGHT)}/>
+            }
             .into_any()
         };
         Some(popover(open, trigger, content).placement(Placement::Above).into_any())

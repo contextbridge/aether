@@ -1,7 +1,8 @@
 use aether_desktop::ui::{WispMotion, WispState, wisp};
-use clankerdiff_rouge::ui::testing::{TestUi, component_test};
-use clankerdiff_rouge_shell::rouge::core::{Color, Styled, div, show};
-use clankerdiff_rouge_shell::rouge::reactive::{Entered, Runtime, Signal, signal};
+use rouge::core::testing::TestUi;
+use rouge::core::{Color, Styled, div, show};
+use rouge::reactive::{Entered, Runtime, Signal, signal};
+use rouge_widgets::testing::component_test;
 
 #[test]
 fn waiting_and_reduced_motion_have_no_clock_and_never_change_pixels() {

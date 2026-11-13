@@ -1,7 +1,7 @@
 use aether_desktop::AppearanceMode;
 use aether_desktop::registry::STATE_FILE;
 use aether_desktop::testing::{DesktopHarness, DesktopHarnessBuilder};
-use clankerdiff_rouge_shell::rouge::core::Point;
+use rouge::core::Point;
 use std::fs;
 
 #[test]

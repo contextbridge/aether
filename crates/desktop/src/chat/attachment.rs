@@ -1,10 +1,10 @@
 use crate::ui::tokens::{ICON_SIZE_SMALL, RADIUS_INNER};
-use crate::ui::{Icon, IconName, UiStyles, UiTheme};
+use crate::ui::{Icon, IconName, Theme, UiStyles};
 use agent_client_protocol::v2::schema as acp;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use clankerdiff_rouge_shell::rouge::core::{AnyView, Div, Fit, ImageSource, Styled, View, div, image, px, text, view};
 use client_core::composer::attachment::{AttachmentKind, PromptAttachment, classify_attachment};
+use rouge::core::{AnyView, Div, Fit, ImageSource, Styled, View, div, image, px, text, view};
 use std::sync::Arc;
 
 #[derive(Clone, PartialEq)]
@@ -30,7 +30,7 @@ impl Attachment {
 }
 
 pub(crate) fn chip(id: String, preview: impl View, name: &str) -> Div {
-    let theme = UiTheme::current();
+    let theme = Theme::current();
     view! {
         <div test_id=id flex items_center gap=4.0 min_w=0.0 px=8.0 py=4.0 rounded=RADIUS_INNER
              bg=theme.surface_selected>
@@ -41,13 +41,13 @@ pub(crate) fn chip(id: String, preview: impl View, name: &str) -> Div {
 }
 
 pub(crate) fn chip_icon(icon: IconName) -> Icon {
-    Icon::new(icon, UiTheme::current().text_muted).size(ICON_SIZE_SMALL)
+    Icon::new(icon, Theme::current().text_muted).size(ICON_SIZE_SMALL)
 }
 
 pub(crate) fn thumbnail(id: String, source: ImageSource, size: f32) -> Div {
     view! {
         <div test_id=id flex_none size=size rounded=RADIUS_INNER overflow_hidden border=px(1.0)
-             border_color=UiTheme::current().border>
+             border_color=Theme::current().border>
             {image(source).fit(Fit::Cover).size_full()}
         </div>
     }

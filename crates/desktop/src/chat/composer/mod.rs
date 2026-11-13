@@ -4,21 +4,14 @@ mod queued;
 
 use super::attachment::{chip, preview};
 use crate::app::chord;
-use crate::platform::{ClipboardMedia, PathPrompt, Platform};
+use crate::platform::{PathPrompt, Platform};
 use crate::tasks::spawn_in;
 use crate::threads::{Thread, ThreadEvent, ThreadStatus};
 use crate::ui::tokens::{COMPOSER_POPUP_HEIGHT, ICON_SIZE, ROW_HEIGHT};
-use crate::ui::typography::Typography;
+use crate::ui::typography::READING;
 use crate::ui::{
-    GlassExt, Hint, Icon, IconName, PickerItem, SearchPickerEvent, SearchPickerHandle, UI_FONT, UiTheme, icon_button,
-    on_glass, picker_closed, search_picker,
-};
-use clankerdiff_rouge_shell::rouge::core::{
-    AnyView, Cursor, FocusHandle, Key, KeyEvent, Length, Modifiers, Styled, View, div, dynamic, editable, focus_handle,
-    view,
-};
-use clankerdiff_rouge_shell::rouge::reactive::{
-    Callback, Scope, Signal, Stored, batch, effect, memo, signal, stored, untrack,
+    Hint, Icon, IconName, Material, MaterialExt, PickerItem, SearchPickerEvent, SearchPickerHandle, Theme, UI_FONT,
+    icon_button, picker_closed, search_picker,
 };
 use client_core::composer::attachment::{AttachedFile, PromptAttachment, attach_missing, classify_paths};
 use client_core::composer::completion_token::Trigger;
@@ -30,6 +23,11 @@ use client_core::session_model::WorkspaceAccess;
 use completion::{CompletionItem, CompletionMenu, active_token};
 use pasted::PastedImages;
 use queued::queued_prompts;
+use rouge::core::{
+    AnyView, ClipboardMedia, Cursor, FocusHandle, Key, KeyEvent, Length, Modifiers, Styled, View, div, dynamic,
+    editable, focus_handle, view,
+};
+use rouge::reactive::{Callback, Scope, Signal, Stored, batch, effect, memo, signal, stored, untrack};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -139,8 +137,10 @@ impl Composer {
             memo(move || thread.with_core(|core| core.queued_prompts().to_vec()).filter(|prompts| !prompts.is_empty()));
         let completion = memo(move || self.completion());
         let search = memo(move || self.popup.with(|popup| matches!(popup, Popup::Search(_))));
+        let theme = Theme::current();
         let editor = view! {
-            <div w_full flex col gap=4.0 glass_raised={move || self.focus.is_focused()}>
+            <div w_full flex col gap=4.0 material=Material::GlassPanel
+                 border_color={move || if self.focus.is_focused() { theme.border.get() } else { theme.border_subtle.get() }}>
                 <dynamic>{self.attachments()}</dynamic>
                 {self.input()}
                 {self.actions()}
@@ -157,8 +157,7 @@ impl Composer {
     }
 
     fn input(self) -> impl View {
-        let theme = UiTheme::current();
-        let reading = Typography::Reading;
+        let theme = Theme::current();
         let field = editable(self.text)
             .test_id("composer-text")
             .multiline()
@@ -169,8 +168,8 @@ impl Composer {
             .track_focus(self.focus)
             .autofocus()
             .font(UI_FONT)
-            .text_size(reading.size())
-            .line_height(reading.line_height() / reading.size())
+            .text_size(READING.size)
+            .line_height(READING.line_height)
             .color(theme.text)
             .placeholder(PLACEHOLDER, theme.text_muted)
             .w_full()
@@ -179,6 +178,7 @@ impl Composer {
                     event.stop_propagation();
                 }
             })
+            .on_paste(move |media| self.paste(media))
             .on_submit(move |_| self.submit());
         div()
             .relative()
@@ -240,13 +240,11 @@ impl Composer {
         };
         let status = self.search_status;
         Some(
-            on_glass(|| {
-                view! {
-                    <search_picker id="prompt-search" handle searchable="Search past prompts…"
-                                   empty="No matching prompts"
-                                   max_list_height={Length::design(COMPOSER_POPUP_HEIGHT)} status/>
-                }
-            })
+            view! {
+                <search_picker id="prompt-search" handle material={Material::Glass}
+                               searchable="Search past prompts…" empty="No matching prompts"
+                               max_list_height={Length::design(COMPOSER_POPUP_HEIGHT)} status/>
+            }
             .into_any(),
         )
     }
@@ -262,7 +260,7 @@ impl Composer {
             }),
             Key::Escape => self.escape(),
             Key::Backspace if plain => self.pop_media(),
-            _ => chord(PASTE_KEYS).matches(event) && self.paste(),
+            _ => false,
         }
     }
 
@@ -333,10 +331,7 @@ impl Composer {
         });
     }
 
-    fn paste(self) -> bool {
-        let Some(media) = self.platform.with(|platform| platform.clipboard_media()) else {
-            return false;
-        };
+    fn paste(self, media: ClipboardMedia) {
         match media {
             ClipboardMedia::Files(paths) => self.attach(&paths),
             ClipboardMedia::Png(png) => match self.pasted.update(|pasted| pasted.save(&png)) {
@@ -344,7 +339,6 @@ impl Composer {
                 Err(message) => self.thread.report_error(&message),
             },
         }
-        true
     }
 
     fn pick_files(self) {
@@ -548,7 +542,7 @@ fn running(status: ThreadStatus) -> bool {
 }
 
 fn round_button(id: &'static str, icon: IconName, label: &'static str, filled: bool, on_click: Callback) -> AnyView {
-    let theme = UiTheme::current();
+    let theme = Theme::current();
     let (background, foreground) =
         if filled { (theme.text, theme.canvas) } else { (theme.surface_hover, theme.text_muted) };
     let hovered = signal(false);
@@ -599,5 +593,4 @@ const MIN_ROWS: usize = 1;
 const MAX_ROWS: usize = 12;
 const HOVER_OPACITY: f32 = 0.85;
 const SEARCH_PROMPTS_KEYS: &str = "secondary-r";
-const PASTE_KEYS: &str = "secondary-v";
 const PLACEHOLDER: &str = "Message the agent…  / for commands, @ for files";

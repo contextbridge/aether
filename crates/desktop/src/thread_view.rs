@@ -7,13 +7,13 @@ use crate::registry::Registry;
 use crate::sidebar::toggle_button;
 use crate::threads::{Thread, ThreadStatus};
 use crate::ui::tokens::{GROUP_HEIGHT, HEADER_HEIGHT, ICON_SIZE_SMALL, PANEL_INSET, ROW_HEIGHT};
-use crate::ui::{GlassExt, Icon, IconName, StyledExt, UiStyles, UiTheme, scroll_edge};
+use crate::ui::{Icon, IconName, Material, MaterialExt, StyledExt, Theme, UiStyles, scroll_edge};
 use agent_client_protocol::v2::schema as acp;
 use clankerdiff_core::RepoPath;
-use clankerdiff_rouge_shell::rouge::core::{
+use rouge::core::{
     AnyView, Color, Cursor, Div, FileDropEvent, FileDropPhase, Rect, Styled, View, div, dynamic, show, text, view,
 };
-use clankerdiff_rouge_shell::rouge::reactive::{Callback, Memo, Signal, effect, memo, signal, untrack};
+use rouge::reactive::{Callback, Memo, Signal, effect, memo, signal, untrack};
 use std::rc::Rc;
 
 #[derive(Clone, Copy)]
@@ -122,7 +122,7 @@ impl ThreadView {
                 {scroll_edge(true, PANEL_INSET, HEADER_HEIGHT)}
                 <div flex_1 min_w=0.0 flex pass_through>
                     <div test_id="thread-heading" min_w=0.0 h=GROUP_HEIGHT px=16.0 flex items_center gap=8.0
-                         rounded={GROUP_HEIGHT / 2.0} glass_control>
+                         rounded={GROUP_HEIGHT / 2.0} material=Material::GlassControl>
                         <dynamic>{sidebar_collapsed.get().then(|| toggle_button(false))}</dynamic>
                         <div test_id="thread-title" min_w=0.0 overflow_hidden>
                             <text title no_wrap>{move || title.get()}</text>
@@ -138,7 +138,7 @@ impl ThreadView {
 
     fn switch(self) -> impl View {
         let (thread, tab, seen) = (self.thread, self.tab, self.changes_seen);
-        let theme = UiTheme::current();
+        let theme = Theme::current();
         let files = memo(move || changed_files(thread));
         let working = memo(move || match thread.status() {
             _ if tab.get() == ThreadTab::Chat => None,
@@ -166,7 +166,7 @@ impl ThreadView {
             .child(dynamic(move || unseen.get().then(|| corner_dot("changes-unseen", theme.accent.get()))));
         view! {
             <div test_id="view-switch" flex_none h=GROUP_HEIGHT p=4.0 flex items_center gap=4.0
-                 rounded={GROUP_HEIGHT / 2.0} glass_control small>
+                 rounded={GROUP_HEIGHT / 2.0} material=Material::GlassControl small>
                 {chat}
                 {files_tab}
                 <dynamic>{reviewing.get().then(|| segment(&self, "tab-review", IconName::Eye, "Review", ThreadTab::Review))}</dynamic>
@@ -176,7 +176,7 @@ impl ThreadView {
 
     fn body(self, chat: Memo<bool>) -> impl View {
         let (tab, dropping, composer) = (self.tab, self.dropping, self.composer);
-        let theme = UiTheme::current();
+        let theme = Theme::current();
         let shown = memo(move || tab.get());
         let content = dynamic(move || match shown.get() {
             ThreadTab::Chat => untrack(|| self.transcript.view()).into_any(),
@@ -236,7 +236,7 @@ impl ThreadView {
                 let label = if comments == 1 { "1 comment".to_owned() } else { format!("{comments} comments") };
                 view! {
                     <div absolute left=0.0 right=0.0 bottom=16.0 flex justify_center>
-                        <div test_id="review-pill" h=GROUP_HEIGHT p=4.0 pl=16.0 flex items_center gap=4.0 glass
+                        <div test_id="review-pill" h=GROUP_HEIGHT p=4.0 pl=16.0 flex items_center gap=4.0 material=Material::GlassPanel
                              rounded={GROUP_HEIGHT / 2.0} small>
                             <div test_id="review-comments" mr=8.0><text no_wrap secondary>{label}</text></div>
                             {pill_button("review-copy", "Copy", false, Callback::from(move || files.copy()))}
@@ -280,7 +280,7 @@ fn open_location(
 }
 
 fn segment(view: &ThreadView, id: &'static str, icon: IconName, label: &'static str, value: ThreadTab) -> Div {
-    let (theme, view) = (UiTheme::current(), *view);
+    let (theme, view) = (Theme::current(), *view);
     let tab = view.tab;
     let selected = memo(move || tab.get() == value);
     let hovered = signal(false);
@@ -317,7 +317,7 @@ fn corner_dot(id: &'static str, color: Color) -> AnyView {
 }
 
 fn pill_button(id: &'static str, label: &'static str, primary: bool, on_click: Callback) -> AnyView {
-    let theme = UiTheme::current();
+    let theme = Theme::current();
     let hovered = signal(false);
     view! {
         <div test_id=id h_full px=12.0 flex items_center rounded={ROW_HEIGHT / 2.0} cursor=Cursor::Pointer

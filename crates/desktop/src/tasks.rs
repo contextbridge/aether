@@ -1,4 +1,4 @@
-use clankerdiff_rouge_shell::rouge::reactive::{Scope, Task, spawn, spawn_blocking};
+use rouge::reactive::{Scope, Task, spawn, spawn_blocking};
 use std::future::Future;
 
 pub(crate) fn spawn_in<T: 'static>(scope: Scope, future: impl Future<Output = T> + 'static) -> Task<T> {

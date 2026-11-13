@@ -1,9 +1,6 @@
-use arboard::{Clipboard, ImageData};
-use clankerdiff_rouge_shell::rouge::platform::open_url;
+use rouge::platform::open_url;
 #[cfg(not(target_os = "macos"))]
-use clankerdiff_rouge_shell::rouge::reactive::spawn_tokio;
-use image::codecs::png::PngEncoder;
-use image::{ExtendedColorType, ImageEncoder};
+use rouge::reactive::spawn_tokio;
 use std::future::Future;
 #[cfg(not(all(unix, not(target_os = "macos"))))]
 use std::future::ready;
@@ -20,14 +17,6 @@ pub trait Platform: 'static {
     fn pick_paths(&self, prompt: PathPrompt) -> PlatformFuture<Option<Vec<PathBuf>>>;
 
     fn open(&self, target: &str);
-
-    fn clipboard_media(&self) -> Option<ClipboardMedia>;
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ClipboardMedia {
-    Files(Vec<PathBuf>),
-    Png(Vec<u8>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,25 +49,6 @@ impl Platform for SystemPlatform {
             tracing::warn!(%error, target, "could not open");
         }
     }
-
-    fn clipboard_media(&self) -> Option<ClipboardMedia> {
-        let mut clipboard =
-            Clipboard::new().inspect_err(|error| tracing::warn!(%error, "could not open the clipboard")).ok()?;
-        if let Some(files) = clipboard.get().file_list().ok().filter(|files| !files.is_empty()) {
-            return Some(ClipboardMedia::Files(files));
-        }
-        clipboard.get_image().ok().as_ref().and_then(encode_png)
-    }
-}
-
-fn encode_png(image: &ImageData) -> Option<ClipboardMedia> {
-    let (width, height) = (u32::try_from(image.width).ok()?, u32::try_from(image.height).ok()?);
-    let mut png = Vec::new();
-    PngEncoder::new(&mut png)
-        .write_image(&image.bytes, width, height, ExtendedColorType::Rgba8)
-        .inspect_err(|error| tracing::warn!(%error, "could not read the copied image"))
-        .ok()?;
-    Some(ClipboardMedia::Png(png))
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]

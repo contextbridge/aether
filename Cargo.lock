@@ -238,7 +238,6 @@ dependencies = [
  "aether-sessions",
  "aether-utils",
  "agent-client-protocol",
- "arboard",
  "base64 0.23.1",
  "chrono",
  "clankerdiff-client",
@@ -247,17 +246,15 @@ dependencies = [
  "clankerdiff-markdown",
  "clankerdiff-remote",
  "clankerdiff-rouge",
- "clankerdiff-rouge-shell",
- "clankerdiff-rouge-ui",
  "clankerdiff-server",
  "clankerdiff-syntax",
  "clankerdiff-ui-core",
  "clap",
- "image",
  "log",
  "notify-rust",
  "rfd",
  "rouge",
+ "rouge-widgets",
  "rustls",
  "serde",
  "serde_json",
@@ -2864,7 +2861,6 @@ dependencies = [
  "clankerdiff-client",
  "clankerdiff-core",
  "clankerdiff-markdown",
- "clankerdiff-rouge-ui",
  "clankerdiff-symbols",
  "clankerdiff-syntax",
  "clankerdiff-ui-core",
@@ -2872,27 +2868,6 @@ dependencies = [
  "rouge-reactive",
  "rouge-widgets",
  "web-time",
-]
-
-[[package]]
-name = "clankerdiff-rouge-shell"
-version = "0.10.0"
-dependencies = [
- "clankerdiff-rouge-ui",
- "rouge",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "clankerdiff-rouge-ui"
-version = "0.10.0"
-dependencies = [
- "clankerdiff-ui-core",
- "rouge-core",
- "rouge-reactive",
- "rouge-widgets",
 ]
 
 [[package]]
@@ -2999,7 +2974,7 @@ version = "0.10.0"
 dependencies = [
  "arborium-theme",
  "clankerdiff-fingerprint",
- "nucleo-matcher",
+ "rouge-theme",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -8054,6 +8029,8 @@ dependencies = [
  "rouge-reactive",
  "rouge-render",
  "rouge-widgets",
+ "serde",
+ "serde_json",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
@@ -8072,6 +8049,7 @@ dependencies = [
  "rouge-reactive",
  "rouge-render",
  "rouge-text",
+ "rouge-theme",
  "slotmap",
  "taffy",
  "thiserror 2.0.21",
@@ -8110,6 +8088,7 @@ dependencies = [
  "bytemuck",
  "image",
  "pollster 1.0.1",
+ "rouge-theme",
  "thiserror 2.0.21",
  "tokio",
  "wgpu",
@@ -8125,11 +8104,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "rouge-theme"
+version = "0.1.0"
+dependencies = [
+ "nucleo-matcher",
+ "serde",
+]
+
+[[package]]
 name = "rouge-widgets"
 version = "0.1.0"
 dependencies = [
  "rouge-core",
  "rouge-reactive",
+ "rouge-theme",
 ]
 
 [[package]]

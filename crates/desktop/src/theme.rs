@@ -1,10 +1,10 @@
-use crate::ui::ActiveTheme;
+use crate::ui::ActiveReviewTheme;
 use clankerdiff_ui_core::{ReviewTheme, ThemePreference};
 
 pub(crate) fn apply(preference: &ThemePreference) {
-    ActiveTheme::current().apply(preference);
+    ActiveReviewTheme::current().apply(preference);
 }
 
 pub(crate) fn preview(theme: ReviewTheme) {
-    ActiveTheme::current().set(theme);
+    ActiveReviewTheme::current().set(theme);
 }
