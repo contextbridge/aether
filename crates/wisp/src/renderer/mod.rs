@@ -27,10 +27,10 @@ use crate::error::RenderError;
 use crate::theme::Theme;
 use crate::view::generation::Generation;
 use acp_utils::conversation::{ConversationId, ConversationItemId};
-use clankerdiff_syntax::{SyntaxWorkStats, thread_work};
 use frame::draw_frame;
 use ratatui::Terminal;
 use ratatui::backend::Backend;
+use rouge_syntax::{SyntaxWorkStats, thread_work};
 
 use cache::RenderCache;
 use history::NativeHistoryCursor;

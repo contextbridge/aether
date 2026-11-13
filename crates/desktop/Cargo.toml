@@ -56,11 +56,10 @@ clankerdiff-lspd = { workspace = true, features = ["daemon"] }
 clankerdiff-markdown = { workspace = true }
 clankerdiff-remote = { workspace = true }
 clankerdiff-rouge = { workspace = true }
-clankerdiff-syntax = { workspace = true }
 clankerdiff-ui-core = { workspace = true }
 clap = { workspace = true }
 rfd = { version = "0.16", default-features = false, features = ["xdg-portal", "tokio"] }
-rouge = { workspace = true, features = ["tokio-rt", "open-url"] }
+rouge = { workspace = true, features = ["tokio-rt", "open-url", "markdown"] }
 rouge-widgets = { workspace = true }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 serde = { workspace = true }

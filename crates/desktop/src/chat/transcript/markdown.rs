@@ -1,9 +1,9 @@
 use crate::platform::Platform;
 use crate::ui::ActiveReviewTheme;
-use clankerdiff_markdown::{MarkdownBlock, MarkdownStream};
-use clankerdiff_rouge::{MarkdownOutput, markdown_blocks};
 use rouge::core::{Styled, View, WindowHandle, div, dynamic, each, view};
-use rouge::reactive::{Callback, Memo, Stored, memo, stored};
+use rouge::markdown::{MarkdownBlock, MarkdownStream};
+use rouge::reactive::{Memo, Stored, memo, stored};
+use rouge::widgets::{MarkdownAction, MarkdownPaint, markdown};
 use std::rc::Rc;
 
 pub(crate) fn reply(text: Memo<String>, window: WindowHandle, platform: Stored<Rc<dyn Platform>>) -> impl View {
@@ -22,16 +22,19 @@ pub(crate) fn reply(text: Memo<String>, window: WindowHandle, platform: Stored<R
         })
     });
     let theme = ActiveReviewTheme::current().review_signal();
-    let emit = Callback::from(move |output: MarkdownOutput| match output {
-        MarkdownOutput::CopyCode(code) => window.copy_text(code),
-        MarkdownOutput::OpenLink(url) => platform.with(|platform| platform.open(&url)),
-        MarkdownOutput::Event(_) | MarkdownOutput::ThemeChanged(_) => {}
-    });
+    let paint = MarkdownPaint::new(
+        theme.select(|theme| theme.markdown),
+        theme.select(|theme| theme.syntax.clone()),
+        move |action| match action {
+            MarkdownAction::CopyCode(code) => window.copy_text(code),
+            MarkdownAction::OpenLink(url) => platform.with(|platform| platform.open(&url)),
+        },
+    );
     view! {
         <div flex col gap=12.0 min_w=0.0>
             <each items={move || blocks.get().into_iter().enumerate().collect::<Vec<(usize, MarkdownBlock)>>()}
                   key={|(index, _): &(usize, MarkdownBlock)| *index} let:block>
-                <dynamic>{block.with(|(_, block)| markdown_blocks(std::slice::from_ref(block), theme, true, emit))}</dynamic>
+                <dynamic>{block.with(|(_, block)| markdown(std::slice::from_ref(block), paint))}</dynamic>
             </each>
         </div>
     }

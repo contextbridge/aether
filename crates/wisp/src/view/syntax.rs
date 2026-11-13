@@ -1,8 +1,8 @@
 use crate::theme::Theme;
 use clankerdiff_ratatui::highlighted_line;
-use clankerdiff_syntax::{LanguageHint, analyze};
 use ratatui::style::Style;
 use ratatui::text::Line;
+use rouge_syntax::{LanguageHint, analyze};
 use std::rc::Rc;
 
 pub type HighlightedLines = Rc<[Line<'static>]>;

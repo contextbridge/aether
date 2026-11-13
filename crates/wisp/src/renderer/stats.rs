@@ -1,4 +1,4 @@
-use clankerdiff_syntax::SyntaxWorkStats;
+use rouge_syntax::SyntaxWorkStats;
 #[cfg(feature = "testing")]
 use std::time::Instant;
 

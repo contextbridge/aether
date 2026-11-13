@@ -247,7 +247,6 @@ dependencies = [
  "clankerdiff-remote",
  "clankerdiff-rouge",
  "clankerdiff-server",
- "clankerdiff-syntax",
  "clankerdiff-ui-core",
  "clap",
  "log",
@@ -519,13 +518,13 @@ dependencies = [
  "clankerdiff-core",
  "clankerdiff-lspd",
  "clankerdiff-ratatui",
- "clankerdiff-syntax",
  "clankerdiff-ui-core",
  "clap",
  "crossterm",
  "futures",
  "log",
  "ratatui",
+ "rouge-syntax",
  "serde",
  "serde_json",
  "tempfile",
@@ -2804,8 +2803,7 @@ version = "0.10.0"
 dependencies = [
  "clankerdiff-core",
  "clankerdiff-fingerprint",
- "clankerdiff-syntax",
- "pulldown-cmark",
+ "rouge-markdown",
  "serde",
  "thiserror 2.0.21",
 ]
@@ -2832,11 +2830,11 @@ dependencies = [
  "clankerdiff-core",
  "clankerdiff-markdown",
  "clankerdiff-symbols",
- "clankerdiff-syntax",
  "clankerdiff-ui-core",
  "crossterm",
  "imbl",
  "ratatui",
+ "rouge-syntax",
  "similar",
  "thiserror 2.0.21",
  "unicode-segmentation",
@@ -2862,10 +2860,10 @@ dependencies = [
  "clankerdiff-core",
  "clankerdiff-markdown",
  "clankerdiff-symbols",
- "clankerdiff-syntax",
  "clankerdiff-ui-core",
  "rouge-core",
  "rouge-reactive",
+ "rouge-syntax",
  "rouge-widgets",
  "web-time",
 ]
@@ -2892,80 +2890,7 @@ name = "clankerdiff-symbols"
 version = "0.10.0"
 dependencies = [
  "clankerdiff-core",
- "clankerdiff-syntax",
-]
-
-[[package]]
-name = "clankerdiff-syntax"
-version = "0.10.0"
-dependencies = [
- "arborium-asm",
- "arborium-bash",
- "arborium-batch",
- "arborium-c",
- "arborium-c-sharp",
- "arborium-clojure",
- "arborium-cmake",
- "arborium-commonlisp",
- "arborium-cpp",
- "arborium-css",
- "arborium-dart",
- "arborium-diff",
- "arborium-dockerfile",
- "arborium-elixir",
- "arborium-erlang",
- "arborium-fish",
- "arborium-go",
- "arborium-graphql",
- "arborium-haskell",
- "arborium-hcl",
- "arborium-html",
- "arborium-ini",
- "arborium-java",
- "arborium-javascript",
- "arborium-json",
- "arborium-just",
- "arborium-kotlin",
- "arborium-lua",
- "arborium-make",
- "arborium-markdown",
- "arborium-meson",
- "arborium-ninja",
- "arborium-nix",
- "arborium-objc",
- "arborium-ocaml",
- "arborium-perl",
- "arborium-php",
- "arborium-powershell",
- "arborium-proto",
- "arborium-python",
- "arborium-r",
- "arborium-rego",
- "arborium-ruby",
- "arborium-rust",
- "arborium-scala",
- "arborium-scheme",
- "arborium-scss",
- "arborium-solidity",
- "arborium-sql",
- "arborium-starlark",
- "arborium-svelte",
- "arborium-swift",
- "arborium-theme",
- "arborium-toml",
- "arborium-tsx",
- "arborium-typescript",
- "arborium-vue",
- "arborium-x86asm",
- "arborium-xml",
- "arborium-yaml",
- "arborium-zig",
- "arborium-zsh",
- "cc",
- "clankerdiff-fingerprint",
- "clankerdiff-ui-core",
- "thiserror 2.0.21",
- "tree-sitter",
+ "rouge-syntax",
 ]
 
 [[package]]
@@ -2974,6 +2899,7 @@ version = "0.10.0"
 dependencies = [
  "arborium-theme",
  "clankerdiff-fingerprint",
+ "rouge-syntax",
  "rouge-theme",
  "serde",
  "serde_json",
@@ -5656,6 +5582,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d4a5ff6bcca6c4867b1c4fd4ef63e4db7436ef363e0ad7531d1558856bae64f4"
 
 [[package]]
+name = "linkify"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1dfa36d52c581e9ec783a7ce2a5e0143da6237be5811a0b3153fedfdbe9f780"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.4.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8026,8 +7961,10 @@ dependencies = [
  "open",
  "pollster 1.0.1",
  "rouge-core",
+ "rouge-markdown",
  "rouge-reactive",
  "rouge-render",
+ "rouge-syntax",
  "rouge-widgets",
  "serde",
  "serde_json",
@@ -8070,6 +8007,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rouge-markdown"
+version = "0.1.0"
+dependencies = [
+ "linkify",
+ "pulldown-cmark",
+ "rouge-syntax",
+ "serde",
+]
+
+[[package]]
 name = "rouge-reactive"
 version = "0.1.0"
 dependencies = [
@@ -8095,6 +8042,79 @@ dependencies = [
 ]
 
 [[package]]
+name = "rouge-syntax"
+version = "0.1.0"
+dependencies = [
+ "arborium-asm",
+ "arborium-bash",
+ "arborium-batch",
+ "arborium-c",
+ "arborium-c-sharp",
+ "arborium-clojure",
+ "arborium-cmake",
+ "arborium-commonlisp",
+ "arborium-cpp",
+ "arborium-css",
+ "arborium-dart",
+ "arborium-diff",
+ "arborium-dockerfile",
+ "arborium-elixir",
+ "arborium-erlang",
+ "arborium-fish",
+ "arborium-go",
+ "arborium-graphql",
+ "arborium-haskell",
+ "arborium-hcl",
+ "arborium-html",
+ "arborium-ini",
+ "arborium-java",
+ "arborium-javascript",
+ "arborium-json",
+ "arborium-just",
+ "arborium-kotlin",
+ "arborium-lua",
+ "arborium-make",
+ "arborium-markdown",
+ "arborium-meson",
+ "arborium-ninja",
+ "arborium-nix",
+ "arborium-objc",
+ "arborium-ocaml",
+ "arborium-perl",
+ "arborium-php",
+ "arborium-powershell",
+ "arborium-proto",
+ "arborium-python",
+ "arborium-r",
+ "arborium-rego",
+ "arborium-ruby",
+ "arborium-rust",
+ "arborium-scala",
+ "arborium-scheme",
+ "arborium-scss",
+ "arborium-solidity",
+ "arborium-sql",
+ "arborium-starlark",
+ "arborium-svelte",
+ "arborium-swift",
+ "arborium-theme",
+ "arborium-toml",
+ "arborium-tsx",
+ "arborium-typescript",
+ "arborium-vue",
+ "arborium-x86asm",
+ "arborium-xml",
+ "arborium-yaml",
+ "arborium-zig",
+ "arborium-zsh",
+ "cc",
+ "rouge-theme",
+ "serde",
+ "thiserror 2.0.21",
+ "tree-sitter",
+]
+
+[[package]]
 name = "rouge-text"
 version = "0.1.0"
 dependencies = [
@@ -8116,7 +8136,9 @@ name = "rouge-widgets"
 version = "0.1.0"
 dependencies = [
  "rouge-core",
+ "rouge-markdown",
  "rouge-reactive",
+ "rouge-syntax",
  "rouge-theme",
 ]
 

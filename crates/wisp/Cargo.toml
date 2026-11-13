@@ -39,7 +39,7 @@ workspace = true
 clankerdiff-core = { workspace = true }
 clankerdiff-ui-core = { workspace = true }
 clankerdiff-ratatui = { workspace = true }
-clankerdiff-syntax = { workspace = true }
+rouge-syntax = { workspace = true }
 clankerdiff-client = { workspace = true }
 clankerdiff-lspd = { workspace = true, features = ["daemon"] }
 utils = { package = "aether-utils", path = "../utils", version = "0.3.1" }

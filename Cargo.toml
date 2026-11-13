@@ -112,11 +112,11 @@ unicode-width = "0.2.2"
 
 rouge = { path = "../rouge/crates/rouge" }
 rouge-widgets = { path = "../rouge/crates/rouge-widgets" }
+rouge-syntax = { path = "../rouge/crates/rouge-syntax" }
 clankerdiff-rouge = { path = "../diff/crates/diff/rouge" }
 clankerdiff-remote = { path = "../diff/crates/util/remote" }
 clankerdiff-lspd = { path = "../diff/crates/util/lspd" }
 clankerdiff-markdown = { path = "../diff/crates/diff/markdown" }
-clankerdiff-syntax = { path = "../diff/crates/ui/syntax" }
 clankerdiff-ui-core = { path = "../diff/crates/ui/core" }
 
 # Wasm

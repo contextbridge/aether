@@ -1,7 +1,6 @@
-use clankerdiff_rouge::style;
-use clankerdiff_syntax::DocumentHighlights;
-use clankerdiff_ui_core::SyntaxTheme;
 use rouge::core::SpanStyle;
+use rouge::syntax::{DocumentHighlights, SyntaxTheme};
+use rouge::widgets::syntax_spans;
 use std::ops::Range;
 
 pub(crate) fn highlights(
@@ -12,7 +11,7 @@ pub(crate) fn highlights(
     let mut offset = 0;
     let mut highlights = Vec::new();
     for (index, line) in source.split('\n').enumerate() {
-        let spans = style::highlights(line, document.line(index).unwrap_or_default(), theme);
+        let spans = syntax_spans(line, document.line(index).unwrap_or_default(), theme);
         highlights.extend(spans.into_iter().map(|(range, style)| (range.start + offset..range.end + offset, style)));
         offset += line.len() + 1;
     }

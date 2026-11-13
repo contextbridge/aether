@@ -51,7 +51,7 @@ fn ui_only_theme_switch_recolors_status_mentions_and_message_surfaces() {
     ui.complete_prompt(acp::StopReason::EndTurn);
     ui.type_text("@src/lib.rs ");
     let mut review = ReviewTheme::default();
-    let syntax_revision = review.syntax.revision();
+    let syntax = review.syntax.clone();
     for (info, surface) in [
         (Rgba::new(40, 160, 220, 255), Rgba::new(35, 45, 55, 255)),
         (Rgba::new(90, 180, 240, 255), Rgba::new(45, 55, 65, 255)),
@@ -71,7 +71,7 @@ fn ui_only_theme_switch_recolors_status_mentions_and_message_surfaces() {
                 .any(|cell| cell.symbol() == "u" && cell.bg == composite_color(surface, review.ui.canvas))
         );
     }
-    assert_eq!(ui.app().theme().review().syntax.revision(), syntax_revision);
+    assert_eq!(ui.app().theme().review().syntax, syntax);
 }
 
 #[test]
