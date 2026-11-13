@@ -75,12 +75,24 @@ fn system_notification(notification: &Notification) -> PlatformFuture<bool> {
 
 #[cfg(target_os = "macos")]
 fn system_notification(notification: &Notification) -> PlatformFuture<bool> {
-    let shown = notify_rust::Notification::new().summary(&notification.title).body(&notification.body).show();
-    if let Err(error) = shown {
-        tracing::warn!(%error, "could not show a system notification");
+    let (title, body) = (notification.title.clone(), notification.body.clone());
+    // Delivery spins a run loop; on the UI thread that re-enters winit's event handler, which aborts the app.
+    let spawned = std::thread::Builder::new().name("system-notification".to_owned()).spawn(move || {
+        // An unbundled app has no identifier, and without one mac-notification-sys asks macOS to find an
+        // application named "use_default", which shows a blocking "Where is use_default?" dialog.
+        let _ = notify_rust::set_application(NOTIFYING_APP);
+        if let Err(error) = notify_rust::Notification::new().summary(&title).body(&body).show() {
+            tracing::warn!(%error, "could not show a system notification");
+        }
+    });
+    if let Err(error) = spawned {
+        tracing::warn!(%error, "could not start the system notification thread");
     }
     Box::pin(ready(false))
 }
+
+#[cfg(target_os = "macos")]
+const NOTIFYING_APP: &str = "com.apple.Finder";
 
 #[cfg(not(unix))]
 fn system_notification(_notification: &Notification) -> PlatformFuture<bool> {
