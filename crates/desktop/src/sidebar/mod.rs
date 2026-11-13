@@ -271,7 +271,7 @@ impl Sidebar {
             };
             view! {
                 <section_header id="section-local" title="Local" expanded={!collapsed.get()}
-                                icon=(IconName::Laptop, UiTheme::current().text_muted.get())
+                                icon=IconName::Laptop
                                 action={add.into_any()} actions_always_visible
                                 on_toggle={move || self.toggle(Collapsed::Section(LOCAL.to_owned()))}/>
             }
@@ -323,7 +323,7 @@ impl Sidebar {
                 <div flex col gap=4.0 pt=8.0>
                     <dynamic>{view! {
                         <section_header id="section-cloud" title="Cloud" expanded={!collapsed.get()}
-                                        icon=(IconName::Cloud, UiTheme::current().text_muted.get())
+                                        icon=IconName::Cloud
                                         on_toggle={move || self.toggle(Collapsed::Section(CLOUD.to_owned()))}/>
                     }}</dynamic>
                     <show when={move || !collapsed.get()}>

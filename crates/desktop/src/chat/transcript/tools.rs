@@ -3,7 +3,7 @@ use super::groups::{GroupKind, Work};
 use crate::ui::tokens::{ICON_SIZE_SMALL, ROW_HEIGHT};
 use crate::ui::typography::Typography;
 use crate::ui::{
-    ButtonVariant, CODE_FONT, ControlSize, Hint, Icon, IconName, UiStyles, UiTheme, Waveform, button, disclosure,
+    ButtonVariant, CODE_FONT, ControlSize, Hint, Icon, IconName, UiStyles, UiTheme, WispState, button, disclosure, wisp,
 };
 use acp_utils::content::first_line;
 use acp_utils::conversation::{
@@ -406,7 +406,13 @@ fn status_icon(status: ToolStatus, id: &str) -> AnyView {
     let theme = UiTheme::current();
     let (icon, color) = match status {
         ToolStatus::Running => {
-            return Waveform::new(format!("tool-waveform-{id}"), theme.info).size(ICON_SIZE_SMALL).into_any();
+            return view! {
+                <div test_id={format!("tool-status-{id}")} flex_none flex items_center gap=4.0>
+                    {wisp(ICON_SIZE_SMALL, theme.info, || WispState::Working).test_id(format!("tool-wisp-{id}"))}
+                    <text small muted>"Running"</text>
+                </div>
+            }
+            .into_any();
         }
         ToolStatus::Success => (IconName::Check, theme.text_muted),
         ToolStatus::Failed => (IconName::CircleX, theme.destructive),

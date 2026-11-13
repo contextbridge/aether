@@ -39,7 +39,8 @@ pub(crate) fn prompt(
     let body = (!body.is_empty()).then(|| view! { <text reading>{body}</text> });
     let files = (!attachments.is_empty()).then(|| view! { <div flex flex_wrap gap=8.0>{..attachments}</div> });
     view! {
-        <div max_w=pct(PROMPT_MAX_WIDTH) px=16.0 py=8.0 flex col gap=8.0 surface bg=UiTheme::current().elevated>
+        <div test_id={format!("prompt-{row}")} max_w=pct(PROMPT_MAX_WIDTH) px=16.0 py=8.0 flex col gap=8.0 surface
+             bg=UiTheme::current().elevated>
             {body}
             {files}
         </div>

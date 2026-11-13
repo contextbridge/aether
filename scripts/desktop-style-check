@@ -1,23 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 src="crates/desktop/src"
+sized='(p|px|py|pt|pb|pl|pr|m|mx|my|mt|mb|ml|mr|gap|gap_x|gap_y|w|h|size|min_w|min_h|max_w|max_h|top|left|right|bottom)'
 status=0
 report() {
     echo "$1:"
     echo "$2"
     status=1
 }
-matches=$(grep -rnE '\.(text_(xs|sm|base|lg|xl|2xl)|rounded_(sm|md|lg|xl))\(\)|_[0-9]p5\(\)' "$src" || true)
+off_grid() {
+    awk -F"$1" '{ value = $NF; sub(/[);].*$/, "", value); if (value > 2 && value % 4 != 0) print $0 }'
+}
+matches=$(grep -rnE '\brounded(=|\()[0-9]|\.(text_(xs|sm|base|lg|xl|2xl)|rounded_(sm|md|lg|xl))\(\)' "$src" || true)
 [ -n "$matches" ] && report "Use Typography and ui::tokens radii instead" "$matches"
-matches=$(grep -rnoE 'px\([0-9]+(\.[0-9]+)?\)' "$src" \
-    | grep -vE 'px\((0|1|2)(\.0)?\)' \
-    | awk -F'px\\(' '{ value = $2; sub(/\)$/, "", value); if (value % 4 != 0) print }' || true)
-[ -n "$matches" ] && report "Keep px() literals on the 4px grid" "$matches"
-names=$(grep -rhoE 'rem\([A-Z][A-Z0-9_]*\)' "$src" | sed -E 's/rem\((.*)\)/\1/' | sort -u)
+matches=$(grep -rnoE "(\b$sized=|\.$sized\()[0-9]+(\.[0-9]+)?" "$src" | off_grid '[=(]' || true)
+[ -n "$matches" ] && report "Keep spacing and size literals on the 4px grid" "$matches"
+names=$(grep -rhoE "(\b$sized=|\.$sized\()[A-Z][A-Z0-9_]*" "$src" | sed -E 's/.*[=(]//' | sort -u || true)
 matches=$(for name in $names; do
     grep -rnE "const $name: f32 = [0-9.]+;" "$src" \
         | grep -vE 'const [A-Z][A-Z0-9_]*_OFF_GRID:' \
-        | awk -F'= ' '{ value = $2; sub(/;.*/, "", value); if (value > 2 && value % 4 != 0) print }' || true
+        | off_grid '= ' || true
 done)
-[ -n "$matches" ] && report "Keep the constants rem() takes on the 4px grid" "$matches"
+[ -n "$matches" ] && report "Keep the size constants on the 4px grid" "$matches"
 exit "$status"

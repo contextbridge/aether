@@ -1,6 +1,6 @@
 use crate::threads::Thread;
 use crate::ui::tokens::{MODAL_WIDTH, PICKER_LIST_HEIGHT};
-use crate::ui::{PickerItem, SearchPickerEvent, SearchPickerHandle, backdrop, search_picker};
+use crate::ui::{PickerItem, SearchPickerEvent, SearchPickerHandle, backdrop, on_glass, search_picker};
 use clankerdiff_core::RepoPath;
 use clankerdiff_rouge_shell::rouge::core::{Length, View, view};
 use clankerdiff_rouge_shell::rouge::reactive::{Callback, effect, memo, signal, untrack};
@@ -35,9 +35,11 @@ pub(crate) fn file_picker(thread: Thread, on_picked: impl Fn(Option<RepoPath>) +
     });
     view! {
         <backdrop id="file-picker-backdrop" align_top on_dismiss={move || on_picked.call(None)}>
-            <search_picker id="file-picker" handle searchable="Search files…" empty="No matching files"
-                           footer="↑↓ Move    ↵ Open    Esc Close" width={Length::design(MODAL_WIDTH)}
-                           height={Length::design(PICKER_LIST_HEIGHT)} status/>
+            {on_glass(|| view! {
+                <search_picker id="file-picker" handle searchable="Search files…" empty="No matching files"
+                               footer="↑↓ Move    ↵ Open    Esc Close" width={Length::design(MODAL_WIDTH)}
+                               height={Length::design(PICKER_LIST_HEIGHT)} status/>
+            })}
         </backdrop>
     }
 }

@@ -6,13 +6,12 @@ use crate::platform::Platform;
 use crate::registry::Registry;
 use crate::sidebar::toggle_button;
 use crate::threads::{Thread, ThreadStatus};
-use crate::ui::tokens::{GROUP_HEIGHT, ICON_SIZE_SMALL, RADIUS_CONTROL, RADIUS_INNER, ROW_HEIGHT};
-use crate::ui::{Icon, IconName, StyledExt, UiStyles, UiTheme};
+use crate::ui::tokens::{GROUP_HEIGHT, HEADER_HEIGHT, ICON_SIZE_SMALL, PANEL_INSET, ROW_HEIGHT};
+use crate::ui::{GlassExt, Icon, IconName, StyledExt, UiStyles, UiTheme, scroll_edge};
 use agent_client_protocol::v2::schema as acp;
 use clankerdiff_core::RepoPath;
 use clankerdiff_rouge_shell::rouge::core::{
-    AnyView, BoxShadow, Color, Cursor, Div, FileDropEvent, FileDropPhase, Styled, View, div, dynamic, px, show, text,
-    view,
+    AnyView, Color, Cursor, Div, FileDropEvent, FileDropPhase, Rect, Styled, View, div, dynamic, show, text, view,
 };
 use clankerdiff_rouge_shell::rouge::reactive::{Callback, Memo, Signal, effect, memo, signal, untrack};
 use std::rc::Rc;
@@ -24,6 +23,7 @@ pub(crate) struct ThreadView {
     tab: Signal<ThreadTab>,
     changes_seen: Signal<Option<usize>>,
     dropping: Signal<bool>,
+    dock: Signal<Rect>,
     transcript: Transcript,
     status: StatusLine,
     options: SessionOptions,
@@ -51,7 +51,8 @@ impl ThreadView {
                 show(ThreadTab::Chat);
             }
         });
-        let transcript = Transcript::new(thread, platform.clone(), move |location: acp::ToolCallLocation| {
+        let dock = signal(Rect::ZERO);
+        let transcript = Transcript::new(thread, platform.clone(), dock, move |location: acp::ToolCallLocation| {
             open_location(thread, files, tab, changes_seen, &location);
         });
         let view = Self {
@@ -60,6 +61,7 @@ impl ThreadView {
             tab,
             changes_seen,
             dropping: signal(false),
+            dock,
             transcript,
             status: StatusLine::new(thread),
             options: SessionOptions::new(thread),
@@ -99,16 +101,15 @@ impl ThreadView {
         let chat = memo(move || tab.get() == ThreadTab::Chat);
         let body = self.body(chat);
         view! {
-            <div size_full flex col>
-                {self.header(sidebar_collapsed)}
+            <div relative size_full>
                 {body}
+                {self.header(sidebar_collapsed)}
             </div>
         }
     }
 
     fn header(self, sidebar_collapsed: Memo<bool>) -> impl View {
         let (thread, registry) = (self.thread, self.registry);
-        let theme = UiTheme::current();
         let title = memo(move || registry.with(|state| state.title(thread.session_id().as_ref(), thread.title())));
         let project = thread.project().map(|project| project.display().to_string());
         let agent = thread.target().label().to_owned();
@@ -116,14 +117,19 @@ impl ThreadView {
             view! { <div min_w=0.0 overflow_hidden><text small muted no_wrap>{project}</text></div> }
         });
         view! {
-            <div test_id="thread-header" top_bar pr=16.0 gap=12.0 bg=theme.chrome>
-                <dynamic>{sidebar_collapsed.get().then(|| toggle_button(false))}</dynamic>
-                <div flex_1 min_w=0.0 flex items_center gap=8.0>
-                    <div test_id="thread-title" min_w=0.0 overflow_hidden>
-                        <text title no_wrap>{move || title.get()}</text>
+            <div test_id="thread-header" absolute top=0.0 left=0.0 right=0.0 h=HEADER_HEIGHT pt=PANEL_INSET px=16.0
+                 flex items_center gap=12.0 pass_through>
+                {scroll_edge(true, PANEL_INSET, HEADER_HEIGHT)}
+                <div flex_1 min_w=0.0 flex pass_through>
+                    <div test_id="thread-heading" min_w=0.0 h=GROUP_HEIGHT px=16.0 flex items_center gap=8.0
+                         rounded={GROUP_HEIGHT / 2.0} glass_control>
+                        <dynamic>{sidebar_collapsed.get().then(|| toggle_button(false))}</dynamic>
+                        <div test_id="thread-title" min_w=0.0 overflow_hidden>
+                            <text title no_wrap>{move || title.get()}</text>
+                        </div>
+                        {project}
+                        <div test_id="thread-agent" flex_none><text small muted>{agent}</text></div>
                     </div>
-                    {project}
-                    <div test_id="thread-agent" flex_none><text small muted>{agent}</text></div>
                 </div>
                 {self.switch()}
             </div>
@@ -159,8 +165,8 @@ impl ThreadView {
             }))
             .child(dynamic(move || unseen.get().then(|| corner_dot("changes-unseen", theme.accent.get()))));
         view! {
-            <div test_id="view-switch" flex_none h=ROW_HEIGHT p=4.0 flex items_center gap=4.0 rounded=RADIUS_CONTROL
-                 border=px(1.0) border_color=theme.border_subtle bg=theme.input small>
+            <div test_id="view-switch" flex_none h=GROUP_HEIGHT p=4.0 flex items_center gap=4.0
+                 rounded={GROUP_HEIGHT / 2.0} glass_control small>
                 {chat}
                 {files_tab}
                 <dynamic>{reviewing.get().then(|| segment(&self, "tab-review", IconName::Eye, "Review", ThreadTab::Review))}</dynamic>
@@ -174,8 +180,8 @@ impl ThreadView {
         let shown = memo(move || tab.get());
         let content = dynamic(move || match shown.get() {
             ThreadTab::Chat => untrack(|| self.transcript.view()).into_any(),
-            ThreadTab::Files => untrack(|| self.files.view()).into_any(),
-            ThreadTab::Review => untrack(|| self.review.view()).into_any(),
+            ThreadTab::Files => below_header(untrack(|| self.files.view())),
+            ThreadTab::Review => below_header(untrack(|| self.review.view())),
         });
         let drop = move |event: &FileDropEvent| {
             if !chat.get_untracked() {
@@ -193,12 +199,10 @@ impl ThreadView {
             }
         };
         view! {
-            <div flex_1 min_h=0.0 flex col on_file_drop=drop
+            <div relative size_full on_file_drop=drop
                  bg={move || if dropping.get() { theme.accent.get().with_alpha(DROP_TINT) } else { Color::TRANSPARENT }}>
-                <div relative flex_1 min_h=0.0 w_full>
-                    {content}
-                    {self.review_pill()}
-                </div>
+                {content}
+                {self.review_pill()}
                 <show when={move || chat.get()}>{self.dock()}</show>
             </div>
         }
@@ -208,7 +212,8 @@ impl ThreadView {
         let thread = self.thread;
         let unreachable = memo(move || unreachable(thread));
         view! {
-            <div flex_none w_full px=16.0 pb=12.0>
+            <div absolute left=0.0 right=0.0 bottom=0.0 px=16.0 pb=12.0 pass_through track_bounds={self.dock}>
+                {scroll_edge(false, DOCK_EDGE_SOLID, DOCK_EDGE_REACH)}
                 <div content_width flex col>
                     <dynamic>{unreachable.get().and_then(|status| reconnect_banner(thread, status)).map(|banner| banner.mt(8.0))}</dynamic>
                     {self.elicitation.view()}
@@ -225,17 +230,15 @@ impl ThreadView {
     fn review_pill(self) -> impl View {
         let (tab, files) = (self.tab, self.files);
         let comments = memo(move || if tab.get() == ThreadTab::Files { files.comments() } else { 0 });
-        let theme = UiTheme::current();
         dynamic(move || {
             let comments = comments.get();
             (comments > 0).then(|| {
                 let label = if comments == 1 { "1 comment".to_owned() } else { format!("{comments} comments") };
-                let muted = move || theme.canvas.get().with_alpha(PILL_MUTED_OPACITY);
                 view! {
                     <div absolute left=0.0 right=0.0 bottom=16.0 flex justify_center>
-                        <div test_id="review-pill" h=GROUP_HEIGHT pl=16.0 pr=4.0 flex items_center gap=4.0
-                             rounded={GROUP_HEIGHT / 2.0} bg=theme.text shadow=BoxShadow::lg() small>
-                            <div test_id="review-comments" mr=8.0><text no_wrap color=muted>{label}</text></div>
+                        <div test_id="review-pill" h=GROUP_HEIGHT p=4.0 pl=16.0 flex items_center gap=4.0 glass
+                             rounded={GROUP_HEIGHT / 2.0} small>
+                            <div test_id="review-comments" mr=8.0><text no_wrap secondary>{label}</text></div>
                             {pill_button("review-copy", "Copy", false, Callback::from(move || files.copy()))}
                             {pill_button("review-submit", "Submit review", true, Callback::from(move || files.submit()))}
                         </div>
@@ -285,9 +288,9 @@ fn segment(view: &ThreadView, id: &'static str, icon: IconName, label: &'static 
         if selected.get() || hovered.get() { theme.text.get() } else { theme.text_secondary.get() }
     };
     view! {
-        <div test_id=id relative h_full px=8.0 flex items_center gap=4.0 rounded=RADIUS_INNER cursor=Cursor::Pointer
-             text_color=foreground
-             bg={move || if selected.get() { theme.elevated.get() } else { Color::TRANSPARENT }}
+        <div test_id=id relative h_full px=12.0 flex items_center gap=4.0 rounded={ROW_HEIGHT / 2.0}
+             cursor=Cursor::Pointer text_color=foreground
+             bg={move || if selected.get() { theme.text.get().with_alpha(SELECTED_TINT) } else { Color::TRANSPARENT }}
              on_hover={move |inside| {
                  hovered.set_if_changed(inside);
              }}
@@ -299,6 +302,10 @@ fn segment(view: &ThreadView, id: &'static str, icon: IconName, label: &'static 
             <text>{label}</text>
         </div>
     }
+}
+
+fn below_header(content: impl View) -> AnyView {
+    view! { <div size_full pt=HEADER_HEIGHT>{content}</div> }.into_any()
 }
 
 fn corner_dot(id: &'static str, color: Color) -> AnyView {
@@ -313,15 +320,12 @@ fn pill_button(id: &'static str, label: &'static str, primary: bool, on_click: C
     let theme = UiTheme::current();
     let hovered = signal(false);
     view! {
-        <div test_id=id h_full px=12.0 flex items_center rounded={GROUP_HEIGHT / 2.0} cursor=Cursor::Pointer
-             bg={move || {
-                 let canvas = theme.canvas.get();
-                 match (primary, hovered.get()) {
-                     (true, false) => canvas,
-                     (true, true) => canvas.with_alpha(PILL_HOVER_OPACITY),
-                     (false, true) => canvas.with_alpha(PILL_HOVER_TINT),
-                     (false, false) => Color::TRANSPARENT,
-                 }
+        <div test_id=id h_full px=12.0 flex items_center rounded={ROW_HEIGHT / 2.0} cursor=Cursor::Pointer
+             bg={move || match (primary, hovered.get()) {
+                 (true, false) => theme.accent.get(),
+                 (true, true) => theme.accent.get().with_alpha(PILL_HOVER_OPACITY),
+                 (false, true) => theme.text.get().with_alpha(SELECTED_TINT),
+                 (false, false) => Color::TRANSPARENT,
              }}
              on_hover={move |inside| {
                  hovered.set_if_changed(inside);
@@ -330,7 +334,7 @@ fn pill_button(id: &'static str, label: &'static str, primary: bool, on_click: C
                  event.stop_propagation();
                  on_click.call();
              }}>
-            <text no_wrap color={move || if primary { theme.text.get() } else { theme.canvas.get() }}>{label}</text>
+            <text no_wrap color={move || if primary { theme.accent_foreground.get() } else { theme.text.get() }}>{label}</text>
         </div>
     }
     .into_any()
@@ -347,7 +351,8 @@ fn unreachable(thread: Thread) -> Option<ThreadStatus> {
 }
 
 const DROP_TINT: f32 = 0.08;
+const SELECTED_TINT: f32 = 0.12;
+const DOCK_EDGE_SOLID: f32 = 40.0;
+const DOCK_EDGE_REACH: f32 = 40.0;
 const CORNER_DOT_SIZE_OFF_GRID: f32 = 6.0;
-const PILL_MUTED_OPACITY: f32 = 0.65;
 const PILL_HOVER_OPACITY: f32 = 0.85;
-const PILL_HOVER_TINT: f32 = 0.14;

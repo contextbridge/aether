@@ -1,9 +1,10 @@
 use crate::registry::Registry;
 use crate::theme;
 use crate::ui::{
-    ButtonVariant, ControlSize, ModalSize, ThemePickerEvent, UiStyles, button, modal, theme_picker, theme_picker_view,
+    ButtonVariant, ControlSize, GlassExt, ModalSize, ThemePickerEvent, UiStyles, backdrop, bare, button, modal_width,
+    theme_picker, theme_picker_view,
 };
-use clankerdiff_rouge_shell::rouge::core::{AnyView, Div, Styled, View, div, dynamic, text, view};
+use clankerdiff_rouge_shell::rouge::core::{AnyView, Div, Styled, View, div, dynamic, pct, text, view};
 use clankerdiff_rouge_shell::rouge::reactive::{Callback, Signal, effect, memo, signal, untrack};
 use clankerdiff_rouge_shell::rouge::widgets::{Placement, popover};
 use clankerdiff_ui_core::{Appearance, AppearanceMode, ReviewTheme, ThemeChoice};
@@ -15,12 +16,36 @@ pub(crate) fn settings(registry: Registry, on_close: impl Fn() + 'static) -> imp
         on_close.call();
     };
     view! {
-        <modal id="settings" title="Settings" hint="Esc to close" size=ModalSize::Compact on_dismiss=close>
-            {row("Appearance", "Follow the system, or always look light or dark", mode(registry))}
-            {row("Light theme", "Shown when the app looks light", theme_choice(registry, Appearance::Light))}
-            {row("Dark theme", "Shown when the app looks dark", theme_choice(registry, Appearance::Dark))}
-        </modal>
+        <backdrop id="settings-backdrop" on_dismiss=close>
+            <div test_id="settings" w={modal_width(ModalSize::Compact)} max_w=pct(100.0) p=16.0 flex col gap=8.0
+                 overflow_hidden glass_sheet>
+                <text heading primary>"Settings"</text>
+                <text small muted>"Esc to close"</text>
+                <div flex col min_h=0.0>
+                    {row("Activity motion", "Still indicators keep every activity label", motion(registry))}
+                    {row("Appearance", "Follow the system, or always look light or dark", mode(registry))}
+                    {row("Light theme", "Shown when the app looks light", theme_choice(registry, Appearance::Light))}
+                    {row("Dark theme", "Shown when the app looks dark", theme_choice(registry, Appearance::Dark))}
+                </div>
+            </div>
+        </backdrop>
     }
+}
+
+fn motion(registry: Registry) -> AnyView {
+    let reduced = memo(move || registry.with(|state| state.reduced_motion));
+    dynamic(move || {
+        let reduced = reduced.get();
+        let buttons = [(false, "Full"), (true, "Reduced")].map(|(value, label)| {
+            view! {
+                <button id={format!("motion-{}", label.to_lowercase())} label size=ControlSize::Small
+                        selected={value == reduced} keyboard_focusable
+                        on_click={move || registry.update(|state| state.reduced_motion = value)}/>
+            }
+        });
+        view! { <div flex gap=4.0>{..buttons}</div> }
+    })
+    .into_any()
 }
 
 fn mode(registry: Registry) -> AnyView {
@@ -76,7 +101,7 @@ fn picker(registry: Registry, appearance: Appearance, open: Signal<bool>) -> imp
         }
         ThemePickerEvent::Cancel(_) => open.set(false),
     });
-    view! { <theme_picker_view id={format!("{}-themes", key(appearance))} handle/> }
+    bare(|| view! { <theme_picker_view id={format!("{}-themes", key(appearance))} handle/> })
 }
 
 fn show_saved_theme(registry: Registry) {

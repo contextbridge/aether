@@ -2,9 +2,10 @@ use super::Sidebar;
 use super::listing::{Row, RowKind};
 use crate::remotes::{InstanceState, Lifecycle};
 use crate::threads::ThreadStatus;
-use crate::ui::tokens::{ROW_HEIGHT, TWO_LINE_ROW_HEIGHT, UNREAD_DOT_SIZE};
+use crate::ui::tokens::{ICON_SIZE, ROW_HEIGHT, TWO_LINE_ROW_HEIGHT, UNREAD_DOT_SIZE};
 use crate::ui::{
-    Icon, IconName, SelectionState, UiStyles, UiTheme, Waveform, hint, icon_button, icon_slot, inline_edit, list_row,
+    Icon, IconName, SelectionState, UiStyles, UiTheme, WispState, hint, icon_button, icon_slot, inline_edit, list_row,
+    wisp,
 };
 use clankerdiff_rouge_shell::rouge::core::{
     AnyView, Apply, Div, MenuItem as WindowMenuItem, Styled, View, div, text, view,
@@ -235,8 +236,8 @@ fn trailing(selector: &str, age: Option<String>, actions: Vec<AnyView>, selected
 fn status_icon(row: &str, status: ThreadStatus) -> AnyView {
     let theme = UiTheme::current();
     let (name, label, shape, icon, color) = match status {
-        ThreadStatus::Connecting => ("connecting", "Starting agent", "waveform", None, theme.text_muted),
-        ThreadStatus::Running => ("running", "Agent working", "waveform", None, theme.text_muted),
+        ThreadStatus::Connecting => ("connecting", "Starting agent", "wisp", None, theme.text_muted),
+        ThreadStatus::Running => ("running", "Agent working", "wisp", None, theme.info),
         ThreadStatus::Background => {
             ("background", "Background task still running", "dot", Some(IconName::CircleDot), theme.text_muted)
         }
@@ -267,7 +268,8 @@ fn status_icon(row: &str, status: ThreadStatus) -> AnyView {
     let id = format!("{row}-status-{name}");
     let mark = match icon {
         Some(icon) => Icon::new(icon, color).into_any(),
-        None => Waveform::new(format!("{id}-bars"), color).into_any(),
+        None if status == ThreadStatus::Running => wisp(ICON_SIZE, color, || WispState::Working).into_any(),
+        None => wisp(ICON_SIZE, color, || WispState::Connecting).into_any(),
     };
     hint(id.clone(), label, tagged(format!("{id}-{shape}"), mark))
 }
@@ -282,7 +284,7 @@ fn instance_icon(row: &str, state: Option<InstanceState>) -> AnyView {
     let id = format!("{row}-instance-{name}");
     let mark = match icon {
         Some(icon) => Icon::new(icon, muted).into_any(),
-        None => Waveform::new(format!("{id}-bars"), muted).into_any(),
+        None => wisp(ICON_SIZE, muted, || WispState::Connecting).into_any(),
     };
     hint(id.clone(), label, tagged(format!("{id}-icon"), mark))
 }

@@ -80,6 +80,163 @@ fn the_status_and_the_chat_tab_say_when_the_agent_waits_on_the_user() {
 }
 
 #[test]
+fn activity_details_keep_the_state_and_current_tool_when_a_plan_supplies_the_label() {
+    let (agent, mut requests) = FakeAgent::new("alpha-session").capture();
+    let (mut harness, thread) = DesktopHarness::alpha(agent);
+    let turn = harness.start_turn(thread, &mut requests, "work");
+    turn.update(plan("plan", vec![entry("Validate authentication", acp::PlanEntryStatus::InProgress)]));
+    turn.update(tool_call("call-1", "Running tests", acp::ToolCallStatus::InProgress));
+    harness.run_until_painted("activity-working");
+
+    harness.click("activity-details-trigger").unwrap();
+    assert!(harness.shows("activity-detail-state", "Working"));
+    assert!(harness.shows("activity-detail-plan", "Working on: Validate authentication"));
+    assert!(harness.shows("activity-detail-tool", "Running tests"));
+    assert!(harness.shows("tool-status-call-1", "Running"));
+
+    turn.update(thought_chunk("thought-1", "considering"));
+    harness.run_until_painted("activity-thinking");
+    assert!(harness.shows("activity-detail-state", "Thinking"), "open details stay current");
+    harness.press("escape");
+    assert!(harness.bounds("activity-details").is_none());
+    harness.press("enter");
+    assert!(harness.bounds("activity-details").is_some(), "the focused trigger opens from the keyboard");
+}
+
+#[test]
+fn activity_details_are_reachable_by_tab_and_reopen_with_enter_and_space() {
+    let (agent, mut requests) = FakeAgent::new("alpha-session").capture();
+    let (mut harness, thread) = DesktopHarness::alpha(agent);
+    let _turn = harness.start_turn(thread, &mut requests, "work");
+    assert!(harness.bounds("activity-details").is_none());
+    for _ in 0..32 {
+        harness.press("tab");
+        if harness.bounds("activity-details").is_some() {
+            break;
+        }
+    }
+    assert!(harness.bounds("activity-details").is_some(), "Tab can reach and show activity details");
+    for key in ["enter", "space"] {
+        harness.press("escape");
+        assert!(harness.bounds("activity-details").is_none());
+        harness.press(key);
+        assert!(harness.bounds("activity-details").is_some(), "{key} reopens the focused trigger");
+    }
+    assert_eq!(thread.status(), ThreadStatus::Running, "dismissing details never cancels the turn");
+}
+
+#[test]
+fn only_a_newly_completed_plan_step_gets_a_milestone_cue() {
+    let (agent, mut requests) = FakeAgent::new("alpha-session").capture();
+    let (mut harness, thread) = DesktopHarness::alpha(agent);
+    let turn = harness.start_turn(thread, &mut requests, "work");
+    turn.update(plan(
+        "plan",
+        vec![entry("Earlier work", acp::PlanEntryStatus::Completed), entry("Tests", acp::PlanEntryStatus::InProgress)],
+    ));
+    harness.run_until_painted("plan-toggle");
+    assert!(harness.bounds("activity-milestone").is_none(), "loading a plan is not a milestone");
+
+    turn.update(thought_chunk("thought-1", "considering"));
+    harness.run_until_painted("activity-thinking");
+    turn.update(message_chunk("message-1", "Writing"));
+    harness.run_until_painted("activity-writing");
+    assert!(harness.bounds("activity-milestone").is_none(), "ordinary state changes are quiet");
+
+    turn.update(plan(
+        "plan",
+        vec![
+            entry("Earlier work", acp::PlanEntryStatus::Completed),
+            entry("Tests", acp::PlanEntryStatus::Completed),
+            entry("Review", acp::PlanEntryStatus::InProgress),
+        ],
+    ));
+    harness.run_until(|harness| harness.shows("status-label", "Review"));
+    let first = harness.bounds("activity-milestone").expect("completing a step gets a cue");
+    harness.ui().run(0.5);
+    let settled = harness.bounds("activity-milestone").unwrap();
+    assert!(settled.size.width > first.size.width, "the finite outline expands");
+    harness.ui().run(1.0);
+    assert_eq!(harness.bounds("activity-milestone"), Some(settled), "the cue does not loop");
+
+    turn.update(plan(
+        "plan",
+        vec![
+            entry("Earlier work", acp::PlanEntryStatus::Completed),
+            entry("Tests", acp::PlanEntryStatus::Completed),
+            entry("Review", acp::PlanEntryStatus::Cancelled),
+        ],
+    ));
+    harness.run_until(|harness| harness.shows("plan-toggle", "3/3"));
+    assert_eq!(harness.bounds("activity-milestone"), Some(settled), "cancellation does not restart the cue");
+}
+
+#[test]
+fn suppressed_milestones_are_not_replayed_when_activity_becomes_visible_again() {
+    for suppression in ["reduced", "inactive", "clipped", "unmounted"] {
+        let (agent, mut requests) = FakeAgent::new("alpha-session").capture();
+        let (mut harness, thread) =
+            DesktopHarnessBuilder::default().agent("/alpha", agent).window_size(900.0, 600.0).start("/alpha");
+        let turn = harness.start_turn(thread, &mut requests, "work");
+        turn.update(plan("plan", vec![entry("Tests", acp::PlanEntryStatus::InProgress)]));
+        harness.run_until_painted("plan-toggle");
+        match suppression {
+            "reduced" => harness.registry().update(|state| state.reduced_motion = true),
+            "inactive" => harness.deactivate(),
+            "clipped" => harness.resize(0.0, 0.0),
+            _ => harness.press("secondary-2"),
+        }
+        harness.advance();
+        turn.update(plan("plan", vec![entry("Tests", acp::PlanEntryStatus::Completed)]));
+        harness.run_until(|_| {
+            thread
+                .with_core(|core| {
+                    core.conversation()
+                        .plan()
+                        .is_some_and(|plan| plan.entries[0].status == acp::PlanEntryStatus::Completed)
+                })
+                .unwrap_or(false)
+        });
+        assert!(harness.bounds("activity-milestone").is_none(), "{suppression} suppresses the cue");
+        match suppression {
+            "reduced" => harness.registry().update(|state| state.reduced_motion = false),
+            "inactive" => harness.activate(),
+            "clipped" => harness.resize(900.0, 600.0),
+            _ => harness.press("secondary-1"),
+        }
+        harness.run_until_painted("activity");
+        assert!(harness.bounds("activity-milestone").is_none(), "{suppression} never replays a missed cue");
+    }
+}
+
+#[test]
+fn waiting_for_an_answer_is_still_instead_of_looking_busy() {
+    let (mut harness, _) = asked(asking_name());
+    harness.ui().run(2.0);
+
+    assert!(!harness.ui().is_animating(), "waiting must not keep an animation clock alive");
+    assert!(harness.shows("status-label", "Waiting for you"));
+}
+
+#[test]
+fn inactive_windows_keep_activity_labels_without_running_animation_clocks() {
+    let (agent, mut requests) = FakeAgent::new("alpha-session").capture();
+    let (mut harness, thread) = DesktopHarness::alpha(agent);
+    let turn = harness.start_turn(thread, &mut requests, "work");
+    turn.update(tool_call("call-1", "Read file", acp::ToolCallStatus::InProgress));
+    harness.run_until_painted("activity-working");
+    harness.deactivate();
+    harness.ui().run(2.0);
+
+    assert!(!harness.ui().is_animating(), "unfocused indicators must not request continuous frames");
+    assert!(harness.shows("status-label", "Working"));
+    assert!(harness.bounds("tool-wisp-call-1").is_some());
+
+    harness.activate();
+    assert!(harness.ui().is_animating(), "working indicators resume on focus");
+}
+
+#[test]
 fn the_chat_tab_marks_an_agent_at_work_while_another_tab_shows() {
     let (agent, mut requests) = FakeAgent::new("alpha-session").capture();
     let (mut harness, thread) = DesktopHarness::alpha(agent);

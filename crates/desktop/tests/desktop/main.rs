@@ -22,3 +22,4 @@ mod theme;
 mod thread_menu;
 mod threads;
 mod transcript;
+mod wisp;

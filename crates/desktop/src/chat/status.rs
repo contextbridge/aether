@@ -1,15 +1,17 @@
 use crate::tasks::spawn_in;
 use crate::threads::{Thread, ThreadStatus};
-use crate::ui::tokens::{ICON_SIZE, ICON_SIZE_SMALL, ROW_HEIGHT, UNREAD_DOT_SIZE};
-use crate::ui::{Hint, Icon, IconName, SurfaceExt, UiStyles, UiTheme, Waveform};
-use acp_utils::conversation::{Activity, Conversation, is_plan_entry_finished};
+use crate::ui::tokens::{ICON_SIZE, ICON_SIZE_SMALL, ROW_HEIGHT};
+use crate::ui::{Hint, Icon, IconName, UiStyles, UiTheme, WispMotion, WispState, wisp};
+use acp_utils::conversation::{Activity, Conversation, ConversationContent, ToolStatus, is_plan_entry_finished};
 use agent_client_protocol::v2::schema as acp;
 use clankerdiff_rouge_shell::rouge::core::{
-    AnyView, Cursor, Div, Path, Point, Styled, TextAlign, View, canvas, div, dynamic, pct, show, text, view,
+    AnyView, Cursor, Div, Ease, Keyframes, PaintRegion, Path, Point, Pose, Styled, TextAlign, Tween, View, canvas, div,
+    dynamic, pct, show, switch, text, view, window_focused,
 };
-use clankerdiff_rouge_shell::rouge::reactive::{Memo, Scope, Signal, effect, memo, signal, sleep, untrack};
+use clankerdiff_rouge_shell::rouge::reactive::{Memo, Scope, Signal, effect, memo, signal, sleep, stored, untrack};
 use clankerdiff_rouge_shell::rouge::widgets::{Placement, popover};
 use client_core::format::token_count;
+use std::cell::Cell;
 use std::f32::consts::TAU;
 use std::time::{Duration, Instant};
 
@@ -123,22 +125,73 @@ impl StatusLine {
 
     fn activity(self, doing: Memo<Option<Doing>>, plan: Memo<Option<Vec<acp::PlanEntry>>>) -> impl View {
         let theme = UiTheme::current();
+        let motion = WispMotion::current();
+        let details = signal(false);
+        let restoring_focus = stored(false);
+        let open_details = move || {
+            restoring_focus.set(true);
+            details.set(true);
+        };
         let label = move || doing.get().map(|doing| doing.label(plan.get().as_deref())).unwrap_or_default();
         let last_turn = memo(move || self.last_turn.get().filter(|_| doing.get().is_none()));
-        let kind = memo(move || doing.get());
-        view! {
-            <div min_w=0.0 flex items_center gap=8.0>
-                <dynamic>{kind.get().map(indicator)}</dynamic>
-                <div test_id="status-label" min_w=0.0 overflow_hidden>
-                    <text no_wrap color={move || {
-                        if doing.get() == Some(Doing::Waiting) { theme.warning.get() } else { theme.text_secondary.get() }
-                    }}>{label}</text>
-                    <dynamic>{last_turn.get().map(|took| view! {
-                        <div test_id="last-turn"><text muted no_wrap>{format!("Took {}", clock(took))}</text></div>
+        let busy = move || doing.get().is_some();
+        let mark = switch(
+            move || motion.reduced(),
+            move |reduced| {
+                let mark = show(busy, move || indicator(doing, plan));
+                if reduced {
+                    mark
+                } else {
+                    mark.enter(UNSUMMONED, Tween::ms(180.0).ease(Ease::Out)).exit(UNSUMMONED, Tween::ms(DISPEL_MS))
+                }
+            },
+        );
+        let detail = memo(move || activity_detail(self.thread, doing, plan));
+        let trigger = view! {
+            <div test_id="activity-details-trigger" min_w=0.0 flex items_center gap=8.0
+                 on_press=open_details
+                 on_focus={move |event| {
+                     // Popover dismissal restores focus; that must not reopen it.
+                     if restoring_focus.get() {
+                         restoring_focus.set(false);
+                     } else if event.visible {
+                         open_details();
+                     }
+                 }}>
+                {mark}
+                <dynamic>{
+                    let detail = detail.get();
+                    view! {
+                        <div test_id="status-label" min_w=0.0 overflow_hidden>
+                            <text no_wrap color={move || {
+                                if doing.get() == Some(Doing::Waiting) { theme.warning.get() } else { theme.text_secondary.get() }
+                            }}>{label}</text>
+                            <dynamic>{last_turn.get().map(|took| view! {
+                                <div test_id="last-turn"><text muted no_wrap>{format!("Took {}", clock(took))}</text></div>
+                            })}</dynamic>
+                        </div>
+                    }.tooltip(detail)
+                }</dynamic>
+            </div>
+        };
+        let trigger = trigger.focus_visible(move |style| style.bg(theme.surface_hover));
+        popover(details, trigger, move || {
+            view! {
+                <div test_id="activity-details" w=PLAN_PANEL_WIDTH p=12.0 flex col gap=8.0>
+                    <div test_id="activity-detail-state"><text label primary>{move || {
+                        doing.get().map_or("Turn ended", |doing| doing.describe().0)
+                    }}</text></div>
+                    <dynamic>{plan.get().and_then(|entries| {
+                        entries.into_iter().find(|entry| entry.status == acp::PlanEntryStatus::InProgress)
+                    }).map(|entry| view! {
+                        <div test_id="activity-detail-plan"><text body secondary>{format!("Working on: {}", entry.content)}</text></div>
+                    })}</dynamic>
+                    <dynamic>{current_tool(self.thread).map(|tool| view! {
+                        <div test_id="activity-detail-tool"><text body secondary>{tool}</text></div>
                     })}</dynamic>
                 </div>
-            </div>
-        }
+            }
+        }).placement(Placement::Above).min_w(0.0).flex_shrink(1.0)
     }
 
     fn plan(self, plan: Memo<Option<Vec<acp::PlanEntry>>>) -> impl View {
@@ -202,22 +255,123 @@ impl Doing {
             Self::Working => ("Working", "activity-working"),
         }
     }
+
+    fn wisp(self) -> WispState {
+        match self {
+            Self::Waiting => WispState::Waiting,
+            Self::Thinking => WispState::Thinking,
+            Self::Compacting => WispState::Compacting,
+            Self::Working => WispState::Working,
+            Self::Writing => WispState::Writing,
+        }
+    }
 }
 
-fn indicator(doing: Doing) -> impl View {
+fn indicator(doing: Memo<Option<Doing>>, plan: Memo<Option<Vec<acp::PlanEntry>>>) -> impl View {
     let theme = UiTheme::current();
-    let (_, id) = doing.describe();
-    let mark = match doing {
-        Doing::Waiting => {
-            view! { <div size=UNREAD_DOT_SIZE rounded={UNREAD_DOT_SIZE / 2.0} bg=theme.warning/> }.into_any()
+    let motion = WispMotion::current();
+    let focused = window_focused();
+    let region = signal(PaintRegion::default());
+    let previous = stored(None::<Vec<acp::PlanEntry>>);
+    let completed = Cell::new(0_u64);
+    let milestones = memo(move || {
+        let entries = plan.get();
+        let advanced = previous.with(|previous| {
+            previous.as_ref().zip(entries.as_ref()).is_some_and(|(before, after)| {
+                before.iter().any(|entry| {
+                    entry.status == acp::PlanEntryStatus::InProgress
+                        && after
+                            .iter()
+                            .any(|next| next.content == entry.content && next.status == acp::PlanEntryStatus::Completed)
+                })
+            })
+        });
+        previous.set(entries);
+        if advanced {
+            completed.set(completed.get() + 1);
         }
-        _ => Waveform::new("activity-waveform", theme.info).size(ICON_SIZE_SMALL).into_any(),
-    };
+        completed.get()
+    });
+    let seen = Cell::new(0);
+    let active = Cell::new(None);
+    let cue_generation = memo(move || {
+        let milestone = milestones.get();
+        let fresh = milestone > seen.replace(milestone);
+        let allowed = !motion.reduced()
+            && focused.get()
+            && region.with(|region| !region.bounds.is_empty())
+            && doing.get().is_some_and(|doing| doing != Doing::Waiting);
+        let generation = if !allowed {
+            None
+        } else if fresh {
+            Some(milestone)
+        } else {
+            active.get()
+        };
+        active.set(generation);
+        generation
+    });
+    let cue = switch(
+        move || cue_generation.get(),
+        move |generation| {
+            generation.map(|_| {
+                div()
+                    .test_id("activity-milestone")
+                    .absolute()
+                    .inset(0.0)
+                    .rounded(ICON_SIZE_SMALL / 2.0)
+                    .border(1.0)
+                    .border_color(theme.info)
+                    .pass_through()
+                    .animate(
+                        Keyframes::new()
+                            .at(0.0, |pose| pose.scale(1.0).opacity(0.25))
+                            .at(1.0, |pose| pose.scale(1.3).opacity(0.0))
+                            .duration(0.4)
+                            .ease(Ease::Out),
+                    )
+            })
+        },
+    );
+    let tint = move || if doing.get() == Some(Doing::Waiting) { theme.warning.get() } else { theme.info.get() };
     view! {
-        <div test_id="activity" flex_none size=ICON_SIZE_SMALL flex items_center justify_center>
-            <div test_id=id flex>{mark}</div>
+        <div test_id="activity" flex_none relative size=ICON_SIZE_SMALL flex items_center justify_center track_paint_region=region>
+            {wisp(ICON_SIZE_SMALL, tint, move || doing.get().unwrap_or(Doing::Waiting).wisp())}
+            {cue}
+            <dynamic>{doing.get().map(|doing| view! {
+                <div test_id={doing.describe().1} absolute top=0.0 left=0.0 size_full pass_through/>
+            })}</dynamic>
         </div>
     }
+}
+
+fn current_tool(thread: Thread) -> Option<String> {
+    thread
+        .with_core(|core| {
+            core.conversation().items().iter().rev().find_map(|item| match item.content() {
+                ConversationContent::Tool(tool) if tool.status == ToolStatus::Running => {
+                    Some(tool.headline().unwrap_or("Tool running").to_owned())
+                }
+                _ => None,
+            })
+        })
+        .flatten()
+}
+
+fn activity_detail(thread: Thread, doing: Memo<Option<Doing>>, plan: Memo<Option<Vec<acp::PlanEntry>>>) -> String {
+    let mut detail = doing.get().map_or("Turn ended", |doing| doing.describe().0).to_owned();
+    if let Some(step) = plan
+        .get()
+        .and_then(|entries| entries.into_iter().find(|entry| entry.status == acp::PlanEntryStatus::InProgress))
+    {
+        detail.push_str("\nWorking on: ");
+        detail.push_str(&step.content);
+    }
+    if let Some(tool) = current_tool(thread) {
+        detail.push('\n');
+        detail.push_str(&tool);
+    }
+    detail
 }
 
 fn plan_entries(entries: &[acp::PlanEntry]) -> Div {
@@ -240,7 +394,7 @@ fn plan_entries(entries: &[acp::PlanEntry]) -> Div {
         }
     });
     view! {
-        <div test_id="plan-panel" w=PLAN_PANEL_WIDTH px=12.0 py=8.0 flex col gap=4.0 floating>{..rows}</div>
+        <div test_id="plan-panel" w=PLAN_PANEL_WIDTH px=12.0 py=8.0 flex col gap=4.0>{..rows}</div>
     }
 }
 
@@ -342,3 +496,6 @@ const ARC_STEPS: usize = 48;
 const NEARLY_FULL: f32 = 0.75;
 const FULL: f32 = 0.9;
 const ELAPSED_MIN_WIDTH: f32 = 36.0;
+
+const UNSUMMONED: Pose = Pose::new().scale(0.96).opacity(0.0);
+const DISPEL_MS: f32 = 260.0;

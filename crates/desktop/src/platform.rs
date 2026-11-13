@@ -1,5 +1,7 @@
 use arboard::{Clipboard, ImageData};
 use clankerdiff_rouge_shell::rouge::platform::open_url;
+#[cfg(not(target_os = "macos"))]
+use clankerdiff_rouge_shell::rouge::reactive::spawn_tokio;
 use image::codecs::png::PngEncoder;
 use image::{ExtendedColorType, ImageEncoder};
 use std::future::Future;
@@ -125,7 +127,7 @@ async fn pick_paths(prompt: PathPrompt) -> Option<Vec<PathBuf>> {
 
 #[cfg(not(target_os = "macos"))]
 async fn pick_paths(prompt: PathPrompt) -> Option<Vec<PathBuf>> {
-    clankerdiff_rouge_shell::runtime::spawn(choose(prompt)).await.ok().flatten()
+    spawn_tokio(choose(prompt)).await.ok().flatten()
 }
 
 async fn choose(prompt: PathPrompt) -> Option<Vec<PathBuf>> {

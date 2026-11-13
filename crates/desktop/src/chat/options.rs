@@ -1,7 +1,7 @@
 use crate::threads::Thread;
 use crate::ui::tokens::{COMPOSER_POPUP_HEIGHT, ICON_SIZE_SMALL, RADIUS_INNER, ROW_HEIGHT};
 use crate::ui::{
-    Icon, IconName, PickerItem, SearchPickerHandle, UiStyles, UiTheme, picker_closed, search_picker, with_middots,
+    Icon, IconName, PickerItem, SearchPickerHandle, UiStyles, UiTheme, bare, picker_closed, search_picker, with_middots,
 };
 use agent_client_protocol::v2::schema as acp;
 use clankerdiff_rouge_shell::rouge::core::{AnyView, Color, Cursor, Length, Styled, View, div, dynamic, text, view};
@@ -100,11 +100,13 @@ impl SessionOptions {
             .highlighted(current);
             let searchable =
                 (select.values.len() > SEARCH_THRESHOLD).then(|| format!("Search {}…", option.name.to_lowercase()));
-            view! {
-                <search_picker id=picker handle searchable?=searchable title={option.name.clone()}
-                               width={Length::design(PICKER_WIDTH)}
-                               max_list_height={Length::design(COMPOSER_POPUP_HEIGHT)}/>
-            }
+            bare(|| {
+                view! {
+                    <search_picker id=picker handle searchable?=searchable title={option.name.clone()}
+                                   width={Length::design(PICKER_WIDTH)}
+                                   max_list_height={Length::design(COMPOSER_POPUP_HEIGHT)}/>
+                }
+            })
             .into_any()
         };
         Some(popover(open, trigger, content).placement(Placement::Above).into_any())

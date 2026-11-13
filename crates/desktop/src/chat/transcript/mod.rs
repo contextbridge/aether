@@ -9,8 +9,10 @@ pub(crate) use message::reconnect_banner;
 use super::attachment::Attachment;
 use crate::platform::Platform;
 use crate::threads::{Thread, ThreadStatus};
-use crate::ui::tokens::ROW_HEIGHT;
-use crate::ui::{ActiveTheme, Hint, Icon, IconName, ListScrollbar, StyledExt, UiStyles, UiTheme, empty_state};
+use crate::ui::tokens::{HEADER_HEIGHT, ROW_HEIGHT};
+use crate::ui::{
+    ActiveTheme, GlassExt, Hint, Icon, IconName, ListScrollbar, StyledExt, UiStyles, UiTheme, empty_state,
+};
 use acp_utils::conversation::{
     ConversationContent, ConversationId, ConversationItem, ConversationItemId, Notice, NoticeLevel, Revision,
 };
@@ -18,8 +20,8 @@ use agent_client_protocol::v2::schema as acp;
 use clankerdiff_core::DiffDocument;
 use clankerdiff_rouge::{DiffViewerEvent, DiffViewerOptions, ReviewController, ReviewHandle, ReviewOutput};
 use clankerdiff_rouge_shell::rouge::core::{
-    Align, AnyView, BoxShadow, Cursor, FocusHandle, RowKey, Styled, TextAlign, View, VirtualListHandle, WindowHandle,
-    div, dynamic, focus_handle, px, root_font_size, show, text, view, virtual_list, virtual_list_handle, window_handle,
+    Align, AnyView, Cursor, FocusHandle, Rect, RowKey, Styled, TextAlign, View, VirtualListHandle, WindowHandle, div,
+    dynamic, focus_handle, px, root_font_size, show, text, view, virtual_list, virtual_list_handle, window_handle,
 };
 use clankerdiff_rouge_shell::rouge::reactive::{
     Callback, Memo, Scope, Signal, Stored, effect, memo, signal, stored, untrack,
@@ -39,6 +41,7 @@ pub(crate) struct Transcript {
     thread: Thread,
     list: VirtualListHandle,
     following: Signal<bool>,
+    dock: Signal<Rect>,
     unfolded: Signal<HashSet<Fold>>,
     preview: Signal<Option<Arc<[u8]>>>,
     full_diff: Signal<Option<ReviewHandle>>,
@@ -79,6 +82,7 @@ impl Transcript {
     pub(crate) fn new(
         thread: Thread,
         platform: Rc<dyn Platform>,
+        dock: Signal<Rect>,
         on_location: impl Fn(acp::ToolCallLocation) + 'static,
     ) -> Self {
         let summary = memo(move || {
@@ -104,6 +108,7 @@ impl Transcript {
             thread,
             list: virtual_list_handle(),
             following: signal(true),
+            dock,
             unfolded,
             preview: signal(None),
             full_diff: signal(None),
@@ -137,29 +142,6 @@ impl Transcript {
                 });
             }
         });
-        effect(move || {
-            let rows = summary.with(|summary| summary.items.clone());
-            untrack(|| {
-                if self.following.get_untracked() {
-                    self.list.scroll_to_row(rows.len(), Align::Bottom);
-                }
-            });
-        });
-        let offset = Cell::new(0.0_f32);
-        let state = self.list.scroll_state();
-        effect(move || {
-            let state = state.get();
-            let at = state.offset.y;
-            let bottom = at >= state.max_offset().y - FOLLOW_SLOP;
-            let up = at < offset.replace(at) - FOLLOW_SLOP;
-            untrack(|| {
-                if bottom {
-                    self.following.set_if_changed(true);
-                } else if up {
-                    self.following.set_if_changed(false);
-                }
-            });
-        });
     }
 
     pub(crate) fn view(self) -> impl View {
@@ -169,7 +151,7 @@ impl Transcript {
         view! {
             <div test_id="transcript" relative size_full flex col>
                 <div flex_1 min_h=0.0 w_full>
-                    <dynamic>{if empty.get() { self.empty_state().into_any() } else { untrack(|| self.list()).into_any() }}</dynamic>
+                    <dynamic>{if empty.get() { self.unobscured(self.empty_state()) } else { untrack(|| self.list()).into_any() }}</dynamic>
                 </div>
                 <dynamic>{self.preview.get().map(|bytes| image_preview(bytes, close_preview))}</dynamic>
                 <dynamic>{self.full_diff.get().map(|handle| full_diff(&handle, close_diff))}</dynamic>
@@ -179,7 +161,7 @@ impl Transcript {
 
     fn list(self) -> impl View {
         let theme = UiTheme::current();
-        let (summary, structure, list) = (self.summary, self.structure, self.list);
+        let (summary, structure, list, dock) = (self.summary, self.structure, self.list, self.dock);
         let rows = virtual_list(
             move || summary.with(|summary| summary.items.len()) + 1,
             ROW_ESTIMATE,
@@ -191,14 +173,15 @@ impl Transcript {
         })
         .measure_rows(|| u64::from(root_font_size().get().to_bits()))
         .handle(list)
+        .follow_end(self.following)
         .size_full();
         let following = self.following;
+        let bottom_inset = move || px(dock.get().size.height);
         let scroll = list.scroll_state();
         let jump = move || {
             view! {
             <div test_id="jump-to-latest" flex_none h=ROW_HEIGHT px=12.0 flex items_center rounded={ROW_HEIGHT / 2.0}
-                 border=px(1.0) border_color=theme.border_subtle bg=theme.elevated shadow=BoxShadow::md()
-                 cursor=Cursor::Pointer
+                 glass_control cursor=Cursor::Pointer
                  on_click={move |event| {
                      event.stop_propagation();
                      following.set(true);
@@ -213,15 +196,24 @@ impl Transcript {
             <div size_full flex>
                 <div relative flex_1 min_w=0.0 h_full>
                     {rows}
-                    <show when={move || !following.get()}>
-                        <div absolute bottom=FADE_HEIGHT left=0.0 right=0.0 flex justify_center>{jump()}</div>
-                    </show>
+                    <div test_id="transcript-view" absolute left=0.0 right=0.0 top=HEADER_HEIGHT
+                         bottom=bottom_inset pb=FADE_HEIGHT flex items_end justify_center
+                         pass_through>
+                        <show when={move || !following.get()}>{jump()}</show>
+                    </div>
                 </div>
                 <show when={move || scroll.with(|scroll| scroll.content.height > scroll.viewport.height + 0.5)}>
-                    <div test_id="transcript-scrollbar" flex_none h_full>{ListScrollbar::list(list)}</div>
+                    <div test_id="transcript-scrollbar" flex_none h_full pt=HEADER_HEIGHT pb=bottom_inset>
+                        {ListScrollbar::list(list)}
+                    </div>
                 </show>
             </div>
         }
+    }
+
+    fn unobscured(self, content: impl View) -> AnyView {
+        let dock = self.dock;
+        view! { <div size_full pt=HEADER_HEIGHT pb={move || px(dock.get().size.height)}>{content}</div> }.into_any()
     }
 
     fn row(self, index: usize) -> AnyView {
@@ -230,7 +222,8 @@ impl Transcript {
             (summary.items.get(index).map(|(id, _)| *id), group)
         });
         if item.is_none() {
-            return view! { <div h=FADE_HEIGHT/> }.into_any();
+            let dock = self.dock;
+            return view! { <div pt=FADE_HEIGHT><div h={move || px(dock.get().size.height)}/></div> }.into_any();
         }
         let Some((kind, header)) = self
             .thread
@@ -262,6 +255,7 @@ impl Transcript {
             if indented { div().pl(16.0).child(item) } else { div().child(item) }
         });
         let turn_header = header.is_some() && group.as_ref().is_some_and(|group| group.kind == GroupKind::Turn);
+        let top = if index == 0 { HEADER_HEIGHT } else { 0.0 };
         let padding = match kind {
             Kind::User => (24.0, 8.0),
             Kind::Tool if !turn_header => (0.0, 0.0),
@@ -269,7 +263,7 @@ impl Transcript {
             _ => (8.0, 8.0),
         };
         view! {
-            <div test_id={format!("transcript-row-{index}")} w_full px=16.0 pt=padding.0 pb=padding.1
+            <div test_id={format!("transcript-row-{index}")} w_full px=16.0 pt={padding.0 + top} pb=padding.1
                  on_hover={move |inside| {
                      hovered.set_if_changed(inside);
                  }}>
@@ -491,4 +485,3 @@ fn hash(value: &impl Hash) -> u64 {
 
 const FADE_HEIGHT: f32 = 24.0;
 const ROW_ESTIMATE: f32 = 48.0;
-const FOLLOW_SLOP: f32 = 2.0;

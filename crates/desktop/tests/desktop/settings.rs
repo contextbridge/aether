@@ -132,6 +132,30 @@ fn the_app_starts_with_the_saved_theme() {
     assert_eq!(theme_id(&mut harness), "nord");
 }
 
+#[test]
+fn reduced_motion_is_live_and_remembered_after_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let (agent, mut requests) = acp_utils::testing::FakeAgent::new("alpha-session").capture();
+    let (mut harness, thread) =
+        DesktopHarnessBuilder::default().state_dir(dir.path()).agent("/alpha", agent).start("/alpha");
+    let _turn = harness.start_turn(thread, &mut requests, "work");
+    harness.press("secondary-,");
+    harness.click("motion-reduced").unwrap();
+    harness.press("escape");
+    harness.ui().run(2.0);
+
+    assert!(harness.registry().with(|state| state.reduced_motion));
+    assert!(!harness.ui().is_animating());
+    assert!(harness.bounds("activity").is_some(), "reduced motion retains the activity indication");
+    harness.quit();
+
+    let mut harness = DesktopHarnessBuilder::default().state_dir(dir.path()).build();
+    assert!(harness.registry().with(|state| state.reduced_motion));
+    harness.press("secondary-,");
+    harness.click("motion-full").unwrap();
+    assert!(!harness.registry().with(|state| state.reduced_motion));
+}
+
 fn theme_id(harness: &mut DesktopHarness) -> String {
     harness.theme().id().to_string()
 }

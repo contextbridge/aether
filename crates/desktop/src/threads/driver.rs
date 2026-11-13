@@ -1,8 +1,7 @@
 use super::thread::Thread;
 use crate::target::{AgentConnector, ConnectError, SessionTarget};
 use agent_client_protocol::v2::schema::SessionId;
-use clankerdiff_rouge_shell::rouge::reactive::{Task, spawn};
-use clankerdiff_rouge_shell::runtime;
+use clankerdiff_rouge_shell::rouge::reactive::{Task, spawn, spawn_tokio};
 use client_core::command::{Command, ReviewSource};
 use client_core::runtime::{Input, SessionRuntime};
 use client_core::session_core::SessionCoreConfig;
@@ -34,7 +33,7 @@ impl Driver {
     ) -> Self {
         let (commands, commands_rx) = unbounded_channel();
         let (messages, mut messages_rx) = unbounded_channel();
-        let connection = runtime::spawn(drive(connector, target, session_id, commands_rx, messages));
+        let connection = spawn_tokio(drive(connector, target, session_id, commands_rx, messages));
         let receive = spawn(async move {
             while let Some(message) = messages_rx.recv().await {
                 let batch = std::iter::once(message).chain(std::iter::from_fn(|| messages_rx.try_recv().ok()));

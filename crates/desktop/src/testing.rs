@@ -18,8 +18,7 @@ use clankerdiff_rouge_shell::rouge::core::{
     Chord, Clipboard, FileDropPhase, Key, KeyEvent, Point, PointerButton, Rect, Size, WindowCommand, root_font_size,
     window_focused,
 };
-use clankerdiff_rouge_shell::rouge::reactive::{Entered, ReadSignal, Runtime as Reactive, Signal};
-use clankerdiff_rouge_shell::runtime;
+use clankerdiff_rouge_shell::rouge::reactive::{Entered, ReadSignal, Runtime as Reactive, Signal, set_tokio};
 use clankerdiff_ui_core::ReviewTheme;
 use client_core::connection::Connection;
 use client_core::testing::{FakeGit, git_diff_agent};
@@ -223,7 +222,7 @@ impl DesktopHarnessBuilder {
         let handle = runtime.handle().clone();
         let (mut ui, (app, focused, root_font_size, theme)) =
             component_test().size(width, height).build_with(move || {
-                runtime::install(handle);
+                set_tokio(handle);
                 let app = DesktopApp::new(config);
                 (app.view(), (app, window_focused(), root_font_size(), ActiveTheme::current()))
             });

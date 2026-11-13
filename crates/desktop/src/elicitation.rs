@@ -1,7 +1,7 @@
 use crate::platform::Platform;
 use crate::threads::Thread;
-use crate::ui::{ButtonVariant, SurfaceExt, UiStyles, UiTheme, button, text_field};
-use clankerdiff_rouge_shell::rouge::core::{AnyView, BoxShadow, Styled, View, div, dynamic, text, view};
+use crate::ui::{ButtonVariant, GlassExt, UiStyles, UiTheme, button, text_field};
+use clankerdiff_rouge_shell::rouge::core::{AnyView, Styled, View, div, dynamic, px, text, view};
 use clankerdiff_rouge_shell::rouge::reactive::{
     Callback, Scope, Signal, Stored, effect, memo, signal, stored, untrack,
 };
@@ -88,8 +88,7 @@ impl ElicitationCard {
             }
         };
         view! {
-            <div test_id="elicitation" mt=8.0 p=16.0 flex col gap=16.0 surface bg=theme.elevated border_color=theme.accent
-                 shadow=BoxShadow::md()>
+            <div test_id="elicitation" mt=8.0 p=16.0 flex col gap=16.0 glass_sheet border=px(1.0) border_color=theme.accent>
                 <text title primary>{elicitation.question()}</text>
                 {body}
                 <div flex justify_end gap=8.0>

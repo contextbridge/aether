@@ -1,5 +1,5 @@
 use crate::ui::tokens::COMPOSER_POPUP_HEIGHT;
-use crate::ui::{PickerItem, SurfaceExt, picker_list};
+use crate::ui::{GlassExt, PickerItem, picker_list};
 use clankerdiff_rouge_shell::rouge::core::{Div, Length, Styled, div, view};
 use clankerdiff_rouge_shell::rouge::reactive::Callback;
 use clankerdiff_ui_core::{PickerOption, PickerState};
@@ -83,7 +83,7 @@ impl CompletionMenu {
             .collect();
         let highlighted = self.highlighted;
         view! {
-            <div test_id="completion-menu" floating p=4.0>
+            <div test_id="completion-menu" glass_sheet p=4.0>
                 <picker_list id="completion" items highlighted empty
                              max_height={Length::design(COMPOSER_POPUP_HEIGHT)} on_choose/>
             </div>

@@ -170,7 +170,7 @@ fn a_long_patch_previews_its_start_and_opens_in_full_in_a_diff_viewer() {
     harness.click("tool-card-1").unwrap();
     assert!(harness.bounds("tool-diff-1-0").is_some(), "the patch previews in the card");
 
-    harness.scroll_into_view("transcript", "tool-diff-1-0-more").unwrap();
+    harness.scroll_into_view("transcript-view", "tool-diff-1-0-more").unwrap();
     harness.click("tool-diff-1-0-more").unwrap();
     assert!(harness.bounds("full-diff-panel").is_some(), "the whole patch opens in a diff viewer");
 
@@ -201,7 +201,7 @@ fn a_long_tool_output_is_cut_short_until_shown_in_full() {
     harness.click("tool-card-1").unwrap();
     let cut = harness.bounds("tool-details-1").unwrap().size.height;
 
-    harness.scroll_into_view("transcript", "tool-output-more-1").unwrap();
+    harness.scroll_into_view("transcript-view", "tool-output-more-1").unwrap();
     harness.click("tool-output-more-1").unwrap();
 
     assert!(harness.bounds("tool-output-more-1").is_none(), "the whole output shows");

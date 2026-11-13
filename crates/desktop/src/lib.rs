@@ -48,12 +48,11 @@ use target::ProcessTransport;
 pub fn run(cli: Cli) {
     aws_lc_rs::default_provider().install_default().expect("failed to install the Rustls AWS-LC crypto provider");
     let runtime = runtime::build();
-    let handle = runtime.handle().clone();
     let state_file = default_state_file();
     if state_file.is_none() {
         tracing::warn!("no home directory, so nothing is remembered between runs");
     }
-    let (saved, flush) = registry::load(state_file, &handle);
+    let (saved, flush) = registry::load(state_file, runtime.handle());
     let options = window_options(&saved.state());
     let config = DesktopConfig {
         transport: Arc::new(ProcessTransport),
@@ -65,11 +64,8 @@ pub fn run(cli: Cli) {
         registry: saved,
         platform: Rc::new(SystemPlatform),
     };
-    let app = App::new().menus(menus::all()).window(options, move || {
-        runtime::install(handle);
-        DesktopApp::new(config).view()
-    });
-    if let Err(error) = launch(app) {
+    let app = App::new().menus(menus::all()).window(options, move || DesktopApp::new(config).view());
+    if let Err(error) = launch(app, &runtime) {
         eprintln!("{}: {error}", menus::APP_NAME);
     }
     runtime.block_on(async {

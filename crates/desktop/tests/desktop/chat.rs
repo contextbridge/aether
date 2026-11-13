@@ -131,3 +131,17 @@ fn working_thread(cwd: impl Into<PathBuf>) -> (DesktopHarness, Thread, FakeAgent
     harness.next(&mut requests.prompt);
     (harness, thread, requests)
 }
+
+#[test]
+fn clicking_the_composer_after_clicking_away_lets_the_user_type_again() {
+    let (mut harness, _) =
+        DesktopHarnessBuilder::default().agent("/alpha", replying("alpha-session", "hello")).start("/alpha");
+
+    harness.click("transcript").unwrap();
+    harness.type_text("lost");
+    assert!(harness.shows("composer-text", ""), "nothing is focused after clicking away");
+
+    harness.click("composer-text").unwrap();
+    harness.type_text("found");
+    assert!(harness.shows("composer-text", "found"));
+}

@@ -10,12 +10,12 @@ use crate::threads::{Thread, ThreadEvent, ThreadStatus};
 use crate::ui::tokens::{COMPOSER_POPUP_HEIGHT, ICON_SIZE, ROW_HEIGHT};
 use crate::ui::typography::Typography;
 use crate::ui::{
-    Hint, Icon, IconName, PickerItem, SearchPickerEvent, SearchPickerHandle, SurfaceExt, UI_FONT, UiStyles, UiTheme,
-    icon_button, picker_closed, search_picker,
+    GlassExt, Hint, Icon, IconName, PickerItem, SearchPickerEvent, SearchPickerHandle, UI_FONT, UiTheme, icon_button,
+    on_glass, picker_closed, search_picker,
 };
 use clankerdiff_rouge_shell::rouge::core::{
     AnyView, Cursor, FocusHandle, Key, KeyEvent, Length, Modifiers, Styled, View, div, dynamic, editable, focus_handle,
-    show, text, view,
+    view,
 };
 use clankerdiff_rouge_shell::rouge::reactive::{
     Callback, Scope, Signal, Stored, batch, effect, memo, signal, stored, untrack,
@@ -134,15 +134,13 @@ impl Composer {
     }
 
     pub(crate) fn view(self) -> impl View {
-        let theme = UiTheme::current();
         let thread = self.thread;
         let queued =
             memo(move || thread.with_core(|core| core.queued_prompts().to_vec()).filter(|prompts| !prompts.is_empty()));
         let completion = memo(move || self.completion());
         let search = memo(move || self.popup.with(|popup| matches!(popup, Popup::Search(_))));
         let editor = view! {
-            <div w_full flex col gap=4.0 floating
-                 border_color={move || if self.focus.is_focused() { theme.border.get() } else { theme.border_subtle.get() }}>
+            <div w_full flex col gap=4.0 glass_raised={move || self.focus.is_focused()}>
                 <dynamic>{self.attachments()}</dynamic>
                 {self.input()}
                 {self.actions()}
@@ -174,6 +172,7 @@ impl Composer {
             .text_size(reading.size())
             .line_height(reading.line_height() / reading.size())
             .color(theme.text)
+            .placeholder(PLACEHOLDER, theme.text_muted)
             .w_full()
             .on_key_down(move |event| {
                 if self.intercept(event) {
@@ -181,17 +180,6 @@ impl Composer {
                 }
             })
             .on_submit(move |_| self.submit());
-        let empty = self.text;
-        let placeholder = show(
-            move || empty.with(String::is_empty),
-            move || {
-                view! {
-                    <div absolute left=12.0 top=8.0 pass_through>
-                        <text reading no_wrap color=theme.text_muted>{PLACEHOLDER}</text>
-                    </div>
-                }
-            },
-        );
         div()
             .relative()
             .w_full()
@@ -202,7 +190,6 @@ impl Composer {
             .bind_key(chord(SEARCH_PROMPTS_KEYS), SearchPrompts)
             .on_action(move |_: &SearchPrompts| self.open_search())
             .child(field)
-            .child(placeholder)
     }
 
     fn actions(self) -> impl View {
@@ -253,10 +240,13 @@ impl Composer {
         };
         let status = self.search_status;
         Some(
-            view! {
-                <search_picker id="prompt-search" handle searchable="Search past prompts…" empty="No matching prompts"
-                               max_list_height={Length::design(COMPOSER_POPUP_HEIGHT)} status/>
-            }
+            on_glass(|| {
+                view! {
+                    <search_picker id="prompt-search" handle searchable="Search past prompts…"
+                                   empty="No matching prompts"
+                                   max_list_height={Length::design(COMPOSER_POPUP_HEIGHT)} status/>
+                }
+            })
             .into_any(),
         )
     }

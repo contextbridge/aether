@@ -33,6 +33,7 @@ pub struct State {
     pub sidebar_width: Option<f32>,
     pub sidebar_collapsed: bool,
     pub theme: ThemePreference,
+    pub reduced_motion: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]

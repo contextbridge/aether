@@ -1,5 +1,5 @@
 use crate::ui::tokens::ICON_SIZE_SMALL;
-use crate::ui::{Icon, IconName, UiStyles, UiTheme};
+use crate::ui::{GlassExt, Icon, IconName, UiStyles, UiTheme};
 use clankerdiff_rouge_shell::rouge::core::{AnyView, Div, Styled, View, div, text, view};
 use client_core::session_core::QueuedPrompt;
 
@@ -24,7 +24,7 @@ pub(crate) fn queued_prompts(prompts: &[QueuedPrompt]) -> Div {
         view! { <div><text small muted>{format!("{} more queued", prompts.len() - shown)}</text></div> }
     });
     view! {
-        <div test_id="queued-prompts" flex col gap=4.0>
+        <div test_id="queued-prompts" px=12.0 py=8.0 flex col gap=4.0 glass>
             {..rows}
             {more}
         </div>

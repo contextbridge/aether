@@ -12,10 +12,10 @@ use crate::tasks::spawn_in;
 use crate::thread_view::{ThreadTab, ThreadView};
 use crate::threads::{Attention, Thread, ThreadEvent, ThreadManager};
 use crate::ui::interface_size::DEFAULT_INTERFACE_SIZE;
-use crate::ui::tokens::{MODAL_WIDTH, PICKER_LIST_HEIGHT};
+use crate::ui::tokens::{HEADER_HEIGHT, MODAL_WIDTH, PANEL_INSET, PICKER_LIST_HEIGHT};
 use crate::ui::{
     ActiveTheme, IconName, IndicatorLayer, InterfaceSize, PickerItem, SearchPickerHandle, StyledExt, UI_FONT, UiStyles,
-    UiTheme, backdrop, empty_state, key_binding, picker_closed, search_picker, window_appearance,
+    UiTheme, WispMotion, backdrop, empty_state, key_binding, on_glass, picker_closed, search_picker, window_appearance,
 };
 use aether_sessions::SessionStore;
 use agent_client_protocol::v2::schema::SessionId;
@@ -106,6 +106,8 @@ impl DesktopApp {
         let preference = memo(move || registry.with(|state| state.theme.clone()));
         let active = ActiveTheme::install(preference.get_untracked().theme(window_appearance()));
         effect(move || active.apply(&preference.get()));
+        let motion = WispMotion::install(registry.with_untracked(|state| state.reduced_motion));
+        effect(move || motion.set_reduced(registry.with(|state| state.reduced_motion)));
         let size = InterfaceSize::install(DEFAULT_INTERFACE_SIZE);
         if let Some(saved) = registry.with(|state| state.interface_size) {
             size.set(saved);
@@ -428,9 +430,11 @@ impl DesktopApp {
                 });
                 view! {
                     <backdrop id="switcher-backdrop" align_top on_dismiss={move || self.close_modal()}>
-                        <search_picker id="switcher" handle searchable="Search threads…" empty="No matching threads"
-                                       footer=FOOTER width={Length::design(MODAL_WIDTH)}
-                                       height={Length::design(PICKER_LIST_HEIGHT)}/>
+                        {on_glass(|| view! {
+                            <search_picker id="switcher" handle searchable="Search threads…" empty="No matching threads"
+                                           footer=FOOTER width={Length::design(MODAL_WIDTH)}
+                                           height={Length::design(PICKER_LIST_HEIGHT)}/>
+                        })}
                     </backdrop>
                 }
                 .into_any()
@@ -452,7 +456,9 @@ pub(crate) fn chord(keys: &str) -> Chord {
 }
 
 fn no_thread(collapsed: bool) -> impl View {
-    let header = collapsed.then(|| view! { <div top_bar pr=16.0>{toggle_button(false)}</div> });
+    let header = collapsed.then(|| {
+        view! { <div top_bar h=HEADER_HEIGHT pt=PANEL_INSET pr=16.0>{toggle_button(false)}</div> }
+    });
     view! {
         <div size_full flex col>
             {header}
