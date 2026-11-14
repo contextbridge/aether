@@ -64,7 +64,7 @@ impl OAuthPrompt {
     }
 
     pub fn query(&self, name: &str) -> String {
-        self.url.query_pairs().find(|(key, _)| key == name).map(|(_, value)| value.into_owned()).unwrap_or_default()
+        self.url.query_pairs().find(|(key, _)| key == name).map_or_default(|(_, value)| value.into_owned())
     }
 
     pub fn callback_url(&self) -> String {

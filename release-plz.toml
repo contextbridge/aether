@@ -5,6 +5,7 @@ pr_branch_prefix = "release-plz/"
 pr_name = "chore: release"
 dependencies_update = false
 semver_check = false
+release_always = true
 
 [[package]]
 name = "internal-evals"

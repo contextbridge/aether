@@ -411,7 +411,7 @@ impl AcpTestHarness {
     }
 
     pub async fn insert_loaded_agent_switching_session(&self, session_id: &str) -> FakeAgentSwitchingSession {
-        let events = self.session_store.load(session_id).map(|(_, events)| events).unwrap_or_default();
+        let events = self.session_store.load(session_id).map_or_default(|(_, events)| events);
         let selected_mode = last_agent_from_events(Some("Planner".to_string()), &events);
         self.insert_switching_session(session_id, events, selected_mode, false).await
     }

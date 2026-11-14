@@ -115,7 +115,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 1. Connect to MCP servers
     let mcp = mcp(".")
-        .with_config(McpConfig::from_json_file("mcp.json")?)? // <-- Load MCP servers from a JSON file
+        .with_config(McpConfig::from_json_file("mcp.json")?) // <-- Load MCP servers from a JSON file
         .spawn()?; // <-- Start the MCP gateway; servers connect in the background
     mcp.ready().await; // <-- Wait for every server to connect
 

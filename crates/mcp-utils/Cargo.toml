@@ -1,10 +1,11 @@
 [package]
 name = "aether-mcp-utils"
 version = "0.7.17"
-edition = "2024"
+edition.workspace = true
+rust-version.workspace = true
 description = "MCP client and server utilities for the Aether AI agent framework"
-license = "MIT"
-repository = "https://github.com/contextbridge/aether"
+license.workspace = true
+repository.workspace = true
 readme = "README.md"
 keywords = ["mcp", "aether", "agent", "tools"]
 categories = ["api-bindings", "asynchronous"]

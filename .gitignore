@@ -15,4 +15,13 @@ sweep.timestamp
 packages/website/dist/
 packages/website/.astro/
 packages/website/*.log
+
+# framer:begin framer
+/.framer/target/
+# framer:end framer
+
+# framer:begin rust-monorepo
+/target
+**/*.rs.bk
 .DS_Store
+# framer:end rust-monorepo

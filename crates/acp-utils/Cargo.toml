@@ -1,10 +1,11 @@
 [package]
 name = "aether-acp-utils"
 version = "0.5.19"
-edition = "2024"
+edition.workspace = true
+rust-version.workspace = true
 description = "Agent Client Protocol (ACP) utilities for the Aether AI agent framework"
-license = "MIT"
-repository = "https://github.com/contextbridge/aether"
+license.workspace = true
+repository.workspace = true
 readme = "README.md"
 keywords = ["acp", "aether", "agent", "protocol"]
 categories = ["api-bindings", "asynchronous"]

@@ -1,10 +1,11 @@
 [package]
 name = "aether-llm-codegen"
 version = "0.2.35"
-edition = "2024"
+edition.workspace = true
+rust-version.workspace = true
 description = "Code generation utilities for the Aether LLM provider layer"
-license = "MIT"
-repository = "https://github.com/contextbridge/aether"
+license.workspace = true
+repository.workspace = true
 readme = "README.md"
 keywords = ["aether", "llm", "codegen"]
 categories = ["development-tools"]

@@ -1,10 +1,11 @@
 [package]
 name = "aether-doctest"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
+rust-version.workspace = true
 description = "Test helpers for validating fenced examples embedded in Aether's `src/docs/*.md` files"
-license = "MIT"
-repository = "https://github.com/contextbridge/aether"
+license.workspace = true
+repository.workspace = true
 publish = false
 
 [package.metadata.dist]

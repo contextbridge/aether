@@ -1,10 +1,11 @@
 [package]
 name = "aether-schemas"
 version = "0.3.1"
-edition = "2024"
+edition.workspace = true
+rust-version.workspace = true
 description = "Schema generation utilities for Aether SDK codegen"
-license = "MIT"
-repository = "https://github.com/contextbridge/aether"
+license.workspace = true
+repository.workspace = true
 keywords = ["aether", "schema", "codegen"]
 categories = ["development-tools"]
 

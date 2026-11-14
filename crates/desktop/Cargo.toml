@@ -1,10 +1,11 @@
 [package]
 name = "aether-desktop"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
+rust-version.workspace = true
 description = "Native desktop client for running and managing many Aether agent threads"
-license = "MIT"
-repository = "https://github.com/contextbridge/aether"
+license.workspace = true
+repository.workspace = true
 publish = false
 default-run = "aether-desktop"
 

@@ -1,10 +1,11 @@
 [package]
 name = "aether-llm"
 version = "0.9.19"
-edition = "2024"
+edition.workspace = true
+rust-version.workspace = true
 description = "Multi-provider LLM abstraction layer for the Aether AI agent framework"
-license = "MIT"
-repository = "https://github.com/contextbridge/aether"
+license.workspace = true
+repository.workspace = true
 readme = "README.md"
 keywords = ["llm", "ai", "aether", "openai", "anthropic"]
 categories = ["api-bindings", "asynchronous"]

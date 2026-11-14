@@ -11,7 +11,7 @@ repos:
 
       - id: fmt-check
         name: just fmt-check
-        entry: scripts/run-check fmt-check
+        entry: scripts/fmt-check-changed
         language: system
         types: [rust]
         pass_filenames: true

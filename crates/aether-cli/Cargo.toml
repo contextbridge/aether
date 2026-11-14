@@ -1,11 +1,11 @@
 [package]
 name = "aether-agent-cli"
 version = "0.9.21"
-edition = "2024"
+edition.workspace = true
+rust-version.workspace = true
 description = "CLI and ACP server for the Aether AI coding agent"
-license = "MIT"
-repository = "https://github.com/contextbridge/aether"
-homepage = "https://github.com/contextbridge/aether"
+license.workspace = true
+repository.workspace = true
 readme = "README.md"
 keywords = ["ai", "agent", "cli", "acp", "coding"]
 categories = ["command-line-utilities", "development-tools"]

@@ -21,7 +21,7 @@ pub(crate) fn replying(session_id: &str, reply: &str) -> FakeAgent {
 }
 
 pub(crate) fn texts(thread: &Thread) -> Vec<String> {
-    thread.core().map(|core| acp_utils::testing::texts(core.conversation())).unwrap_or_default()
+    thread.core().map_or_default(|core| acp_utils::testing::texts(core.conversation()))
 }
 
 pub(crate) fn asking_name() -> FakeAgent {

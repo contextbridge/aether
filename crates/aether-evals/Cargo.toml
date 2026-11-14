@@ -1,10 +1,11 @@
 [package]
 name = "aether-evals"
 version = "0.5.1"
-edition = "2024"
+edition.workspace = true
+rust-version.workspace = true
 description = "Dockerized eval harness for Aether AI agents"
-license = "MIT"
-repository = "https://github.com/contextbridge/aether"
+license.workspace = true
+repository.workspace = true
 readme = "README.md"
 keywords = ["aether", "agent", "eval", "testing"]
 categories = ["development-tools::testing"]
