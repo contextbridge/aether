@@ -278,8 +278,8 @@ impl FakeGit {
             let mut diff = if binary {
                 FileDiff::from_texts(file.path.clone(), "", "").map_err(|error| git_error(error.to_string()))?
             } else {
-                let old_text = old.as_deref().map(String::from_utf8_lossy).unwrap_or_default();
-                let new_text = new.as_deref().map(String::from_utf8_lossy).unwrap_or_default();
+                let old_text = old.as_deref().map_or_default(String::from_utf8_lossy);
+                let new_text = new.as_deref().map_or_default(String::from_utf8_lossy);
                 FileDiff::from_texts(file.path.clone(), &old_text, &new_text)
                     .map_err(|error| git_error(error.to_string()))?
             };

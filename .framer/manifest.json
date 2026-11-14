@@ -1,0 +1,61 @@
+{
+  "files": {
+    ".config/nextest.toml": {
+      "kind": "managed"
+    },
+    ".gitignore": {
+      "kind": "blocks",
+      "ids": [
+        "framer",
+        "rust-monorepo"
+      ]
+    },
+    ".tool-versions": {
+      "kind": "managed"
+    },
+    "Cargo.toml": {
+      "kind": "toml",
+      "keys": [
+        "workspace.resolver",
+        "workspace.members",
+        "workspace.package.edition",
+        "workspace.package.license",
+        "workspace.package.repository",
+        "workspace.package.rust-version",
+        "workspace.lints",
+        "profile.dev",
+        "profile.dist"
+      ]
+    },
+    "clippy.toml": {
+      "kind": "managed"
+    },
+    "dist-workspace.toml": {
+      "kind": "managed"
+    },
+    "justfile": {
+      "kind": "blocks",
+      "ids": [
+        "rust-monorepo"
+      ]
+    },
+    "release-plz.toml": {
+      "kind": "toml",
+      "keys": [
+        "workspace.release_always",
+        "workspace.git_release_enable",
+        "workspace.git_tag_name",
+        "workspace.pr_branch_prefix",
+        "workspace.pr_name",
+        "workspace.dependencies_update",
+        "workspace.semver_check"
+      ]
+    },
+    "rust-toolchain.toml": {
+      "kind": "managed"
+    },
+    "rustfmt.toml": {
+      "kind": "managed"
+    }
+  }
+}

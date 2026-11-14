@@ -35,7 +35,7 @@ pub(crate) fn build_request(identity: Option<&LlmModel>, context: &Context) -> R
         thinking: None,
         output_config: None,
     };
-    let control = identity.map(LlmModel::reasoning_control).unwrap_or_default();
+    let control = identity.map_or_default(LlmModel::reasoning_control);
     apply_reasoning(&mut request, control, context.reasoning_effort());
     Ok(request)
 }

@@ -84,19 +84,18 @@ updates:
     directory: /
     cooldown:
       default-days: 7
-  - package-ecosystem: rust-toolchain
-    directory: /
+  - package-ecosystem: cargo
+    directory: /.framer
     schedule:
       interval: weekly
+    commit-message:
+      prefix: "chore(deps):"
     cooldown:
       default-days: 7
     groups:
-      rust-toolchain-minor-patch:
-        update-types:
-          - minor
-          - patch
+      framer:
         patterns:
-          - "*"
+          - "framer*"
   - package-ecosystem: docker
     schedule:
       interval: weekly

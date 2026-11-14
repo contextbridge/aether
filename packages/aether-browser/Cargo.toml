@@ -1,10 +1,11 @@
 [package]
 name = "aether-browser"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
+rust-version.workspace = true
 description = "Browser ACP client for the Aether AI agent framework, compiled to wasm"
-license = "MIT"
-repository = "https://github.com/contextbridge/aether"
+license.workspace = true
+repository.workspace = true
 readme = "README.md"
 publish = false
 

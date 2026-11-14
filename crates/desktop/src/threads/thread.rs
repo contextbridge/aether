@@ -251,7 +251,7 @@ impl Thread {
     }
 
     fn apply(&mut self, cx: &mut Context<Self>) {
-        let effects = self.core.as_mut().map(SessionCore::take_effects).unwrap_or_default();
+        let effects = self.core.as_mut().map_or_default(SessionCore::take_effects);
         for effect in effects {
             match effect {
                 Effect::Dispatch(command) => {

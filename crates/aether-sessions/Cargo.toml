@@ -1,10 +1,11 @@
 [package]
 name = "aether-sessions"
 version = "0.3.19"
-edition = "2024"
+edition.workspace = true
+rust-version.workspace = true
 description = "Persisted session logs and transcript reconstruction for Aether"
-license = "MIT"
-repository = "https://github.com/contextbridge/aether"
+license.workspace = true
+repository.workspace = true
 readme = "README.md"
 keywords = ["aether", "sessions", "transcripts"]
 categories = ["development-tools"]

@@ -1,0 +1,12 @@
+[package]
+name = "framer-project"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+framer = "0.1.1"
+framer-presets = "0.1.1"
+
+# Keeps this crate out of the repository's own workspace.
+[workspace]

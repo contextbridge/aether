@@ -9,7 +9,7 @@
 
 ## Workflows 
 
-1. When making code changes, rely on your LSP tools for compile/error checking (as its much faster) and run only targeted tests. Then, run other `just` verification checks only at the end. 
+1. When making code changes, rely on your LSP tools for compile/error checking (as its much faster) and run only targeted tests, e.g. `cargo nextest run -p <crate>`. Then, run other `just` verification checks only at the end. 
 2. When nagivating or searching for code, prefer your LSP and AST Grep tools as they're faster.
 
 ## Coding Style
@@ -43,3 +43,4 @@
 ## Workflows
 
 1. Use `gh` (Github CLI) for all Github operations.
+2. `rust-toolchain.toml`, `rustfmt.toml`, `clippy.toml`, `.tool-versions`, `.config/nextest.toml`, `dist-workspace.toml` and the `framer:begin` blocks in other files are generated. Change `.framer/src/main.rs` and run `just framer` instead of editing them.

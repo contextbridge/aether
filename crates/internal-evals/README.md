@@ -22,7 +22,7 @@ There are two ways to write evals:
 Normal nextest runs compile these evals but do not execute them because `.config/nextest.toml` excludes the entire `internal-evals` package by default:
 
 ```bash
-just test -p internal-evals
+cargo nextest run -p internal-evals
 ```
 
 Run the eval group explicitly:

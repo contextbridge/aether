@@ -1,10 +1,11 @@
 [package]
 name = "aether-auth"
 version = "0.1.21"
-edition = "2024"
+edition.workspace = true
+rust-version.workspace = true
 description = "OAuth credential storage, authorization flows and AWS SigV4 signing for the Aether AI agent framework"
-license = "MIT"
-repository = "https://github.com/contextbridge/aether"
+license.workspace = true
+repository.workspace = true
 readme = "README.md"
 
 [package.metadata.dist]

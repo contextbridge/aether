@@ -193,7 +193,7 @@ impl Modes {
 
         options.push(build_model_config_option(available, current_model, all_models, credential_store));
 
-        let levels = current_model.parse::<ModelSpec>().map(|spec| spec.reasoning_levels()).unwrap_or_default();
+        let levels = current_model.parse::<ModelSpec>().map_or_default(|spec| spec.reasoning_levels());
 
         if let Some(opt) = build_reasoning_effort_config_option(reasoning_effort, &levels) {
             options.push(opt);

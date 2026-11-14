@@ -1,10 +1,11 @@
 [package]
 name = "aether-wisp"
 version = "0.7.20"
-edition = "2024"
+edition.workspace = true
+rust-version.workspace = true
 description = "A terminal UI for AI coding agents via the Agent Client Protocol (ACP)"
-license = "MIT"
-repository = "https://github.com/contextbridge/aether"
+license.workspace = true
+repository.workspace = true
 readme = "README.md"
 keywords = ["tui", "ai", "agent", "acp", "terminal"]
 categories = ["command-line-interface"]

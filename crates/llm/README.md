@@ -123,17 +123,18 @@ let reply = AssistantReply::from(vec![
         arguments: arguments.into(),
     }),
 ]);
-context.push_assistant_turn(
-    MessageId::new(),
-    "anthropic:claude-sonnet-4-5-20250929".parse().ok(),
-    reply,
-    vec![Ok(ToolCallResult {
-        id: "call_1".into(),
-        name: "get_weather".into(),
-        arguments: arguments.into(),
-        result: "72F, sunny".into(),
-    })],
-);
+context.add_message(ChatMessage::Assistant {
+    message_id: MessageId::new(),
+    model: "anthropic:claude-sonnet-4-5-20250929".parse().ok(),
+    content: reply,
+    timestamp: IsoString::now(),
+});
+context.add_message(ChatMessage::ToolCallResult(Ok(ToolCallResult {
+    id: "call_1".into(),
+    name: "get_weather".into(),
+    arguments: arguments.into(),
+    result: "72F, sunny".into(),
+})));
 // Then call provider.stream_response(&context) again for the final answer.
 ```
 

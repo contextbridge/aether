@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Check formatting of only the crates that own the given files.
+# Usage: fmt-check-changed <files...>
+set -euo pipefail
+PKG_FLAGS=$(scripts/changed-crates "$@")
+if [ -n "$PKG_FLAGS" ]; then
+    cargo fmt --check $PKG_FLAGS
+fi

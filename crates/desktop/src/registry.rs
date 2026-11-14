@@ -44,7 +44,7 @@ pub fn default_state_file() -> Option<PathBuf> {
 
 impl Registry {
     pub fn load(file: Option<PathBuf>, cx: &mut Context<Self>) -> Self {
-        let state = file.as_deref().map(read_state).unwrap_or_default();
+        let state = file.as_deref().map_or_default(read_state);
         let saver = file.map(|file| Arc::new(Saver { file, pending: Mutex::default(), writing: Mutex::default() }));
         let quit = cx.on_app_quit(|this: &mut Self, _| {
             if let Some(saver) = &this.saver {

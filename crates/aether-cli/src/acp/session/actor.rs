@@ -354,7 +354,7 @@ impl SessionActor {
     }
 
     fn active_provider_connections(&self) -> ProviderConnectionOverrides {
-        self.specs.get(&self.active_agent).map(|spec| spec.provider_connections.clone()).unwrap_or_default()
+        self.specs.get(&self.active_agent).map_or_default(|spec| spec.provider_connections.clone())
     }
 
     async fn select_agent(&mut self, agent_name: &str) -> Result<Option<SessionEvent>, SessionError> {

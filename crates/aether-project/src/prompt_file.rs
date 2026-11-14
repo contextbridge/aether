@@ -70,9 +70,9 @@ impl PromptFile {
         let (frontmatter, body) = Self::parse_frontmatter(raw.trim())?;
 
         let default_name = if is_skill_file {
-            path.parent().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
+            path.parent().and_then(|p| p.file_name()).map_or_default(|n| n.to_string_lossy().to_string())
         } else {
-            path.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
+            path.file_stem().map_or_default(|n| n.to_string_lossy().to_string())
         };
 
         let name = frontmatter.name.unwrap_or(default_name);
@@ -81,7 +81,7 @@ impl PromptFile {
         let user_invocable = frontmatter.user_invocable.unwrap_or(is_skill_file);
         let agent_invocable = frontmatter.agent_invocable.unwrap_or(true);
 
-        let mut read_globs = frontmatter.triggers.map(|t| t.read).unwrap_or_default();
+        let mut read_globs = frontmatter.triggers.map_or_default(|t| t.read);
         read_globs.extend(frontmatter.globs);
         read_globs.extend(frontmatter.paths);
 

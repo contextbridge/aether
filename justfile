@@ -1,6 +1,61 @@
+# framer:begin rust-monorepo
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
 # List available recipes
 default:
     @just --list
+
+# Type-check every crate and target
+check:
+    cargo check --workspace --all-targets --all-features
+
+# Run tests with nextest, then doctests, which nextest doesn't run
+test profile="default":
+    cargo nextest run --profile {{profile}} --workspace --all-features --no-tests pass
+    cargo test --doc --workspace --all-features
+
+# Run tests with nextest's CI profile, which writes JUnit results
+test-ci: (test "ci")
+
+# Run Clippy, failing on any warning
+lint:
+    cargo clippy --workspace --all-targets --all-features -- -D warnings
+    cargo clippy --manifest-path .framer/Cargo.toml --target-dir target --all-targets --all-features -- -D warnings
+
+# Format all code
+fmt:
+    cargo fmt --all
+    cargo fmt --manifest-path .framer/Cargo.toml
+
+# Check formatting
+fmt-check:
+    cargo fmt --all -- --check
+    cargo fmt --manifest-path .framer/Cargo.toml -- --check
+
+# Build docs, failing on any warning
+doc-check:
+    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --document-private-items
+
+# Regenerate files from .framer/
+framer:
+    cargo run --quiet --manifest-path .framer/Cargo.toml
+
+# Check generated files are up to date
+framer-check:
+    cargo run --quiet --locked --manifest-path .framer/Cargo.toml -- --check
+
+# Preview what dist will build for the next release
+dist-plan:
+    dist plan
+
+# Regenerate the release workflow from dist-workspace.toml
+dist-generate:
+    dist generate
+
+# Check the release workflow matches dist-workspace.toml
+dist-check:
+    dist generate --check
+# framer:end rust-monorepo
 
 run:
     cargo run -p aether-wisp -- -a 'cargo run -p aether-agent-cli acp'
@@ -16,18 +71,6 @@ desktop-release:
 build:
     cargo build
 
-# Check the workspace
-check:
-    cargo check
-
-# Run tests with nextest
-test *PKGS:
-    cargo nextest run --no-tests pass --all-features {{ if PKGS == "" { "--workspace --exclude internal-evals" } else { PKGS } }}
-
-# Run tests with nextest's CI profile and JUnit output
-test-ci *PKGS:
-    cargo nextest run --no-tests pass --profile ci --all-features {{ if PKGS == "" { "--workspace --exclude internal-evals" } else { PKGS } }}
-
 # Run real LLM evals from the dedicated eval crate against a fresh sandbox image
 evals *ARGS: build-sandbox
     cargo nextest run -p internal-evals --ignore-default-filter -E 'group(evals)' {{ARGS}}
@@ -35,18 +78,6 @@ evals *ARGS: build-sandbox
 # List eval test names without running them
 evals-list *ARGS:
     cargo nextest list -p internal-evals --ignore-default-filter -E 'group(evals)' {{ARGS}}
-
-# Check formatting
-fmt-check *PKGS:
-    cargo fmt --check {{ if PKGS == "" { "--all" } else { PKGS } }}
-
-# Format Rust code
-fmt:
-    cargo fmt --all
-
-# Run clippy
-lint *PKGS:
-    cargo clippy --all-targets --all-features {{ if PKGS == "" { "--workspace" } else { PKGS } }} -- -D warnings
 
 desktop-style-check:
     scripts/desktop-style-check
@@ -60,10 +91,6 @@ sqlx-check:
     cd crates/aether-sessions
     DATABASE_URL="sqlite://$db" cargo sqlx migrate run
     DATABASE_URL="sqlite://$db" cargo sqlx prepare --check -- --features analytics
-
-# Check documentation builds without warnings
-doc-check *PKGS:
-    RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items --all-features {{ if PKGS == "" { "--workspace --examples" } else { PKGS } }}
 
 # Lint the browser ACP client (@aether-agent/browser) for wasm32
 wasm-check:
@@ -99,14 +126,6 @@ ci: fmt-check lint desktop-style-check test-ci doc-check sqlx-check wasm-check w
     pnpm sdk:test
     pnpm browser:build
     pnpm browser:typecheck
-
-# Initialize or update cargo-dist configuration and CI workflows
-dist-init:
-    dist init
-
-# Preview what cargo-dist will build in CI
-dist-plan:
-    dist plan
 
 # Build distributable artifacts for the current platform
 dist-build:

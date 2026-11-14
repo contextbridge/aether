@@ -88,7 +88,7 @@ use aether_core::mcp::McpConfig;
 let builder = mcp("/my/project")
     .with_agent_deps(deps)
     .with_builtin_servers()
-    .with_config(McpConfig::from_json_file("mcp.json")?)?;
+    .with_config(McpConfig::from_json_file("mcp.json")?);
 
 // Built-in factories have not run yet. They receive RuntimeServices here.
 let runtime = builder.spawn()?;

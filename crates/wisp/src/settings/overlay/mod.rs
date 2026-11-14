@@ -190,13 +190,10 @@ impl SettingsOverlay {
             return self.on_menu_event(event, session);
         };
         let outputs = match event {
-            UiEvent::Key(key) if key.code == KeyCode::Esc => pane
-                .take_changes()
-                .map(|mut outputs| {
-                    outputs.push(UiOutput::Close);
-                    outputs
-                })
-                .unwrap_or_default(),
+            UiEvent::Key(key) if key.code == KeyCode::Esc => pane.take_changes().map_or_default(|mut outputs| {
+                outputs.push(UiOutput::Close);
+                outputs
+            }),
             event => pane.on_ui_event(event),
         };
         self.apply(outputs)

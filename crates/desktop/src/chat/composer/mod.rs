@@ -235,7 +235,7 @@ impl Composer {
         let menu = match token.trigger {
             Trigger::Command => {
                 let thread = self.thread.read(cx);
-                let commands = thread.core().map(SessionCore::available_commands).unwrap_or_default();
+                let commands = thread.core().map_or_default(SessionCore::available_commands);
                 (!commands.is_empty()).then(|| CompletionMenu::commands(token, &text, commands))
             }
             Trigger::File => Some(CompletionMenu::files(token, &text, self.thread.read(cx).listed_files())),

@@ -149,7 +149,7 @@ impl LlmModel {
     }
 
     pub(crate) fn reasoning_control(&self) -> ReasoningControl {
-        self.entry().map(|entry| entry.reasoning_control).unwrap_or_default()
+        self.entry().map_or_default(|entry| entry.reasoning_control)
     }
 
     pub fn pricing(&self) -> Option<ModelPricing> {

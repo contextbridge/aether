@@ -1,10 +1,11 @@
 [package]
 name = "aether-client-core"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
+rust-version.workspace = true
 description = "UI-agnostic Agent Client Protocol (ACP) client core shared by Aether's frontends"
-license = "MIT"
-repository = "https://github.com/contextbridge/aether"
+license.workspace = true
+repository.workspace = true
 keywords = ["acp", "aether", "agent", "client"]
 categories = ["api-bindings", "asynchronous"]
 
