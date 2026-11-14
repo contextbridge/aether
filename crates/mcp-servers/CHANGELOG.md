@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.11](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.8.10...aether-mcp-servers-v0.8.11) - 2026-11-14
+
+### Added
+
+- fix common agent tool-call failures found in session logs ([#654](https://github.com/contextbridge/aether/pull/654))
+
+### Other
+
+- replace hand-rolled code with existing dependencies ([#652](https://github.com/contextbridge/aether/pull/652))
+
 ## [0.8.10](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.8.9...aether-mcp-servers-v0.8.10) - 2026-11-03
 
 ### Added

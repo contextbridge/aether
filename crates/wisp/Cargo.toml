@@ -1,6 +1,6 @@
 [package]
 name = "aether-wisp"
-version = "0.7.20"
+version = "0.8.0"
 edition = "2024"
 description = "A terminal UI for AI coding agents via the Agent Client Protocol (ACP)"
 license = "MIT"
@@ -42,9 +42,9 @@ clankerdiff-ratatui = { workspace = true }
 clankerdiff-syntax = { workspace = true }
 clankerdiff-client = { workspace = true }
 clankerdiff-lspd = { workspace = true, features = ["daemon"] }
-utils = { package = "aether-utils", path = "../utils", version = "0.3.1" }
-acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client"], version = "0.5.19" }
-client_core = { package = "aether-client-core", path = "../client-core", version = "0.1.0" }
+utils = { package = "aether-utils", path = "../utils", version = "0.3.2" }
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client"], version = "0.6.0" }
+client_core = { package = "aether-client-core", path = "../client-core", version = "0.2.0" }
 agent-client-protocol = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
@@ -63,8 +63,8 @@ url = { workspace = true }
 unicode-width = { workspace = true }
 
 [dev-dependencies]
-acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client", "testing"], version = "0.5.19" }
-client_core = { package = "aether-client-core", path = "../client-core", features = ["testing"], version = "0.1.0" }
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client", "testing"], version = "0.6.0" }
+client_core = { package = "aether-client-core", path = "../client-core", features = ["testing"], version = "0.2.0" }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
