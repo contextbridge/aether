@@ -47,12 +47,12 @@ required-features = ["testing"]
 workspace = true
 
 [dependencies]
-acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client", "websocket"], version = "0.5.19" }
+acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["client", "websocket"], version = "0.6.0" }
 agent-client-protocol = { workspace = true, features = ["process"] }
-aether-sessions = { path = "../aether-sessions", version = "0.3.19" }
+aether-sessions = { path = "../aether-sessions", version = "0.4.0" }
 base64 = { workspace = true }
 chrono = { workspace = true }
-client_core = { package = "aether-client-core", path = "../client-core", version = "0.1.0" }
+client_core = { package = "aether-client-core", path = "../client-core", version = "0.2.0" }
 clankerdiff-client = { workspace = true }
 clankerdiff-core = { workspace = true }
 clankerdiff-gpui = { workspace = true }
@@ -76,10 +76,10 @@ tokio-util = { workspace = true, features = ["compat"] }
 log = { workspace = true, features = ["release_max_level_info"] }
 tracing = { workspace = true, features = ["release_max_level_info"] }
 tracing-subscriber = { workspace = true }
-utils = { package = "aether-utils", path = "../utils", version = "0.3.1" }
+utils = { package = "aether-utils", path = "../utils", version = "0.3.2" }
 
 [dev-dependencies]
 clankerdiff-server = { workspace = true }
-client_core = { package = "aether-client-core", path = "../client-core", features = ["testing"], version = "0.1.0" }
+client_core = { package = "aether-client-core", path = "../client-core", features = ["testing"], version = "0.2.0" }
 tempfile = { workspace = true }
-utils = { package = "aether-utils", path = "../utils", features = ["testing"], version = "0.3.1" }
+utils = { package = "aether-utils", path = "../utils", features = ["testing"], version = "0.3.2" }

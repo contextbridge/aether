@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/contextbridge/aether/compare/aether-sessions-v0.3.19...aether-sessions-v0.4.0) - 2026-11-14
+
+### Added
+
+- fix common agent tool-call failures found in session logs ([#654](https://github.com/contextbridge/aether/pull/654))
+
+### Other
+
+- *(deps)* [**breaking**] upgrade rmcp to 3.8 and agent-client-protocol to 5.0 ([#648](https://github.com/contextbridge/aether/pull/648))
+
 ## [0.3.19](https://github.com/contextbridge/aether/compare/aether-sessions-v0.3.18...aether-sessions-v0.3.19) - 2026-11-03
 
 ### Added
