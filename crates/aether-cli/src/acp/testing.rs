@@ -828,7 +828,7 @@ impl FakeRuntimeControl {
             server = server.with_prompt_gate(gate);
         }
         if let Some(results) = self.elicitation_results.clone() {
-            server = server.with_prompt_elicitation(results);
+            server = server.with_legacy_protocol().with_prompt_elicitation(results);
         }
         server
     }
