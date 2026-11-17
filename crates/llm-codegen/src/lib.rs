@@ -374,6 +374,8 @@ impl ExplicitModel {
 }
 
 const CODEX_SUBSCRIPTION_MODELS: &[ExplicitModel] = &[
+    ExplicitModel::new("gpt-6.2-sol", 272_000),
+    ExplicitModel::new("gpt-6.2-astra", 272_000),
     ExplicitModel::new("gpt-6.1-sol", 272_000),
     ExplicitModel::new("gpt-6.1-terra", 500_000),
     ExplicitModel::new("gpt-6-sol", 272_000),
