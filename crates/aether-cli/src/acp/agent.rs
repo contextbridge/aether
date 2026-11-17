@@ -1,17 +1,17 @@
 use super::state::AcpState;
-use acp_utils::notifications::{
-    GitDiffClosePayload, GitDiffCommandPayload, McpRequest, PromptSearchParams, SessionPreviewParams,
-    WorkspaceListParams, WorkspaceMoveParams, WorkspaceStatusPayload,
-};
 use agent_client_protocol::util::MatchDispatchFrom;
 use agent_client_protocol::v2::schema::{
-    CancelSessionNotification, CloseSessionRequest, InitializeRequest, ListSessionsRequest, LoginAuthRequest,
-    LogoutAuthRequest, NewSessionRequest, PromptRequest, ResumeSessionRequest, SetSessionConfigOptionRequest,
-    SetSessionTitleRequest,
+    AuthStatusRequest, CancelSessionNotification, CloseSessionRequest, InitializeRequest, ListSessionsRequest,
+    LoginAuthRequest, LogoutAuthRequest, NewSessionRequest, PromptRequest, ResumeSessionRequest,
+    SetSessionConfigOptionRequest, SetSessionTitleRequest,
 };
 use agent_client_protocol::{
     self as acp, Agent, Client, ConnectionTo, Dispatch, HandleDispatchFrom, Handled, JsonRpcResponse, NullRun,
     Responder, v2,
+};
+use foxfire_acp::aether::{
+    GitDiffClosePayload, GitDiffCommandPayload, McpRequest, PromptSearchParams, SessionPreviewParams,
+    WorkspaceListParams, WorkspaceMoveParams, WorkspaceStatusPayload,
 };
 use std::future::Future;
 use std::sync::Arc;
@@ -48,6 +48,10 @@ impl HandleDispatchFrom<Client> for AcpHandlers {
             .await
             .if_request(async |req: SetSessionTitleRequest, responder| {
                 spawn_response(&cx, state, responder, move |state, _| async move { state.set_session_title(&req) })
+            })
+            .await
+            .if_request(async |_: AuthStatusRequest, responder| {
+                spawn_response(&cx, state, responder, move |state, _| async move { Ok(state.auth_status()) })
             })
             .await
             .if_request(async |req: LogoutAuthRequest, responder| {

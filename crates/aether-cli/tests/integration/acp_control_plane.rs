@@ -1,7 +1,7 @@
-use acp_utils::notifications::{AetherCapabilities, AetherMeta};
 use aether_auth::OAuthCredentialStorage;
 use aether_cli::acp::testing::AcpTestHarness;
 use agent_client_protocol::{schema::ProtocolVersion, v2::schema as acp};
+use foxfire_acp::aether::{AetherCapabilities, AetherMeta};
 use serde_json::json;
 
 #[tokio::test(flavor = "current_thread")]
@@ -12,7 +12,16 @@ async fn initialize_exposes_only_v2_nested_capabilities() {
         assert_eq!(response.info.name, "Aether");
         let wire = serde_json::to_value(&response).unwrap();
         let meta = AetherCapabilities::of(&response.capabilities);
-        assert!(meta.prompt_search && meta.session_preview && meta.workspace_move && meta.git_diff);
+        let every_extension = AetherCapabilities {
+            prompt_search: true,
+            session_preview: true,
+            workspace_move: true,
+            git_diff: true,
+            workspace_status: true,
+        };
+        assert_eq!(meta, every_extension, "aether advertises every extension its clients gate on");
+        assert!(response.capabilities.auth.as_ref().is_some_and(|auth| auth.status.is_some()));
+        assert!(response.auth_methods.iter().all(|method| method.description().is_none()));
         let session = response.capabilities.session.unwrap();
         assert!(session.prompt.as_ref().unwrap().embedded_context.is_some());
         assert!(session.mcp.as_ref().unwrap().stdio.is_some());
@@ -31,17 +40,23 @@ async fn login_and_logout_publish_credential_and_config_state() {
         let session = harness.insert_agent_switching_session().await;
         harness.oauth_store.save("unrelated-provider", json!({"token": "preserved"})).await.unwrap();
         assert!(!harness.oauth_store.contains("codex"));
+        let codex = codex_label(&harness.initialize_response);
+        let status = harness.client_cx.send_request(acp::AuthStatusRequest::new()).block_task().await.unwrap();
+        assert!(!signed_in(&status.accounts, &codex));
+
         harness.client_cx.send_request(acp::LoginAuthRequest::new("codex")).block_task().await.unwrap();
         assert!(harness.oauth_store.contains("codex"));
-        let methods = harness.peer.next_auth_methods_update().await.auth_methods;
-        assert!(authenticated(&methods));
+        let update = harness.peer.next_auth_status_update().await;
+        assert_eq!(update.state, acp::AuthState::Authenticated);
+        assert!(signed_in(&update.accounts, &codex));
+        let status = harness.client_cx.send_request(acp::AuthStatusRequest::new()).block_task().await.unwrap();
+        assert!(signed_in(&status.accounts, &codex));
         let logged_in = next_config(&mut harness, session.session_id()).await;
 
         harness.client_cx.send_request(acp::LogoutAuthRequest::new()).block_task().await.unwrap();
         assert!(harness.oauth_store.load("codex").await.unwrap().is_none());
         assert!(harness.oauth_store.contains("unrelated-provider"));
-        let methods = harness.peer.next_auth_methods_update().await.auth_methods;
-        assert!(!authenticated(&methods));
+        assert!(!signed_in(&harness.peer.next_auth_status_update().await.accounts, &codex));
         let logged_out = next_config(&mut harness, session.session_id()).await;
         assert_ne!(logged_in, logged_out, "credential state changes the model login hints");
         let wire = serde_json::to_value(logged_out).unwrap();
@@ -121,8 +136,13 @@ async fn resume_accepts_empty_or_omitted_lists_and_rejects_unknown_cursors() {
     .await;
 }
 
-fn authenticated(methods: &[acp::AuthMethod]) -> bool {
-    methods.iter().any(|method| matches!(method, acp::AuthMethod::Agent(method) if method.method_id.0.as_ref() == "codex" && method.description.as_deref() == Some("authenticated")))
+fn codex_label(initialize: &acp::InitializeResponse) -> String {
+    let codex = initialize.auth_methods.iter().find(|method| method.method_id().0.as_ref() == "codex");
+    codex.expect("aether offers a codex login").name().to_owned()
+}
+
+fn signed_in(accounts: &[acp::AuthAccount], label: &str) -> bool {
+    accounts.iter().any(|account| account.label == label)
 }
 
 async fn next_config(harness: &mut AcpTestHarness, session_id: &acp::SessionId) -> Vec<acp::SessionConfigOption> {
