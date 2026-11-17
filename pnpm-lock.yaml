@@ -180,18 +180,6 @@ importers:
         specifier: ^7.0.2
         version: 7.0.2
 
-  packages/aether-browser:
-    devDependencies:
-      '@aether-agent/schema-codegen':
-        specifier: workspace:*
-        version: link:../schema-codegen
-      '@agentclientprotocol/sdk':
-        specifier: ^2.4.0
-        version: 2.4.0(zod@4.6.7)
-      typescript:
-        specifier: ^7.0.2
-        version: 7.0.2
-
   packages/aether-evals:
     dependencies:
       '@aether-agent/sdk':

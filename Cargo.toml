@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "packages/aether-browser"]
+members = ["crates/*"]
 
 [workspace.lints.rust]
 unreachable_pub = "warn"
@@ -119,15 +119,6 @@ clankerdiff-gpui-shell = { version = "0.10.0" }
 clankerdiff-markdown = { version = "0.10.0" }
 clankerdiff-syntax = { version = "0.10.0" }
 clankerdiff-ui-core = { version = "0.10.0" }
-
-# Wasm
-wasm-bindgen = "0.2.128"
-wasm-bindgen-futures = "0.4.78"
-web-sys = "0.3.105"
-js-sys = "0.3.105"
-serde-wasm-bindgen = "0.6.5"
-gloo-net = { version = "0.7.0", default-features = false }
-wasm-bindgen-test = "0.3.79"
 
 # Testing
 tempfile = "3.27"
