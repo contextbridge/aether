@@ -1,10 +1,10 @@
-use acp_utils::notifications::{
-    WorkspaceListParams, WorkspaceListResponse, WorkspaceMoveParams, WorkspaceMoveResponse, WorkspaceMoveTarget,
-};
 use aether_cli::acp::testing::AcpTestHarness;
 use aether_cli::workspace::DirectoryCloner;
 use aether_cli::workspace::testing::{StdCopyCloner, init_repo};
 use agent_client_protocol::v2::schema::{AbsolutePath, ListSessionsRequest, ResumeSessionRequest, StopReason};
+use foxfire_acp::aether::{
+    WorkspaceListParams, WorkspaceListResponse, WorkspaceMoveParams, WorkspaceMoveResponse, WorkspaceMoveTarget,
+};
 use std::fs;
 use utils::testing::{git, git_commit};
 

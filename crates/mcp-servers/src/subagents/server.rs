@@ -12,6 +12,7 @@ use rmcp::{
     task_manager::TaskExit,
     tool, tool_handler, tool_router,
 };
+use std::mem::DropGuard;
 use std::path::{Path, PathBuf};
 
 use super::progress::SubAgentProgressSink;
@@ -164,7 +165,7 @@ impl SubAgentsMcp {
         Parameters(args): Parameters<SpawnSubAgentsInput>,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        let instrumentation = InstrumentationGuard(self.instrumentation(&context));
+        let instrumentation = InstrumentationGuard::new(self.instrumentation(&context));
 
         if let Err(error) = self.validate(&args, &context) {
             instrumentation.finish(Some(&error.to_string()));
@@ -183,24 +184,26 @@ impl SubAgentsMcp {
     }
 }
 
-struct InstrumentationGuard(Option<Box<dyn McpRequestInstrumentation>>);
+type Instrumentation = Option<Box<dyn McpRequestInstrumentation>>;
+
+struct InstrumentationGuard(DropGuard<Instrumentation, fn(Instrumentation)>);
 
 impl InstrumentationGuard {
+    fn new(instrumentation: Instrumentation) -> Self {
+        Self(DropGuard::new(instrumentation, |instrumentation| {
+            if let Some(instrumentation) = instrumentation {
+                instrumentation.finish(Some("Sub-agent execution cancelled"));
+            }
+        }))
+    }
+
     fn trace_context(&self) -> Option<TraceContext> {
         self.0.as_deref().and_then(McpRequestInstrumentation::trace_context)
     }
 
-    fn finish(mut self, error: Option<&str>) {
-        if let Some(instrumentation) = self.0.take() {
+    fn finish(self, error: Option<&str>) {
+        if let Some(instrumentation) = DropGuard::dismiss(self.0) {
             instrumentation.finish(error);
-        }
-    }
-}
-
-impl Drop for InstrumentationGuard {
-    fn drop(&mut self) {
-        if let Some(instrumentation) = self.0.take() {
-            instrumentation.finish(Some("Sub-agent execution cancelled"));
         }
     }
 }

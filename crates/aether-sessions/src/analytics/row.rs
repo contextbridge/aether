@@ -238,7 +238,7 @@ impl EventProjection {
             ContextEvent::CompactionResult { message_id, .. } => {
                 Self { message_id: Some(message_id.to_string()), ..Self::new("agent", "context_compaction_result") }
             }
-            ContextEvent::UsageUpdated { usage } => Self {
+            ContextEvent::UsageUpdated { usage, .. } => Self {
                 usage_ratio: usage.usage_ratio,
                 context_limit: usage.context_limit.map(clamp_i64),
                 input_tokens: Some(clamp_i64(usage.input_tokens)),
@@ -286,6 +286,7 @@ mod tests {
             new: "new".to_string(),
         }));
         let usage = SessionEvent::Agent(AgentEvent::Context(ContextEvent::UsageUpdated {
+            estimated_usd: llm::Usd::ZERO,
             usage: ContextUsage { usage_ratio: Some(0.9), ..ContextUsage::default() },
         }));
         let compaction_ended = SessionEvent::Agent(AgentEvent::Context(ContextEvent::CompactionEnded {

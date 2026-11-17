@@ -2,15 +2,16 @@ use crate::TestResult;
 use aether_cli::acp::testing::{AcpTestHarness, FakeBackgroundTask};
 use aether_sessions::{SessionEvent, UserEvent};
 use agent_client_protocol::ErrorCode;
+use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::v2::schema::{
-    CancelSessionNotification, CloseSessionRequest, ContentBlock, MessageId, PromptResponse, SessionId, SessionUpdate,
-    StateUpdate, StopReason,
+    CancelSessionNotification, CloseSessionRequest, ContentBlock, Cost, MessageId, PromptResponse, SessionId,
+    SessionUpdate, StateUpdate, StopReason, UsageUpdate,
 };
+use foxfire_acp::mcp_status::{McpServerStatus, McpServerStatusEntry};
 use llm::LlmResponse;
-use llm::testing::{FakeLlmProvider, llm_response};
+use llm::testing::{FakeLlmProvider, llm_response, priced_model};
 use std::sync::Arc;
 use tokio::sync::Notify;
-use utils::mcp_status::{McpServerStatus, McpServerStatusEntry};
 
 #[tokio::test(flavor = "current_thread")]
 async fn cancel_during_mcp_prompt_expansion_does_not_wait_for_the_server() {
@@ -62,6 +63,27 @@ async fn cancel_sent_before_acceptance_is_not_lost() {
             Ok(_) => harness.expect_idle(&id, StopReason::Cancelled).await,
             Err(error) => assert_eq!(error.code, ErrorCode::REQUEST_CANCELLED),
         }
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn usage_updates_report_the_context_window_and_the_session_cost_once_a_call_is_priced() {
+    AcpTestHarness::run(|mut harness| async move {
+        let reply = || vec![llm_response().usage(1_000, 500).text(&["reply"]).build()];
+        let priced = FakeLlmProvider::new(reply()).with_model(priced_model()).with_context_window(Some(100_000));
+        let unpriced = FakeLlmProvider::new(reply()).with_context_window(Some(100_000));
+        let priced = harness.session("priced", priced).insert().await;
+        let priced = last_usage(&mut harness, &priced).await;
+        let unpriced = harness.session("unpriced", unpriced).insert().await;
+        let unpriced = last_usage(&mut harness, &unpriced).await;
+
+        assert_eq!((priced.used, priced.size), (1_000, 100_000));
+        let MaybeUndefined::Value(Cost { amount, currency, .. }) = priced.cost else {
+            panic!("a priced session reports its cost: {priced:?}");
+        };
+        assert!(amount > 0.0 && currency == "USD", "{amount} {currency}");
+        assert_eq!(unpriced.cost, MaybeUndefined::Undefined, "an unpriced session leaves the cost out");
     })
     .await;
 }
@@ -428,6 +450,16 @@ async fn start_background_task(harness: &mut AcpTestHarness, id: &SessionId) -> 
     harness.prompt(id, "start a task").await?;
     harness.expect_idle(id, StopReason::EndTurn).await;
     Ok(())
+}
+
+async fn last_usage(harness: &mut AcpTestHarness, id: &SessionId) -> UsageUpdate {
+    harness.prompt(id, "hi").await.unwrap();
+    let updates = harness.updates_until(id, is_idle).await;
+    let mut usage = updates.into_iter().filter_map(|update| match update {
+        SessionUpdate::UsageUpdate(usage) => Some(usage),
+        _ => None,
+    });
+    usage.next_back().expect("the turn reports its usage")
 }
 
 fn is_running(update: &SessionUpdate) -> bool {

@@ -47,7 +47,7 @@ async fn test_switch_model_unknown_context_limit_resets_context_meter() -> Resul
                 |event| {
                     matches!(
                         event,
-                        AgentEvent::Context(ContextEvent::UsageUpdated { usage })
+                        AgentEvent::Context(ContextEvent::UsageUpdated { usage, .. })
                             if usage.usage_ratio.is_none() && usage.context_limit.is_none() && usage.input_tokens.is_zero()
                     )
                 },
@@ -64,7 +64,7 @@ async fn test_switch_model_unknown_context_limit_resets_context_meter() -> Resul
         events.iter().any(|m| {
             matches!(
                 m,
-                AgentEvent::Context(ContextEvent::UsageUpdated { usage })
+                AgentEvent::Context(ContextEvent::UsageUpdated { usage, .. })
                     if usage.usage_ratio.is_none() && usage.context_limit.is_none() && usage.input_tokens.is_zero()
             )
         }),

@@ -4,7 +4,7 @@ import type {
   ToolAnnotations,
 } from "@modelcontextprotocol/sdk/types.js";
 import type { z } from "zod";
-import type { ReasoningEffort, SessionUsageEvent } from "./generated/types.js";
+import type { ReasoningEffort } from "./generated/types.js";
 
 export type AgentSelection =
   | { agent: string; model?: never; reasoningEffort?: never }
@@ -28,7 +28,6 @@ export type AetherMessage =
       update: acp.SessionUpdate;
       raw: acp.UpdateSessionNotification;
     }
-  | { type: "usage"; usage: SessionUsageEvent }
   | { type: "elicitation_complete"; elicitationId: string }
   | { type: "result"; sessionId: string; stopReason: StopReason }
   | { type: "error"; error: unknown };

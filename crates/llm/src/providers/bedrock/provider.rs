@@ -199,9 +199,9 @@ mod tests {
     use aws_smithy_eventstream::frame::write_message_to;
     use aws_smithy_types::base64;
     use aws_smithy_types::event_stream::{Header, HeaderValue, Message};
+    use foxfire_acp::ReasoningEffort;
     use futures::StreamExt;
     use serde_json::json;
-    use utils::ReasoningEffort;
 
     #[test]
     fn test_display_name() {

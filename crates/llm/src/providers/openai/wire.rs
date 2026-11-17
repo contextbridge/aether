@@ -1,6 +1,6 @@
 use crate::{Context, TokenUsage};
+use foxfire_acp::ReasoningEffort;
 use serde::Deserialize;
-use utils::ReasoningEffort;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PromptCacheKeySource {

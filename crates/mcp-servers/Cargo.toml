@@ -5,7 +5,6 @@ edition = "2024"
 description = "Built-in MCP tool servers for the Aether AI agent framework"
 license = "MIT"
 repository = "https://github.com/contextbridge/aether"
-homepage = "https://github.com/contextbridge/aether"
 readme = "README.md"
 keywords = ["mcp", "aether", "agent", "tools"]
 categories = ["development-tools"]
@@ -71,6 +70,7 @@ schemars = { workspace = true }
 clap = { workspace = true, features = ["env"] }
 thiserror = { workspace = true }
 mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", default-features = false, version = "0.7.17" }
+foxfire-acp = { workspace = true, default-features = false }
 utils = { package = "aether-utils", path = "../utils", version = "0.3.1" }
 clankerdiff-lspd = { workspace = true, features = ["daemon"], optional = true }
 futures = { workspace = true, optional = true }

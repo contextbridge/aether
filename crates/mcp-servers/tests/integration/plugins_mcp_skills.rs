@@ -186,7 +186,7 @@ async fn from_args_resolves_dirs_and_runs_prompts_from_the_base_dir() -> TestRes
 
     let prompt = client.get_prompt("where", Map::new()).await?;
 
-    let text = prompt.messages[0].content.as_text().map(|content| content.text.trim()).unwrap_or_default();
+    let text = prompt.messages[0].content.as_text().map_or_default(|content| content.text.trim());
     assert_eq!(canonicalize(text)?, canonicalize(workspace.root())?);
     assert!(SkillsMcpArgs::try_parse_from(Vec::<&str>::new()).is_err(), "--dir is required");
     Ok(())
@@ -246,7 +246,7 @@ async fn serve(workspace: &TestWorkspace) -> McpClient {
 async fn prompt_text(client: &McpClient, name: &str, arguments: Value) -> TestResult<String> {
     let Value::Object(arguments) = arguments else { panic!("prompt arguments must be an object") };
     let prompt = client.get_prompt(name, arguments).await?;
-    Ok(prompt.messages[0].content.as_text().map(|content| content.text.clone()).unwrap_or_default())
+    Ok(prompt.messages[0].content.as_text().map_or_default(|content| content.text.clone()))
 }
 
 async fn get_skill(client: &McpClient, name: &str, path: Option<&str>) -> TestResult<Value> {

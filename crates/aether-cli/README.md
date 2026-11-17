@@ -237,7 +237,7 @@ Define agents with specific model, prompts, and tool configurations:
 - **Top-level `mcps`** — Ordered default MCP config sources used by agents that do not define their own `mcps`. File paths can be written as strings; typed objects support `{ "type": "file", "path": "...", "deferTools": false }` and inline `{ "type": "inline", "servers": { ... } }` entries.
 - **Agent `prompts`** — Optional ordered prompt sources that override top-level `prompts` for that agent. Supports the same string shorthand and typed objects as top-level `prompts`.
 - **Agent `mcps`** — Optional ordered MCP config sources that override top-level `mcps` for that agent. Supports the same string shorthand and typed objects as top-level `mcps`.
-- **`userInvocable: true`** — Agent appears as a mode option in ACP clients (e.g., Wisp's Shift+Tab)
+- **`userInvocable: true`** — Agent appears as a mode option in ACP clients (e.g., Foxfire's Shift+Tab)
 - **`agentInvocable: true`** — Agent can be spawned as a sub-agent
 - **`tools`** — Filter which MCP tools the agent can use (optional). Supports `allow` (allowlist) and `deny` (blocklist) entries. Entries can be exact/trailing-`*` name patterns such as `coding__read_file` or annotation matchers such as `{ "readOnly": true }`, `{ "destructive": false }`, `{ "idempotent": true }`, and `{ "openWorld": false }`. If both are set, `allow` is applied first, then `deny` removes from the result. Omit or leave empty to allow all tools.
 

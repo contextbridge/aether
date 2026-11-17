@@ -1,6 +1,7 @@
 use crate::request_context::{CLIENT_CANNOT_ELICIT, parse_response, supports_elicitation};
 use crate::review::html_review::{Artifact, PendingReviews, ReviewServer};
 use crate::workspace_paths::resolve_path;
+use foxfire_acp::artifact_review::{ArtifactReviewDecision, ArtifactReviewElicitationMeta, ArtifactReviewSubmission};
 use reqwest::Url;
 use rmcp::{
     ErrorData as McpError, RoleServer,
@@ -19,7 +20,6 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
-use utils::artifact_review::{ArtifactReviewDecision, ArtifactReviewElicitationMeta, ArtifactReviewSubmission};
 
 const REVIEW: &str = "review";
 

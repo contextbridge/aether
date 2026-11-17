@@ -10,13 +10,3 @@ semver_check = false
 name = "internal-evals"
 release = false
 publish = false
-
-[[package]]
-name = "aether-browser"
-release = false
-publish = false
-
-[[package]]
-name = "aether-desktop"
-release = false
-publish = false

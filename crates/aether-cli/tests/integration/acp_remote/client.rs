@@ -1,10 +1,10 @@
-use acp_utils::websocket;
 use aether_cli::acp::testing::AcpTestHarness;
 use aether_cli::client::{ClientArgs, ClientRunError, run_client};
 use agent_client_protocol::v2::schema::SessionId;
 use agent_client_protocol::v2::schema::{CloseSessionRequest, PromptRequest};
 use clap::Parser;
-use client_core::connection::{Connection, Session};
+use foxfire_acp::websocket;
+use foxfire_core::connection::{Connection, Session};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::handshake::server::Request;
 
@@ -143,5 +143,5 @@ async fn remote_client_handshake_errors_do_not_expose_headers() {
 
 async fn open_remote(request: impl IntoClientRequest, session: Option<SessionId>) -> Session {
     let transport = websocket::connect(request.into_client_request().unwrap()).await.unwrap();
-    Connection::connect_to(wisp::client_info(), transport).await.unwrap().open_remote(session).await.unwrap()
+    Connection::connect_to(foxfire_tui::client_info(), transport).await.unwrap().open_remote(session).await.unwrap()
 }

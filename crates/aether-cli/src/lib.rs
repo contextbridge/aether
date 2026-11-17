@@ -14,6 +14,7 @@ pub(crate) mod prompt;
 pub mod provider_connection_args;
 pub mod resolve;
 pub(crate) mod runtime;
+pub mod sessions;
 pub mod settings;
 pub mod settings_args;
 pub mod show_prompt;

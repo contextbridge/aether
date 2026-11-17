@@ -1,11 +1,11 @@
-use acp_utils::websocket::{self, ConnectError};
 use agent_client_protocol::v2::schema::SessionId;
+use foxfire_acp::websocket::{self, ConnectError};
+use foxfire_tui::run_remote_tui;
+use foxfire_tui::settings::load_or_create_settings;
 use std::path::PathBuf;
 use thiserror::Error;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue, Request, Uri};
-use wisp::run_remote_tui;
-use wisp::settings::load_or_create_settings;
 
 #[derive(clap::Args)]
 pub struct ClientArgs {
@@ -21,7 +21,7 @@ pub struct ClientArgs {
     #[arg(short = 'H', long = "header", value_name = "HEADER")]
     pub headers: Vec<String>,
 
-    /// Directory for client UI logs (default: /tmp/wisp-logs).
+    /// Directory for client UI logs (default: /tmp/foxfire_tui-logs).
     #[arg(long)]
     pub log_dir: Option<PathBuf>,
 }
@@ -37,7 +37,7 @@ pub enum ClientRunError {
     #[error("Failed to establish the remote WebSocket connection; check the address, network, and proxy configuration")]
     Handshake,
     #[error(transparent)]
-    Tui(#[from] wisp::error::AppError),
+    Tui(#[from] foxfire_tui::error::AppError),
 }
 
 impl ClientArgs {

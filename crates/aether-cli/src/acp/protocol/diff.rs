@@ -1,6 +1,6 @@
 use agent_client_protocol::v2::schema::{AbsolutePath, Diff, DiffChange, DiffFileType, DiffPatch};
 use clankerdiff_core::git_patch_from_texts;
-use utils::display_meta::FileDiff;
+use foxfire_acp::display_meta::FileDiff;
 
 /// Convert full text snapshots into Git patch
 pub(crate) fn map_file_diff(diff: &FileDiff) -> Option<Diff> {

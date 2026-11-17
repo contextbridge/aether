@@ -1,5 +1,5 @@
-use acp_utils::notifications::{PromptSearchParams, PromptSearchResponse};
 use aether_cli::acp::testing::AcpTestHarness;
+use foxfire_acp::aether::{PromptSearchParams, PromptSearchResponse};
 
 #[tokio::test(flavor = "current_thread")]
 async fn prompt_search_request_finds_user_prompt_history() {

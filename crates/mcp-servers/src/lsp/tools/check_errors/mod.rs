@@ -9,12 +9,12 @@ use crate::lsp::diagnostics::{DiagnosticCounts, FormattedDiagnostic, count_by_se
 use crate::lsp::error::LspError;
 use crate::lsp::registry::LspRegistry;
 use crate::workspace_paths::relative_path;
+use foxfire_acp::display_meta::{ToolDisplayMeta, basename};
 use lsp_types::{Diagnostic, DiagnosticSeverity};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
-use utils::display_meta::{ToolDisplayMeta, basename};
 
 /// Input payload for the `lsp_check_errors` tool.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]

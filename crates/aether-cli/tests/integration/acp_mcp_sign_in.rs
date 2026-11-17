@@ -1,8 +1,8 @@
-use acp_utils::notifications::McpRequest;
 use aether_cli::acp::testing::AcpTestHarness;
 use agent_client_protocol::v2::schema::ElicitationMode;
+use foxfire_acp::aether::McpRequest;
+use foxfire_acp::mcp_status::{McpServerAuthCapability, McpServerStatus};
 use mcp_utils::testing::{FakeAuthServer, FakeMcpServer, complete_authorization};
-use utils::mcp_status::{McpServerAuthCapability, McpServerStatus};
 
 #[tokio::test(flavor = "current_thread")]
 async fn signing_in_to_an_mcp_server_runs_through_the_client_and_reports_completion() {

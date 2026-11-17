@@ -2,6 +2,7 @@ use super::deferred_tools;
 use super::tool_bridge::tool_definition;
 use super::{ToolExposure, ToolFilter};
 use crate::core::McpInstructions;
+use foxfire_acp::mcp_status::McpServerStatusEntry;
 use futures::Stream;
 use llm::ToolDefinition;
 use mcp_utils::client::{ClientOptions, ToolCall, ToolCallOptions};
@@ -12,7 +13,6 @@ use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
-use utils::mcp_status::McpServerStatusEntry;
 
 #[derive(Clone)]
 pub struct McpCatalog {

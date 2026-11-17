@@ -1,4 +1,4 @@
-use acp_utils::config_option_id::{ConfigOptionId, UnknownConfigOptionId};
+use foxfire_acp::config_option_id::{ConfigOptionId, UnknownConfigOptionId};
 use llm::ReasoningEffort;
 use thiserror::Error;
 

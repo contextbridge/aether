@@ -2,6 +2,7 @@ use super::GatewayError;
 use super::connection::Connection;
 use crate::client::{ClientOptions, McpClient, ToolCall, ToolCallOptions, Transport};
 use crate::server::McpServer;
+use foxfire_acp::mcp_status::McpServerStatusEntry;
 use futures::future::join_all;
 use futures::stream::select_all;
 use futures::{Stream, StreamExt};
@@ -11,7 +12,6 @@ use std::sync::Arc;
 use tokio_stream::wrappers::WatchStream;
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tokio_util::task::TaskTracker;
-use utils::mcp_status::McpServerStatusEntry;
 
 #[derive(Clone)]
 pub struct McpGateway {

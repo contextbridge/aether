@@ -181,7 +181,7 @@ Use `aether-agent-core` as a Rust library to build your own agent in ~25 lines. 
 |---------|-------------|
 | [`aether-agent-core`](crates/aether-core) | Core agent library — LLM + prompt + tools in a loop ([docs](https://docs.rs/aether-agent-core)) |
 | [`llm`](crates/llm) | Multi-provider LLM abstraction ([docs](https://docs.rs/aether-llm)) |
-| [`wisp`](crates/wisp) | Terminal UI for AI agents, built on ACP ([docs](https://aether-agent.io/aether/terminal/overview/)) |
+| [`foxfire-tui`](https://github.com/jcarver989/foxfire/tree/main/crates/foxfire-tui) | Terminal UI for AI agents, built on ACP ([docs](https://aether-agent.io/aether/terminal/overview/)) |
 | [`aether-agent-cli`](crates/aether-cli) | Headless CLI and ACP server for editor integration ([docs](https://aether-agent.io/aether/running/headless/)) |
 | [`mcp-servers`](crates/mcp-servers) | Pre-built MCP tool servers (coding, skills, tasks, sub-agents, review) ([docs](https://aether-agent.io/aether/built-in-servers/coding/)) |
 | [`aether-evals`](crates/aether-evals) | Automated testing (evals) for LLM agents ([docs](https://docs.rs/aether-evals)) |

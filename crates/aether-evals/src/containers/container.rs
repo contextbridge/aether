@@ -151,7 +151,7 @@ impl ExecHandle {
 
     pub(crate) async fn stderr_to_string(&mut self) -> Result<String, ContainerError> {
         let stderr = self.exec.stderr_to_vec().await?;
-        Ok(String::from_utf8_lossy(&stderr).into_owned())
+        Ok(String::from_utf8_lossy_owned(stderr))
     }
 
     pub(crate) async fn exit_code(self) -> Result<i64, ContainerError> {
@@ -163,8 +163,8 @@ impl ExecHandle {
     }
 
     pub(crate) async fn collect(mut self) -> Result<ExecOutput, ContainerError> {
-        let stdout = String::from_utf8_lossy(&self.exec.stdout_to_vec().await?).into_owned();
-        let stderr = String::from_utf8_lossy(&self.exec.stderr_to_vec().await?).into_owned();
+        let stdout = String::from_utf8_lossy_owned(self.exec.stdout_to_vec().await?);
+        let stderr = String::from_utf8_lossy_owned(self.exec.stderr_to_vec().await?);
         let exit_code = self.exit_code().await?;
         Ok(ExecOutput { exit_code, stdout, stderr })
     }

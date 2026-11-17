@@ -2,9 +2,9 @@ use crate::LlmError;
 use crate::LlmModel;
 use crate::Result as LlmResult;
 use crate::catalog::{Provider, ReasoningEffortError};
+use foxfire_acp::ReasoningEffort;
 use std::pin::Pin;
 use tokio_stream::Stream;
-use utils::ReasoningEffort;
 
 use super::{Context, LlmResponse};
 

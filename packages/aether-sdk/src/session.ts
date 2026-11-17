@@ -1,4 +1,4 @@
-import type { AetherAcpOptions, SessionUsageEvent } from "./generated/types.js";
+import type { AetherAcpOptions } from "./generated/types.js";
 import { addAbortListener } from "node:events";
 import path from "node:path";
 import * as acp from "@agentclientprotocol/sdk/experimental/v2/unstable";
@@ -314,30 +314,7 @@ function createAcpClient(
         type: "elicitation_complete",
         elicitationId: notification.elicitationId,
       });
-    })
-    .onNotification(
-      "_aether/session_usage",
-      (params) => params,
-      ({ params }) => {
-        try {
-          events.push({ type: "usage", usage: parseUsageNotification(params) });
-        } catch (error) {
-          events.fail(error);
-        }
-      },
-    );
-}
-
-function parseUsageNotification(params: unknown): SessionUsageEvent {
-  const usage = (params as { usage?: unknown } | null | undefined)?.usage;
-  if (!usage || typeof usage !== "object") {
-    throw new AetherSdkError(
-      "invalid_protocol_message",
-      "Aether CLI sent an invalid session usage update",
-    );
-  }
-
-  return usage as SessionUsageEvent;
+    });
 }
 
 function normalizePrompt(

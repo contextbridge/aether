@@ -5,7 +5,6 @@ edition = "2024"
 description = "CLI and ACP server for the Aether AI coding agent"
 license = "MIT"
 repository = "https://github.com/contextbridge/aether"
-homepage = "https://github.com/contextbridge/aether"
 readme = "README.md"
 keywords = ["ai", "agent", "cli", "acp", "coding"]
 categories = ["command-line-utilities", "development-tools"]
@@ -29,7 +28,7 @@ name = "aether"
 path = "src/main.rs"
 
 [features]
-testing = ["acp_utils/testing", "mcp_utils/testing", "aether-core/testing", "utils/testing"]
+testing = ["foxfire-acp/testing", "mcp_utils/testing", "aether-core/testing", "utils/testing"]
 
 [dependencies]
 aether-auth = { path = "../aether-auth", version = "0.1.21", features = ["keyring"] }
@@ -41,9 +40,10 @@ aether-telemetry = { path = "../aether-telemetry", version = "0.3.19" }
 llm = { package = "aether-llm", path = "../llm", features = ["bedrock", "codex"], version = "0.9.19" }
 mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.7.17" }
 mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", features = ["subagents"], version = "0.8.10" }
-wisp = { package = "aether-wisp", path = "../wisp", version = "0.7.20" }
+foxfire-tui = { workspace = true }
 ratatui = { workspace = true }
-acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["websocket"], version = "0.5.19" }
+foxfire-acp = { workspace = true, features = ["websocket"] }
+rmcp = { workspace = true, features = ["elicitation"] }
 agent-client-protocol = { workspace = true, features = ["stdio"] }
 clankerdiff-core = { workspace = true }
 clankerdiff-protocol = { workspace = true }
@@ -75,5 +75,5 @@ libc = { workspace = true }
 [dev-dependencies]
 aether-agent-cli = { path = ".", features = ["testing"] }
 tokio = { workspace = true, features = ["test-util"] }
-acp_utils = { package = "aether-acp-utils", path = "../acp-utils", features = ["testing"], version = "0.5.19" }
-client_core = { package = "aether-client-core", path = "../client-core", version = "0.1.0" }
+foxfire-acp = { workspace = true, features = ["testing"] }
+foxfire-core = { workspace = true }

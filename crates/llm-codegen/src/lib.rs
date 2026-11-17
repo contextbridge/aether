@@ -1,5 +1,6 @@
 #![doc = include_str!("../README.md")]
 
+use foxfire_acp::ReasoningEffort;
 use proc_macro2::{Ident, TokenStream};
 use quote::{ToTokens, format_ident, quote};
 use serde::Deserialize;
@@ -7,7 +8,6 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write;
 use std::path::Path;
-use utils::ReasoningEffort;
 
 /// Output of the code generator.
 pub struct GeneratedOutput {

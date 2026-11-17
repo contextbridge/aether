@@ -1,9 +1,9 @@
 use crate::TestResult;
-use acp_utils::config_option_id::ConfigOptionId;
 use aether_cli::acp::testing::{AcpTestHarness, FakeAgentSwitchingSession};
 use agent_client_protocol::v2::schema::{
     CloseSessionRequest, ContentBlock, ImageContent, SetSessionConfigOptionRequest, StopReason,
 };
+use foxfire_acp::config_option_id::ConfigOptionId;
 
 /// Text each fake agent streams when it runs. Mirrors the harness constants so
 /// the *other* agent's view of the shared transcript can be asserted.

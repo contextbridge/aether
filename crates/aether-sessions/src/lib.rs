@@ -4,6 +4,7 @@
 pub mod analytics;
 pub mod error;
 pub mod log;
+pub mod migrate;
 pub mod model;
 pub mod store;
 pub mod transcript;
@@ -13,9 +14,10 @@ pub mod testing;
 
 pub use error::{SessionLogError, SessionStoreError};
 pub use log::{SessionLine, SessionLog, SessionLogEntry};
+pub use migrate::{MigrationReport, migrate_sessions};
 pub use model::{SessionControlEvent, SessionEvent, SessionMeta, UserEvent, last_agent_from_events};
 pub use store::{
-    DiscoveredSessionFile, FileFingerprint, ScanLimits, SessionStore, SessionSummary, SummaryCache,
-    discover_session_files, prompt_title, session_index_path, sessions_dir,
+    DiscoveredSessionFile, FileFingerprint, ScanLimits, SessionStore, SessionSummary, discover_session_files,
+    session_index_path, sessions_dir,
 };
 pub use transcript::{context_from_events, conversation_messages_from_events};

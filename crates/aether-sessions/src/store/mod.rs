@@ -1,12 +1,13 @@
 mod prompt_history;
 
-use acp_utils::content::first_line;
-use acp_utils::notifications::{PromptSearchResponse, SessionPreviewResponse, SessionPreviewRole, SessionPreviewTurn};
 use aether_core::events::{AgentEvent, MessageEvent, ToolEvent};
+use foxfire_acp::aether::{PromptSearchResponse, SessionPreviewResponse, SessionPreviewRole, SessionPreviewTurn};
+use foxfire_acp::content::{prompt_title, truncate_title};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 use std::time::UNIX_EPOCH;
 use tracing::warn;
 use utils::fs::{append_line, write_atomic};
@@ -19,7 +20,6 @@ use prompt_history::PromptHistoryIndex;
 
 const PROMPT_HISTORY_FILE: &str = "prompt-history.jsonl";
 const PREVIEW_TRANSCRIPT_TURNS: usize = 8;
-const MAX_TITLE_LEN: usize = 80;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct FileFingerprint {
@@ -83,15 +83,7 @@ pub fn discover_session_files(sessions_dir: impl AsRef<Path>) -> std::io::Result
 pub struct SessionStore {
     dir: PathBuf,
     prompt_history: PromptHistoryIndex,
-}
-
-#[derive(Debug, Default)]
-pub struct SummaryCache {
-    summaries: HashMap<PathBuf, (FileFingerprint, Option<SessionSummary>)>,
-}
-
-pub fn prompt_title(text: Option<&str>) -> String {
-    truncate_for_preview(text.and_then(first_line).unwrap_or("Media prompt"))
+    summaries: Mutex<HashMap<PathBuf, (FileFingerprint, Option<SessionSummary>)>>,
 }
 
 pub fn sessions_dir() -> Option<PathBuf> {
@@ -109,7 +101,7 @@ impl SessionStore {
 
     pub fn from_path(dir: PathBuf) -> Self {
         let prompt_history = PromptHistoryIndex::new(dir.join(PROMPT_HISTORY_FILE));
-        Self { dir, prompt_history }
+        Self { dir, prompt_history, summaries: Mutex::default() }
     }
 
     pub fn append_meta(&self, session_id: &str, meta: &SessionMeta) -> Result<(), SessionStoreError> {
@@ -131,7 +123,11 @@ impl SessionStore {
     }
 
     pub fn load(&self, session_id: &str) -> Result<(SessionMeta, Vec<SessionEvent>), SessionStoreError> {
-        let scan = read_bounded_session(&self.session_path(session_id), ScanLimits::UNBOUNDED)?;
+        let path = self.session_path(session_id);
+        let scan = read_bounded_session(&path, ScanLimits::UNBOUNDED)?;
+        if scan.malformed_lines > 0 {
+            warn!("Skipped {} malformed lines while loading {}", scan.malformed_lines, path.display());
+        }
         Ok((scan.meta, scan.events))
     }
 
@@ -169,7 +165,7 @@ impl SessionStore {
             return Err(SessionStoreError::InvalidTitle);
         }
         fs::metadata(self.session_path(session_id))?;
-        let title = truncate_for_preview(title);
+        let title = truncate_title(title);
         write_atomic(&title_path(&self.session_path(session_id)), title.as_bytes())?;
         Ok(title)
     }
@@ -182,23 +178,31 @@ impl SessionStore {
     }
 
     pub fn list(&self) -> Vec<SessionSummary> {
-        self.list_cached(&mut SummaryCache::default())
-    }
-
-    pub fn list_cached(&self, cache: &mut SummaryCache) -> Vec<SessionSummary> {
         let Ok(files) = discover_session_files(&self.dir) else {
             return Vec::new();
         };
 
-        let mut previous = std::mem::take(&mut cache.summaries);
-        let mut summaries = Vec::with_capacity(files.len());
+        let mut cache = self.summaries.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut previous = std::mem::take(&mut *cache);
+        let total = files.len();
+        let mut files_with_malformed_lines = 0_usize;
+        let mut summaries = Vec::with_capacity(total);
         for file in files {
             let summary = match previous.remove(&file.path) {
                 Some((fingerprint, summary)) if fingerprint == file.fingerprint => summary,
-                _ => read_session_summary(&file.path).ok(),
+                _ => read_session_summary(&file.path).ok().map(|(summary, malformed_lines)| {
+                    files_with_malformed_lines += usize::from(malformed_lines > 0);
+                    summary
+                }),
             };
             summaries.extend(summary.clone().map(|summary| with_stored_title(summary, &file.path)));
-            cache.summaries.insert(file.path, (file.fingerprint, summary));
+            cache.insert(file.path, (file.fingerprint, summary));
+        }
+        if files_with_malformed_lines > 0 {
+            warn!(
+                "{files_with_malformed_lines} of {total} session files contain lines this version cannot parse; \
+                 run `aether sessions migrate` to upgrade them"
+            );
         }
 
         summaries.sort_by(|a, b| {
@@ -232,9 +236,10 @@ struct SessionLogScan {
     meta: SessionMeta,
     events: Vec<SessionEvent>,
     truncated: bool,
+    malformed_lines: usize,
 }
 
-fn read_session_summary(path: &Path) -> Result<SessionSummary, SessionStoreError> {
+fn read_session_summary(path: &Path) -> Result<(SessionSummary, usize), SessionStoreError> {
     let scan = read_bounded_session(path, ScanLimits::SUMMARY)?;
     let title = scan.events.iter().find_map(|event| match event {
         SessionEvent::User(UserEvent::Message { content, display_content, .. }) => {
@@ -242,7 +247,7 @@ fn read_session_summary(path: &Path) -> Result<SessionSummary, SessionStoreError
         }
         _ => None,
     });
-    Ok(SessionSummary { meta: scan.meta, title })
+    Ok((SessionSummary { meta: scan.meta, title }, scan.malformed_lines))
 }
 
 fn with_stored_title(mut summary: SessionSummary, log_path: &Path) -> SessionSummary {
@@ -302,6 +307,7 @@ fn read_bounded_session(path: &Path, limits: ScanLimits) -> Result<SessionLogSca
     let mut events = Vec::new();
     let mut truncated = false;
     let mut lines_since_meta = 0_usize;
+    let mut malformed_lines = 0_usize;
 
     while let Some(line) = log.next_line()? {
         lines_since_meta = lines_since_meta.saturating_add(1);
@@ -314,11 +320,11 @@ fn read_bounded_session(path: &Path, limits: ScanLimits) -> Result<SessionLogSca
         match entry {
             SessionLogEntry::Persisted { event, .. } => events.push(*event),
             SessionLogEntry::Transient { .. } => {}
-            SessionLogEntry::Malformed { error, .. } => warn!("Skipping malformed session log line: {error}"),
+            SessionLogEntry::Malformed { .. } => malformed_lines += 1,
         }
     }
 
-    Ok(SessionLogScan { meta, events, truncated })
+    Ok(SessionLogScan { meta, events, truncated, malformed_lines })
 }
 
 fn read_all_prompts(path: &Path) -> Result<Vec<(SessionMeta, String)>, SessionStoreError> {
@@ -334,17 +340,8 @@ fn push_preview_turn(transcript: &mut Vec<SessionPreviewTurn>, role: SessionPrev
     if transcript.len() >= PREVIEW_TRANSCRIPT_TURNS {
         return false;
     }
-    transcript.push(SessionPreviewTurn { role, text: truncate_for_preview(text) });
+    transcript.push(SessionPreviewTurn { role, text: truncate_title(text) });
     true
-}
-
-fn truncate_for_preview(text: &str) -> String {
-    if text.len() <= MAX_TITLE_LEN {
-        text.to_string()
-    } else {
-        let end = text.floor_char_boundary(MAX_TITLE_LEN);
-        format!("{}…", &text[..end])
-    }
 }
 
 fn extract_title(content: &[ContentBlock]) -> String {

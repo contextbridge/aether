@@ -2,16 +2,6 @@
 default:
     @just --list
 
-run:
-    cargo run -p aether-wisp -- -a 'cargo run -p aether-agent-cli acp'
-
-desktop:
-    cargo run -p aether-desktop -- --agent 'cargo run -p aether-agent-cli acp'
-
-desktop-release:
-    cargo build --release -p aether-agent-cli
-    cargo run --release -p aether-desktop -- --agent '{{justfile_directory()}}/target/release/aether acp'
-
 # Build the workspace
 build:
     cargo build
@@ -48,9 +38,6 @@ fmt:
 lint *PKGS:
     cargo clippy --all-targets --all-features {{ if PKGS == "" { "--workspace" } else { PKGS } }} -- -D warnings
 
-desktop-style-check:
-    scripts/desktop-style-check
-
 # Verify checked SQL queries match the session-index schema
 sqlx-check:
     #!/usr/bin/env bash
@@ -64,17 +51,6 @@ sqlx-check:
 # Check documentation builds without warnings
 doc-check *PKGS:
     RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items --all-features {{ if PKGS == "" { "--workspace --examples" } else { PKGS } }}
-
-# Lint the browser ACP client (@aether-agent/browser) for wasm32
-wasm-check:
-    cargo clippy -p aether-browser --target wasm32-unknown-unknown -- -D warnings
-
-# Run the browser ACP client's wasm tests in Node against a fake agent
-wasm-test: (fake-agent "wasm-pack" "test" "--node" "packages/aether-browser")
-
-# Serve a fake agent on the `aether server` port, so the playground runs without a model
-fake-agent *ARGS:
-    cargo run -q -p aether-acp-utils --features testing,websocket --example fake_agent_server -- {{ARGS}}
 
 # Install Node dependencies for the TypeScript SDK
 sdk-install:
@@ -93,12 +69,10 @@ sdk-e2e *ARGS:
     pnpm sdk:e2e {{ARGS}}
 
 # Run all CI checks
-ci: fmt-check lint desktop-style-check test-ci doc-check sqlx-check wasm-check wasm-test
+ci: fmt-check lint test-ci doc-check sqlx-check
     pnpm fmt-check
     pnpm sdk:typecheck
     pnpm sdk:test
-    pnpm browser:build
-    pnpm browser:typecheck
 
 # Initialize or update cargo-dist configuration and CI workflows
 dist-init:
@@ -140,10 +114,10 @@ sweep-installed:
 build-sandbox TAG="aether-sandbox:latest":
     docker build -t {{TAG}} -f crates/internal-evals/examples/Dockerfile .
 
-# Install aether-cli and wisp binaries locally
+# Install aether-cli and foxfire binaries locally
 install:
     cargo install --path crates/aether-cli --force
-    cargo install --path crates/wisp --force
+    cargo install foxfire --version 0.1.0 --locked --force
     cargo sweep --installed
 
 # Preview the release PR release-plz would open against main

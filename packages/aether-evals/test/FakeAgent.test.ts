@@ -103,6 +103,7 @@ describe("FakeAgent", () => {
           context_limit: 200_000,
           input_tokens: 200,
         },
+        estimated_usd: 0,
       },
     };
     const agent = new FakeAgent([

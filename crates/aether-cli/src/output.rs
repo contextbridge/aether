@@ -60,7 +60,7 @@ fn format_text(message: &AgentEvent) -> Option<String> {
             request.name,
             task_id,
             status,
-            status_message.as_deref().map(|message| format!(" - {message}")).unwrap_or_default()
+            status_message.as_deref().map_or_default(|message| format!(" - {message}"))
         )),
         AgentEvent::Tool(ToolEvent::TaskCreated { request, task_id, .. }) => {
             Some(format!("Tool deferred [{}]: task {}", request.name, task_id))
@@ -94,7 +94,7 @@ fn format_text(message: &AgentEvent) -> Option<String> {
         }
         AgentEvent::Tool(ToolEvent::Progress { request, progress, total, message }) => {
             let bar = total.map_or_else(|| progress.to_string(), |total| format!("{progress}/{total}"));
-            let suffix = message.as_deref().map(|message| format!(" - {message}")).unwrap_or_default();
+            let suffix = message.as_deref().map_or_default(|message| format!(" - {message}"));
             Some(format!("Tool progress [{}]: {bar}{suffix}", request.name))
         }
         AgentEvent::Tool(ToolEvent::DisplayUpdate { request, meta }) => {
@@ -113,7 +113,7 @@ fn format_text(message: &AgentEvent) -> Option<String> {
         AgentEvent::Context(ContextEvent::CompactionResult { summary, messages_removed, .. }) => {
             Some(format!("Context compacted: {messages_removed} messages removed. {summary}"))
         }
-        AgentEvent::Context(ContextEvent::UsageUpdated { usage }) => Some(format_context_usage(usage)),
+        AgentEvent::Context(ContextEvent::UsageUpdated { usage, .. }) => Some(format_context_usage(usage)),
         AgentEvent::Context(ContextEvent::Cleared) => Some("Context cleared".to_string()),
         AgentEvent::SessionUsage(usage) => Some(format_session_usage(usage)),
         AgentEvent::Turn(
@@ -205,6 +205,7 @@ pub(crate) mod test_events {
 
     pub(crate) fn usage_update() -> AgentEvent {
         AgentEvent::Context(ContextEvent::UsageUpdated {
+            estimated_usd: llm::Usd::ZERO,
             usage: llm::ContextUsage {
                 input_tokens: 100_000.into(),
                 context_limit: Some(200_000.into()),

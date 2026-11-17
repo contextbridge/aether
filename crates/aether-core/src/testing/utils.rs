@@ -337,7 +337,7 @@ impl TestAgentBuilder {
         handle.await_completion().await;
 
         let contexts = captured_contexts.lock().expect("captured contexts lock poisoned").clone();
-        let elicitations = script.map(|script| script.captured()).unwrap_or_default();
+        let elicitations = script.map_or_default(|script| script.captured());
         Ok(TestAgentResult { messages, contexts, elicitations })
     }
 

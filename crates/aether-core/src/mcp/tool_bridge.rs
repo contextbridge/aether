@@ -5,8 +5,8 @@ use rmcp::model::{CallToolResult, ContentBlock, EmbeddedResource, ResourceConten
 use serde_json::Value;
 use thiserror::Error;
 
+use foxfire_acp::display_meta::ToolResultMeta;
 use llm::{ToolAnnotations, ToolCallError, ToolCallRequest, ToolCallResult, ToolDefinition};
-use utils::display_meta::ToolResultMeta;
 use utils::temp_dir::TempDir;
 use utils::tool_result_truncator::ToolResultTruncator;
 
@@ -126,9 +126,9 @@ fn binary_placeholder(mime_type: &str, base64: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use foxfire_acp::display_meta::PlanMetaStatus;
     use rmcp::model::CallToolResult as McpCallToolResult;
     use serde_json::json;
-    use utils::display_meta::PlanMetaStatus;
 
     fn req() -> ToolCallRequest {
         ToolCallRequest { id: "call_123".into(), name: "test_tool".into(), arguments: "{}".into() }
