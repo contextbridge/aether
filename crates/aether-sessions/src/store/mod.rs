@@ -123,7 +123,11 @@ impl SessionStore {
     }
 
     pub fn load(&self, session_id: &str) -> Result<(SessionMeta, Vec<SessionEvent>), SessionStoreError> {
-        let scan = read_bounded_session(&self.session_path(session_id), ScanLimits::UNBOUNDED)?;
+        let path = self.session_path(session_id);
+        let scan = read_bounded_session(&path, ScanLimits::UNBOUNDED)?;
+        if scan.malformed_lines > 0 {
+            warn!("Skipped {} malformed lines while loading {}", scan.malformed_lines, path.display());
+        }
         Ok((scan.meta, scan.events))
     }
 
@@ -180,14 +184,25 @@ impl SessionStore {
 
         let mut cache = self.summaries.lock().unwrap_or_else(PoisonError::into_inner);
         let mut previous = std::mem::take(&mut *cache);
-        let mut summaries = Vec::with_capacity(files.len());
+        let total = files.len();
+        let mut files_with_malformed_lines = 0_usize;
+        let mut summaries = Vec::with_capacity(total);
         for file in files {
             let summary = match previous.remove(&file.path) {
                 Some((fingerprint, summary)) if fingerprint == file.fingerprint => summary,
-                _ => read_session_summary(&file.path).ok(),
+                _ => read_session_summary(&file.path).ok().map(|(summary, malformed_lines)| {
+                    files_with_malformed_lines += usize::from(malformed_lines > 0);
+                    summary
+                }),
             };
             summaries.extend(summary.clone().map(|summary| with_stored_title(summary, &file.path)));
             cache.insert(file.path, (file.fingerprint, summary));
+        }
+        if files_with_malformed_lines > 0 {
+            warn!(
+                "{files_with_malformed_lines} of {total} session files contain lines this version cannot parse; \
+                 run `aether sessions migrate` to upgrade them"
+            );
         }
 
         summaries.sort_by(|a, b| {
@@ -221,9 +236,10 @@ struct SessionLogScan {
     meta: SessionMeta,
     events: Vec<SessionEvent>,
     truncated: bool,
+    malformed_lines: usize,
 }
 
-fn read_session_summary(path: &Path) -> Result<SessionSummary, SessionStoreError> {
+fn read_session_summary(path: &Path) -> Result<(SessionSummary, usize), SessionStoreError> {
     let scan = read_bounded_session(path, ScanLimits::SUMMARY)?;
     let title = scan.events.iter().find_map(|event| match event {
         SessionEvent::User(UserEvent::Message { content, display_content, .. }) => {
@@ -231,7 +247,7 @@ fn read_session_summary(path: &Path) -> Result<SessionSummary, SessionStoreError
         }
         _ => None,
     });
-    Ok(SessionSummary { meta: scan.meta, title })
+    Ok((SessionSummary { meta: scan.meta, title }, scan.malformed_lines))
 }
 
 fn with_stored_title(mut summary: SessionSummary, log_path: &Path) -> SessionSummary {
@@ -291,6 +307,7 @@ fn read_bounded_session(path: &Path, limits: ScanLimits) -> Result<SessionLogSca
     let mut events = Vec::new();
     let mut truncated = false;
     let mut lines_since_meta = 0_usize;
+    let mut malformed_lines = 0_usize;
 
     while let Some(line) = log.next_line()? {
         lines_since_meta = lines_since_meta.saturating_add(1);
@@ -303,11 +320,11 @@ fn read_bounded_session(path: &Path, limits: ScanLimits) -> Result<SessionLogSca
         match entry {
             SessionLogEntry::Persisted { event, .. } => events.push(*event),
             SessionLogEntry::Transient { .. } => {}
-            SessionLogEntry::Malformed { error, .. } => warn!("Skipping malformed session log line: {error}"),
+            SessionLogEntry::Malformed { .. } => malformed_lines += 1,
         }
     }
 
-    Ok(SessionLogScan { meta, events, truncated })
+    Ok(SessionLogScan { meta, events, truncated, malformed_lines })
 }
 
 fn read_all_prompts(path: &Path) -> Result<Vec<(SessionMeta, String)>, SessionStoreError> {
