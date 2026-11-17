@@ -3,7 +3,7 @@ use aether_sessions::testing::{
     DEFAULT_CREATED_AT, TestStore, agent_switched, assistant_text, partial_text, session_meta, tool_call, user_message,
     user_message_with,
 };
-use aether_sessions::{ScanLimits, SessionStore, SessionStoreError, SessionSummary, SummaryCache};
+use aether_sessions::{ScanLimits, SessionStore, SessionStoreError, SessionSummary};
 use llm::ContentBlock;
 use std::fs;
 use std::io::Write;
@@ -74,22 +74,18 @@ fn list_sorts_sessions_and_extracts_first_user_title() {
 }
 
 #[test]
-fn cached_list_rereads_changed_sessions_and_forgets_removed_ones() {
+fn listing_again_rereads_changed_sessions_and_forgets_removed_ones() {
     let store = TestStore::new().session("kept", &[]).session("removed", &[]);
-    let mut cache = SummaryCache::default();
     let titles = |sessions: Vec<SessionSummary>| {
         sessions.into_iter().map(|session| (session.meta.session_id, session.title)).collect::<Vec<_>>()
     };
-    assert_eq!(
-        titles(store.store().list_cached(&mut cache)),
-        [("removed".to_owned(), None), ("kept".to_owned(), None)]
-    );
+    assert_eq!(titles(store.store().list()), [("removed".to_owned(), None), ("kept".to_owned(), None)]);
 
     store.append("kept", &user_message("now titled"));
     fs::remove_file(store.path().join("removed.jsonl")).unwrap();
 
-    assert_eq!(titles(store.store().list_cached(&mut cache)), [("kept".to_owned(), Some("now titled".to_owned()))]);
-    assert_eq!(store.store().list_cached(&mut cache), store.store().list());
+    assert_eq!(titles(store.store().list()), [("kept".to_owned(), Some("now titled".to_owned()))]);
+    assert_eq!(store.store().list(), SessionStore::from_path(store.path().to_path_buf()).list());
 }
 
 #[test]
@@ -180,14 +176,13 @@ fn retitling_from_another_process_while_events_are_appended_keeps_every_event() 
 }
 
 #[test]
-fn a_cached_list_shows_a_title_set_after_it_was_cached() {
+fn listing_again_shows_a_title_set_after_the_first_listing() {
     let store = TestStore::new().session("session-1", &[user_message("first prompt")]);
-    let mut cache = SummaryCache::default();
-    store.store().list_cached(&mut cache);
+    store.store().list();
 
     store.store().set_title("session-1", "Renamed").expect("retitling succeeds");
 
-    assert_eq!(store.store().list_cached(&mut cache)[0].title.as_deref(), Some("Renamed"));
+    assert_eq!(store.store().list()[0].title.as_deref(), Some("Renamed"));
 }
 
 #[test]

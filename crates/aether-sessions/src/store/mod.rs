@@ -7,6 +7,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 use std::time::UNIX_EPOCH;
 use tracing::warn;
 use utils::fs::{append_line, write_atomic};
@@ -83,11 +84,7 @@ pub fn discover_session_files(sessions_dir: impl AsRef<Path>) -> std::io::Result
 pub struct SessionStore {
     dir: PathBuf,
     prompt_history: PromptHistoryIndex,
-}
-
-#[derive(Debug, Default)]
-pub struct SummaryCache {
-    summaries: HashMap<PathBuf, (FileFingerprint, Option<SessionSummary>)>,
+    summaries: Mutex<HashMap<PathBuf, (FileFingerprint, Option<SessionSummary>)>>,
 }
 
 pub fn prompt_title(text: Option<&str>) -> String {
@@ -109,7 +106,7 @@ impl SessionStore {
 
     pub fn from_path(dir: PathBuf) -> Self {
         let prompt_history = PromptHistoryIndex::new(dir.join(PROMPT_HISTORY_FILE));
-        Self { dir, prompt_history }
+        Self { dir, prompt_history, summaries: Mutex::default() }
     }
 
     pub fn append_meta(&self, session_id: &str, meta: &SessionMeta) -> Result<(), SessionStoreError> {
@@ -182,15 +179,12 @@ impl SessionStore {
     }
 
     pub fn list(&self) -> Vec<SessionSummary> {
-        self.list_cached(&mut SummaryCache::default())
-    }
-
-    pub fn list_cached(&self, cache: &mut SummaryCache) -> Vec<SessionSummary> {
         let Ok(files) = discover_session_files(&self.dir) else {
             return Vec::new();
         };
 
-        let mut previous = std::mem::take(&mut cache.summaries);
+        let mut cache = self.summaries.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut previous = std::mem::take(&mut *cache);
         let mut summaries = Vec::with_capacity(files.len());
         for file in files {
             let summary = match previous.remove(&file.path) {
@@ -198,7 +192,7 @@ impl SessionStore {
                 _ => read_session_summary(&file.path).ok(),
             };
             summaries.extend(summary.clone().map(|summary| with_stored_title(summary, &file.path)));
-            cache.summaries.insert(file.path, (file.fingerprint, summary));
+            cache.insert(file.path, (file.fingerprint, summary));
         }
 
         summaries.sort_by(|a, b| {
