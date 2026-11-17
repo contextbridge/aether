@@ -1,6 +1,5 @@
+use super::content::map_user_content_block;
 use crate::acp::session::actor::SessionIo;
-use acp_utils::content::map_user_content_block;
-use acp_utils::notifications::{AetherMeta, ContextClearedParams, SessionUsageParams, SubAgentMeta};
 use aether_core::events::{
     AgentEvent, CompactionOutcome, ContextEvent, MessageEvent, ModelEvent, SubAgentProgressPayload, ToolEvent,
     TurnEvent, TurnOutcome, humanize_tool_name,
@@ -10,8 +9,9 @@ use agent_client_protocol::v2::schema::{
     self as acp, ContentBlock, ContentChunk, IdleStateUpdate, MessageId, PlanEntry, PlanEntryPriority, PlanEntryStatus,
     RunningStateUpdate, SessionUpdate, StateUpdate, ToolCallContent, ToolCallStatus, ToolCallUpdate, UsageUpdate,
 };
+use foxfire_acp::aether::{AetherMeta, ContextClearedParams, SubAgentMeta};
+use foxfire_acp::display_meta::{PlanMetaStatus, ToolResultMeta};
 use llm::{ToolCallError, ToolCallRequest, ToolCallResult};
-use utils::display_meta::{PlanMetaStatus, ToolResultMeta};
 
 const SUB_AGENT_TASK_MESSAGE_ID: &str = "task";
 
@@ -31,9 +31,6 @@ pub(crate) fn project_agent_event(msg: &AgentEvent, mode: NotificationMode, io: 
         }
         (AgentEvent::Context(ContextEvent::Cleared), NotificationMode::Live) => {
             io.send(ContextClearedParams { session_id: io.session_id().clone() });
-        }
-        (AgentEvent::SessionUsage(usage), NotificationMode::Live) => {
-            io.send(SessionUsageParams { usage: usage.clone() });
         }
         _ => {}
     }
@@ -68,7 +65,9 @@ pub(crate) enum NotificationMode {
 
 pub(crate) fn map_agent_event_to_notification(msg: &AgentEvent, mode: NotificationMode) -> Option<SessionUpdate> {
     match msg {
-        AgentEvent::Context(ContextEvent::UsageUpdated { usage }) => map_context_usage_to_notification(usage),
+        AgentEvent::Context(ContextEvent::UsageUpdated { usage, estimated_usd }) => {
+            map_context_usage_to_notification(usage, *estimated_usd)
+        }
 
         AgentEvent::Message(MessageEvent::Text { message_id, chunk, is_complete }) => {
             map_message_to_notification(MessageKind::Text, message_id, chunk, *is_complete, mode)
@@ -263,10 +262,12 @@ fn map_tool_error_to_notification(error: &ToolCallError) -> SessionUpdate {
     )
 }
 
-fn map_context_usage_to_notification(usage: &llm::ContextUsage) -> Option<SessionUpdate> {
-    usage.context_limit.map(|context_limit| {
-        SessionUpdate::UsageUpdate(UsageUpdate::new(usage.input_tokens.into(), context_limit.into()))
-    })
+fn map_context_usage_to_notification(usage: &llm::ContextUsage, estimated_usd: llm::Usd) -> Option<SessionUpdate> {
+    let context_limit = usage.context_limit?;
+    let update = UsageUpdate::new(usage.input_tokens.into(), context_limit.into());
+    let update =
+        if estimated_usd.get() > 0.0 { update.cost(acp::Cost::new(estimated_usd.get(), "USD")) } else { update };
+    Some(SessionUpdate::UsageUpdate(update))
 }
 
 fn map_tool_progress_to_notification(
@@ -362,10 +363,10 @@ mod tests {
     use super::*;
     use agent_client_protocol::v2::schema::TextContent;
     use agent_client_protocol::{Client, JsonRpcNotification};
+    use foxfire_acp::display_meta::{PlanMeta, PlanMetaEntry, ToolDisplayMeta, ToolLocation};
     use llm::ContextUsage;
     use serde_json::json;
     use tokio::sync::mpsc::unbounded_channel;
-    use utils::display_meta::{PlanMeta, PlanMetaEntry, ToolDisplayMeta, ToolLocation};
 
     fn forwarded<T: JsonRpcNotification + Send + 'static>(events: &[AgentEvent]) -> T {
         tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(
@@ -380,12 +381,12 @@ mod tests {
                 );
                 let agent = agent_client_protocol::Agent.v2().on_receive_request(
                     async |_: acp::InitializeRequest, responder, _cx| {
-                        responder.respond(acp_utils::testing::initialize_response())
+                        responder.respond(foxfire_acp::testing::initialize_response())
                     },
                     agent_client_protocol::on_receive_request!(),
                 );
-                let pair = acp_utils::testing::connect_pair(agent, client).await;
-                pair.client.send_request(acp_utils::testing::initialize_request()).block_task().await.unwrap();
+                let pair = foxfire_acp::testing::connect_pair(agent, client).await;
+                pair.client.send_request(foxfire_acp::testing::initialize_request()).block_task().await.unwrap();
                 let io = SessionIo::new(Some(pair.agent), "session".into());
                 for event in events {
                     project_agent_event(event, NotificationMode::Live, &io);
@@ -442,6 +443,7 @@ mod tests {
                 context_limit: Some(100_000.into()),
                 ..ContextUsage::default()
             },
+            estimated_usd: llm::Usd::ZERO,
         });
 
         let Some(SessionUpdate::UsageUpdate(update)) = map_agent_event_to_session_notification(&event) else {

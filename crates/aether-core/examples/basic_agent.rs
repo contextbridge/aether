@@ -75,7 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Some(AgentEvent::Context(ContextEvent::CompactionResult { messages_removed, .. })) => {
                 println!("Context compacted: {messages_removed} messages removed");
             }
-            Some(AgentEvent::Context(ContextEvent::UsageUpdated { usage })) => {
+            Some(AgentEvent::Context(ContextEvent::UsageUpdated { usage, .. })) => {
                 match (usage.usage_ratio, usage.context_limit) {
                     (Some(usage_ratio), Some(context_limit)) => {
                         println!(

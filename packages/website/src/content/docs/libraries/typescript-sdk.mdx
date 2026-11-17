@@ -143,7 +143,6 @@ Unlike `AetherSession.start()`, headless runs are non-interactive, so there are 
 | Type                   | Description                                                                                     |
 | ---------------------- | ----------------------------------------------------------------------------------------------- |
 | `session_update`       | An ACP session update (agent text, tool calls, tool results, progress, etc.). Access `.update`. |
-| `usage`                | Per-call token usage and estimated cost, plus cumulative session totals. Access `.usage`.       |
 | `elicitation_complete` | A URL-mode elicitation finished. Access `.elicitationId`.                                       |
 | `result`               | The prompt finished. `.stopReason` describes why (e.g. `end_turn`, `cancelled`, `error`).       |
 | `error`                | An unrecoverable error occurred. Access `.error`.                                               |
@@ -152,30 +151,29 @@ A `result` message is always emitted last (unless the stream errors), so it is a
 
 ### Token usage and estimated cost
 
-Aether exposes accounting as a domain-level `usage` message rather than an ACP
-extension notification:
+Sessions report usage through standard ACP `usage_update` session updates:
+the context window (`used` of `size` tokens) and the session's cumulative
+estimated cost:
 
 ```ts
 for await (const message of session.prompt("Implement the feature")) {
-  if (message.type === "usage") {
-    console.log(message.usage.tokens);
-    console.log(message.usage.estimated_cost?.total_usd);
-    console.log(message.usage.totals.estimated_usd);
+  if (
+    message.type === "session_update" &&
+    message.update.sessionUpdate === "usage_update"
+  ) {
+    console.log(message.update.used, message.update.size);
+    console.log(message.update.cost?.amount);
   }
 }
 ```
 
-`tokens` and `estimated_cost` describe the provider call that produced the
-update. `totals` contains cumulative usage after that call. Costs are
-catalog-based USD estimates; `totals.estimated_usd` excludes calls whose model
-pricing is unknown, and `totals.unpriced_calls` reports how many were excluded.
+`cost` is a catalog-based USD estimate, refreshed with each of the session's
+own model calls; cost from sub-agents and compaction appears with the next
+refresh. It is left out until a call is priced, and it excludes calls whose
+model pricing is unknown.
 
-Cumulative cost breakdowns are available via `totals.estimated_input_usd`,
-`totals.estimated_output_usd`, `totals.estimated_cache_read_usd`, and
-`totals.estimated_cache_creation_usd`.
-
-Do not sum `totals` fields across snapshots or group/filter by `source.parent_agent_id`. The root agent's stream includes sub-agent and
-compaction in its totals, even when `source` identifies a child.
+For per-call tokens and cost breakdowns, use `runHeadless`, whose
+`session_usage` events carry the full accounting.
 
 ## TypeScript tools
 

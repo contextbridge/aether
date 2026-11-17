@@ -8,7 +8,7 @@ fn context_usage(events: &[AgentEvent]) -> ContextUsage {
     events
         .iter()
         .find_map(|event| match event {
-            AgentEvent::Context(ContextEvent::UsageUpdated { usage }) => Some(usage.clone()),
+            AgentEvent::Context(ContextEvent::UsageUpdated { usage, .. }) => Some(usage.clone()),
             _ => None,
         })
         .expect("agent should emit context usage")

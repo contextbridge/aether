@@ -112,8 +112,8 @@ impl AgentEvent {
 mod tests {
     use super::*;
     use crate::events::{CompactionOutcome, LlmCallOutcome};
+    use foxfire_acp::display_meta::ToolDisplayMeta;
     use llm::{ContextUsage, LlmCallPurpose};
-    use utils::display_meta::ToolDisplayMeta;
 
     #[test]
     fn serializes_nested_event_contract() {
@@ -133,7 +133,10 @@ mod tests {
                 purpose: LlmCallPurpose::Chat,
                 outcome: LlmCallOutcome::Cancelled,
             }),
-            AgentEvent::Context(ContextEvent::UsageUpdated { usage: ContextUsage::default() }),
+            AgentEvent::Context(ContextEvent::UsageUpdated {
+                usage: ContextUsage::default(),
+                estimated_usd: llm::Usd::ZERO,
+            }),
             AgentEvent::Context(ContextEvent::CompactionEnded {
                 compaction_id: "compaction".into(),
                 outcome: CompactionOutcome::Completed,

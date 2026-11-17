@@ -23,6 +23,10 @@ impl SessionUsageTracker {
         &self.source
     }
 
+    pub fn totals(&self) -> &SessionUsageTotals {
+        &self.totals
+    }
+
     /// Record one of this agent's own calls, priced from the model's catalog entry.
     pub fn record(&mut self, purpose: LlmCallPurpose, model: ModelIdentity, tokens: TokenUsage) -> SessionUsageEvent {
         let estimated_cost = model.pricing.map(|pricing| pricing.estimate_cost(tokens));

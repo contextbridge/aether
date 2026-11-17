@@ -51,6 +51,7 @@ async fn typed_event_contract_populates_every_documented_view() {
                 new: "new".to_string(),
             })),
             SessionEvent::Agent(AgentEvent::Context(ContextEvent::UsageUpdated {
+                estimated_usd: llm::Usd::ZERO,
                 usage: ContextUsage { usage_ratio: Some(0.9), ..ContextUsage::default() },
             })),
             SessionEvent::Agent(AgentEvent::SessionUsage(root_usage(&UsageSource::new("root")))),
@@ -461,6 +462,7 @@ fn root_usage(source: &UsageSource) -> SessionUsageEvent {
 
 fn context_usage(ratio: f64) -> SessionEvent {
     SessionEvent::Agent(AgentEvent::Context(ContextEvent::UsageUpdated {
+        estimated_usd: llm::Usd::ZERO,
         usage: ContextUsage {
             usage_ratio: Some(ratio),
             context_limit: Some(Tokens::new(100)),

@@ -113,7 +113,7 @@ fn format_text(message: &AgentEvent) -> Option<String> {
         AgentEvent::Context(ContextEvent::CompactionResult { summary, messages_removed, .. }) => {
             Some(format!("Context compacted: {messages_removed} messages removed. {summary}"))
         }
-        AgentEvent::Context(ContextEvent::UsageUpdated { usage }) => Some(format_context_usage(usage)),
+        AgentEvent::Context(ContextEvent::UsageUpdated { usage, .. }) => Some(format_context_usage(usage)),
         AgentEvent::Context(ContextEvent::Cleared) => Some("Context cleared".to_string()),
         AgentEvent::SessionUsage(usage) => Some(format_session_usage(usage)),
         AgentEvent::Turn(
@@ -205,6 +205,7 @@ pub(crate) mod test_events {
 
     pub(crate) fn usage_update() -> AgentEvent {
         AgentEvent::Context(ContextEvent::UsageUpdated {
+            estimated_usd: llm::Usd::ZERO,
             usage: llm::ContextUsage {
                 input_tokens: 100_000.into(),
                 context_limit: Some(200_000.into()),
