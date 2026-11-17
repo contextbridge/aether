@@ -82,7 +82,7 @@ impl Transcript {
     fn sync(&mut self, cx: &App) -> Vec<(usize, ConversationItemId, String)> {
         let conversation = self.thread.read(cx).core().map(SessionCore::conversation);
         let id = conversation.map(Conversation::id);
-        let items = conversation.map(Conversation::items).unwrap_or_default();
+        let items = conversation.map_or_default(Conversation::items);
         let revisions: Vec<Revision> = items.iter().map(ConversationItem::revision).collect();
         let groups = groups(items);
         let changed: Vec<usize> = if id != self.synced || revisions.len() < self.revisions.len() {

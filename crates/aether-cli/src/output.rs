@@ -60,7 +60,7 @@ fn format_text(message: &AgentEvent) -> Option<String> {
             request.name,
             task_id,
             status,
-            status_message.as_deref().map(|message| format!(" - {message}")).unwrap_or_default()
+            status_message.as_deref().map_or_default(|message| format!(" - {message}"))
         )),
         AgentEvent::Tool(ToolEvent::TaskCreated { request, task_id, .. }) => {
             Some(format!("Tool deferred [{}]: task {}", request.name, task_id))
@@ -94,7 +94,7 @@ fn format_text(message: &AgentEvent) -> Option<String> {
         }
         AgentEvent::Tool(ToolEvent::Progress { request, progress, total, message }) => {
             let bar = total.map_or_else(|| progress.to_string(), |total| format!("{progress}/{total}"));
-            let suffix = message.as_deref().map(|message| format!(" - {message}")).unwrap_or_default();
+            let suffix = message.as_deref().map_or_default(|message| format!(" - {message}"));
             Some(format!("Tool progress [{}]: {bar}{suffix}", request.name))
         }
         AgentEvent::Tool(ToolEvent::DisplayUpdate { request, meta }) => {

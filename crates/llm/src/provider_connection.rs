@@ -135,7 +135,7 @@ impl ProviderConnectionOverrides {
     }
 
     pub fn config_for(&self, provider: &str) -> ProviderConnectionConfig {
-        self.providers.get(provider).cloned().map(ProviderConnectionConfig::from_override).unwrap_or_default()
+        self.providers.get(provider).cloned().map_or_default(ProviderConnectionConfig::from_override)
     }
 
     pub fn into_inner(self) -> BTreeMap<String, ProviderConnectionOverride> {

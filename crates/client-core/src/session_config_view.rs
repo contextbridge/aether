@@ -161,8 +161,7 @@ impl<'a> LocalConfigView<'a> {
 
     pub(crate) fn selected_model_metadata(&self) -> Vec<SelectOptionMeta> {
         self.select(ConfigOptionId::Model)
-            .map(|select| select.selected().map(|value| value.meta.clone()).collect())
-            .unwrap_or_default()
+            .map_or_default(|select| select.selected().map(|value| value.meta.clone()).collect())
     }
 
     fn flattened_options(&self, id: ConfigOptionId) -> &'a [LocalConfigValue] {

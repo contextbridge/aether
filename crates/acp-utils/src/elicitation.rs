@@ -102,7 +102,7 @@ fn title_legacy_enum(property: &mut Value) -> Result<(), ElicitationConversionEr
 
 fn map_mcp_meta_to_acp(meta: Option<&mcp::RequestMetaObject>, server_name: &str) -> Meta {
     let mut meta: Meta =
-        meta.map(|meta| meta.iter().map(|(key, value)| (key.clone(), value.clone())).collect()).unwrap_or_default();
+        meta.map_or_default(|meta| meta.iter().map(|(key, value)| (key.clone(), value.clone())).collect());
     let source = meta.entry(AETHER_META_NAMESPACE.to_string()).or_insert_with(|| json!({}));
     if !source.is_object() {
         *source = json!({});
