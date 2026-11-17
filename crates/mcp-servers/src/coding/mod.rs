@@ -38,13 +38,13 @@ use crate::lsp::tools::symbol_lookup::{LspSymbolInput, LspSymbolOutput, execute_
 use crate::request_context::{CLIENT_CANNOT_ELICIT, parse_response, require_tasks, supports_elicitation};
 use crate::workspace_paths::{resolve_file, resolve_path, resolve_root};
 
+use foxfire_acp::display_meta::{ToolDisplayMeta, ToolLocation, ToolResultMeta, basename, truncate};
 use tools::bash::{BashEnvironment, BashInput, BashOutput, execute_command, validate_args};
 use tools::edit_file::{EditFileArgs, EditFileResponse, edit_file_contents};
 use tools::read_file::{ReadFileArgs, ReadFileResult, read_file_contents};
 use tools::web_fetch::{WebFetchInput, WebFetchOutput, WebFetcher};
 use tools::web_search::{WebSearchInput, WebSearchOutput, WebSearcher};
 use tools::write_file::{WriteFileArgs, WriteFileResponse, write_file_contents};
-use utils::display_meta::{ToolDisplayMeta, ToolLocation, ToolResultMeta, basename, truncate};
 use utils::temp_dir::TempDir;
 use utils::tool_result_truncator::ToolResultTruncator;
 

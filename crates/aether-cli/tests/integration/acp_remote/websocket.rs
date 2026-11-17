@@ -1,7 +1,4 @@
 use super::{assert_no_ended_turn, assert_stopped_turn, start_paused_turn};
-use acp_utils::client::{AcpClient, AcpEvent, connect_acp_client};
-use acp_utils::testing::initialize_request;
-use acp_utils::websocket::WebSocketTransport;
 use aether_cli::acp::server::{ServerArgs, ServerRunError, run_server};
 use aether_cli::acp::testing::{AcpTestHarness, AcpWebSocketTestServer};
 use aether_cli::acp::{IdleHook, SessionHooks};
@@ -13,6 +10,9 @@ use agent_client_protocol::v2::schema::{
     ReplayFrom, ReplayFromStart, ResumeSessionRequest, SessionId, SessionUpdate, StateUpdate, StopReason,
 };
 use clap::Parser;
+use foxfire_acp::client::{AcpClient, AcpEvent, connect_acp_client};
+use foxfire_acp::testing::initialize_request;
+use foxfire_acp::websocket::WebSocketTransport;
 use futures::{SinkExt, StreamExt};
 use std::path::PathBuf;
 use std::time::Duration;

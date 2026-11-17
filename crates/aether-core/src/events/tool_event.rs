@@ -1,8 +1,8 @@
 use super::SubAgentProgressPayload;
+use foxfire_acp::display_meta::ToolResultMeta;
 use llm::{ChatMessage, ContentBlock, MessageId, ToolCallError, ToolCallRequest, ToolCallResult, ToolDefinition};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use utils::display_meta::ToolResultMeta;
 
 /// Tool call lifecycle events.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]

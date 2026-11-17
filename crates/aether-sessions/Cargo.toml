@@ -18,7 +18,7 @@ analytics = ["dep:chrono", "dep:futures", "dep:sqlx", "dep:tokio"]
 testing = ["dep:tempfile"]
 
 [dependencies]
-acp_utils = { package = "aether-acp-utils", path = "../acp-utils", default-features = false, version = "0.5.19" }
+foxfire-acp = { workspace = true, default-features = false, features = ["protocol"] }
 aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.9.10" }
 llm = { package = "aether-llm", path = "../llm", version = "0.9.19" }
 chrono = { workspace = true, optional = true }

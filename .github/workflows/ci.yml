@@ -50,8 +50,6 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Clippy check
         run: just lint
-      - name: Desktop style check
-        run: just desktop-style-check
 
   test:
     name: Test
@@ -106,30 +104,6 @@ jobs:
         run: pnpm evals:build
       - name: Test evals
         run: pnpm evals:test
-
-  wasm:
-    name: Wasm
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    # No mold RUSTFLAGS here: they would also reach the wasm32 linker, which rejects `-fuse-ld`.
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Check and test wasm
-        timeout-minutes: 10
-        run: just wasm-check wasm-test
-      - name: Build browser client
-        run: pnpm browser:build
-      - name: Typecheck browser client
-        run: pnpm browser:typecheck
 
   docs:
     name: Docs

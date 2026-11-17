@@ -1,5 +1,5 @@
 use crate::SessionMeta;
-use acp_utils::notifications::{PromptSearchResponse, PromptSearchResult};
+use foxfire_acp::aether::{PromptSearchResponse, PromptSearchResult};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::fs::File;

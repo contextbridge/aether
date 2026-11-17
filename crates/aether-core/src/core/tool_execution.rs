@@ -1,10 +1,10 @@
 use crate::events::{SubAgentProgressPayload, TaskOutcome, ToolEvent};
 use crate::mcp::tool_bridge::{ToolRejection, convert_tool_result, map_task_result_to_outcome};
+use foxfire_acp::display_meta::ToolResultMeta;
 use llm::{ToolCallError, ToolCallRequest};
 use mcp_utils::client::{CancellationToken, ToolCallEvent};
 use rmcp::model::ProgressNotificationParam;
 use std::collections::HashMap;
-use utils::display_meta::ToolResultMeta;
 use utils::temp_dir::TempDir;
 
 #[derive(Default)]

@@ -28,7 +28,7 @@ use super::tools::{
 use crate::Displayed;
 use crate::workspace_paths::resolve_path;
 use aether_project::{PromptCatalog, PromptFile, SKILL_FILENAME};
-use utils::display_meta::ToolDisplayMeta;
+use foxfire_acp::display_meta::ToolDisplayMeta;
 use walkdir::WalkDir;
 
 /// CLI arguments for `SkillsMcp` server

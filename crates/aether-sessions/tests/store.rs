@@ -1,9 +1,9 @@
-use acp_utils::notifications::SessionPreviewRole;
 use aether_sessions::testing::{
     DEFAULT_CREATED_AT, TestStore, agent_switched, assistant_text, partial_text, session_meta, tool_call, user_message,
     user_message_with,
 };
 use aether_sessions::{ScanLimits, SessionStore, SessionStoreError, SessionSummary};
+use foxfire_acp::aether::SessionPreviewRole;
 use llm::ContentBlock;
 use std::fs;
 use std::io::Write;

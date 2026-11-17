@@ -37,7 +37,7 @@ client = [
     "dep:serde_json",
     "dep:sse-stream",
     "dep:tokio-stream",
-    "dep:utils",
+    "dep:foxfire-acp",
     "rmcp/auth",
     "rmcp/transport-streamable-http-client-reqwest",
     "rmcp/transport-child-process",
@@ -64,7 +64,7 @@ serde_json = { workspace = true, optional = true }
 # Must match the sse-stream version in the signature of rmcp's StreamableHttpClient.
 sse-stream = { version = "0.2.6", optional = true }
 tokio-stream = { workspace = true, features = ["sync"], optional = true }
-utils = { package = "aether-utils", path = "../utils", version = "0.3.1", optional = true }
+foxfire-acp = { workspace = true, default-features = false, optional = true }
 
 [[test]]
 name = "client"

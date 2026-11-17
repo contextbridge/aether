@@ -1,12 +1,12 @@
-use crate::notifications::AETHER_META_NAMESPACE;
 use agent_client_protocol::v2::schema::{
     self as acp, CompleteElicitationNotification, CreateElicitationRequest, CreateElicitationResponse, Meta, SessionId,
 };
+use foxfire_acp::aether::AETHER_META_NAMESPACE;
 use rmcp::model::{self as mcp, ElicitRequestParams, ElicitResult};
 use serde_json::{Value, json};
 
 #[derive(Debug, thiserror::Error)]
-pub enum ElicitationConversionError {
+pub(crate) enum ElicitationConversionError {
     #[error("unsupported {0}")]
     Unsupported(&'static str),
     #[error("legacy MCP enum has a different number of values and titles")]
@@ -15,7 +15,7 @@ pub enum ElicitationConversionError {
     Json(#[from] serde_json::Error),
 }
 
-pub fn map_mcp_elicitation_request_to_acp(
+pub(crate) fn map_mcp_elicitation_request_to_acp(
     server_name: &str,
     session_id: &SessionId,
     request: &ElicitRequestParams,
@@ -45,7 +45,7 @@ pub fn map_mcp_elicitation_request_to_acp(
     Ok(request.meta(map_mcp_meta_to_acp(meta.as_ref(), server_name)))
 }
 
-pub fn map_acp_elicitation_response_to_mcp(
+pub(crate) fn map_acp_elicitation_response_to_mcp(
     response: CreateElicitationResponse,
 ) -> Result<ElicitResult, ElicitationConversionError> {
     let mut result = match response.action {
@@ -62,20 +62,12 @@ pub fn map_acp_elicitation_response_to_mcp(
     Ok(result)
 }
 
-pub fn build_acp_elicitation_completion_notification(
+pub(crate) fn build_acp_elicitation_completion_notification(
     session_id: &SessionId,
     server_name: &str,
     elicitation_id: &str,
 ) -> CompleteElicitationNotification {
     CompleteElicitationNotification::new(build_scoped_elicitation_id(session_id, server_name, elicitation_id))
-}
-
-/// The MCP server a converted elicitation originated from, if any.
-pub fn source_mcp_server_name(meta: Option<&Meta>) -> Option<&str> {
-    meta.and_then(|meta| meta.get(AETHER_META_NAMESPACE))
-        .and_then(Value::as_object)
-        .and_then(|source| source.get("mcpServer"))
-        .and_then(Value::as_str)
 }
 
 fn map_mcp_elicitation_schema_to_acp(
@@ -102,7 +94,7 @@ fn title_legacy_enum(property: &mut Value) -> Result<(), ElicitationConversionEr
 
 fn map_mcp_meta_to_acp(meta: Option<&mcp::RequestMetaObject>, server_name: &str) -> Meta {
     let mut meta: Meta =
-        meta.map(|meta| meta.iter().map(|(key, value)| (key.clone(), value.clone())).collect()).unwrap_or_default();
+        meta.map_or_default(|meta| meta.iter().map(|(key, value)| (key.clone(), value.clone())).collect());
     let source = meta.entry(AETHER_META_NAMESPACE.to_string()).or_insert_with(|| json!({}));
     if !source.is_object() {
         *source = json!({});
@@ -121,6 +113,7 @@ mod tests {
     use agent_client_protocol::v2::schema::{
         ElicitationAction, ElicitationMode, ElicitationPropertySchema, ElicitationScope,
     };
+    use foxfire_acp::aether::source_mcp_server_name;
     use serde_json::Map;
 
     #[test]

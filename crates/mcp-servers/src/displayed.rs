@@ -1,8 +1,8 @@
+use foxfire_acp::display_meta::ToolResultMeta;
 use rmcp::ErrorData;
 use rmcp::handler::server::tool::IntoCallToolResult;
 use rmcp::model::{CallToolResponse, CallToolResult};
 use serde::Serialize;
-use utils::display_meta::ToolResultMeta;
 
 #[derive(Debug)]
 pub struct Displayed<T> {
@@ -35,8 +35,8 @@ impl<T: Serialize> IntoCallToolResult for Displayed<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use foxfire_acp::display_meta::ToolDisplayMeta;
     use serde_json::json;
-    use utils::display_meta::ToolDisplayMeta;
 
     #[derive(Serialize)]
     struct Output {

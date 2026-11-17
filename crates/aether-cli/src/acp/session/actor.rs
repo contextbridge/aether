@@ -1,7 +1,5 @@
-use crate::acp::protocol::notify;
+use crate::acp::protocol::{elicitation, notify};
 use crate::acp::session::git_diff::GitDiffService;
-use acp_utils::elicitation;
-use acp_utils::notifications::{GitDiffEventPayload, McpNotification};
 use aether_auth::OAuthCredentialStorage;
 use aether_core::core::AgentDeps;
 use aether_core::events::{AgentCommand, AgentEvent, Command, TurnEvent, TurnOutcome};
@@ -15,6 +13,8 @@ use agent_client_protocol::v2::schema::{
 use agent_client_protocol::{Client, ConnectionTo, Error, Responder};
 use clankerdiff_protocol::client::ClientCommand;
 use clankerdiff_protocol::shared::{DocumentUpdate, Event};
+use foxfire_acp::aether::{GitDiffEventPayload, McpNotification};
+use foxfire_acp::mcp_status::{McpServerStatus, McpServerStatusEntry};
 use futures::{FutureExt, StreamExt, future::BoxFuture};
 use llm::catalog::LlmModel;
 use llm::{ChatMessage, ContentBlock, MessageId, ProviderConnectionOverrides};
@@ -29,7 +29,6 @@ use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::{Instant, sleep_until};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
-use utils::mcp_status::{McpServerStatus, McpServerStatusEntry};
 
 use super::agent_key::AgentKey;
 use super::agents::SessionAgents;

@@ -14,8 +14,6 @@ use crate::runtime::{Runtime, RuntimeBuilder};
 use crate::settings_args::SettingsSourceArgs;
 use crate::workspace::WorkspaceManager;
 use crate::workspace::testing::StdCopyCloner;
-use acp_utils::notifications::McpNotification;
-use acp_utils::testing::{TestPeer, initialize_request};
 use aether_auth::OAuthCredentialStorage;
 use aether_core::agent_spec::{AgentSpec, AgentSpecExposure};
 use aether_core::core::{AgentBuilder, AgentDeps, Prompt, SubAgentSession};
@@ -33,6 +31,9 @@ use agent_client_protocol::v2::schema::{
     ReplayFromStart, ResumeSessionRequest, SessionId, SessionUpdate, StateUpdate, StopReason,
 };
 use agent_client_protocol::{Agent, Channel, Client, ConnectionTo};
+use foxfire_acp::aether::McpNotification;
+use foxfire_acp::mcp_status::McpServerStatusEntry;
+use foxfire_acp::testing::{TestPeer, initialize_request};
 use llm::testing::FakeLlmProvider;
 use llm::{ChatMessage, Context, LlmModel, LlmResponse, SessionUsageEvent, StreamingModelProvider};
 use llm::{MessageId, ProviderConnectionOverrides};
@@ -48,7 +49,6 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::{JoinHandle, JoinSet, LocalSet};
 use tokio_util::sync::CancellationToken;
-use utils::mcp_status::McpServerStatusEntry;
 
 const PLANNER_REPLY: &str = "planner reply";
 const CODER_REPLY: &str = "coder reply";
@@ -777,7 +777,7 @@ async fn connect_client(state: Arc<AcpState>) -> HarnessConnection {
     tasks.spawn_local(async move { state.serve_with(agent_transport, agent_stop, send_agent_connection).await });
     tasks.spawn_local(async move {
         client_builder
-            .with_runner(acp_utils::testing::CaptureConnection(send_client_connection))
+            .with_runner(foxfire_acp::testing::CaptureConnection(send_client_connection))
             .connect_to(client_transport)
             .await
     });

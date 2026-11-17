@@ -1,4 +1,4 @@
-pub use utils::ReasoningEffort;
+pub use foxfire_acp::ReasoningEffort;
 
 /// Source metadata for the model's explicit disabling capability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -3,10 +3,10 @@
 use std::cmp::Reverse;
 use std::path::Path;
 
+use foxfire_acp::display_meta::{ToolDisplayMeta, basename};
 use lsp_types::{DocumentChangeOperation, DocumentChanges, OneOf, ResourceOp, WorkspaceEdit};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use utils::display_meta::{ToolDisplayMeta, basename};
 
 use crate::Displayed;
 use crate::lsp::common::uri_display;

@@ -9,4 +9,4 @@ runs:
       run: |
         set -euo pipefail
         sudo apt-get update
-        sudo apt-get install -y libdbus-1-dev libfontconfig1-dev libxkbcommon-x11-dev mold
+        sudo apt-get install -y libdbus-1-dev mold

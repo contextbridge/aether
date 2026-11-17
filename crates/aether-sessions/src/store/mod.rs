@@ -1,8 +1,8 @@
 mod prompt_history;
 
-use acp_utils::content::first_line;
-use acp_utils::notifications::{PromptSearchResponse, SessionPreviewResponse, SessionPreviewRole, SessionPreviewTurn};
 use aether_core::events::{AgentEvent, MessageEvent, ToolEvent};
+use foxfire_acp::aether::{PromptSearchResponse, SessionPreviewResponse, SessionPreviewRole, SessionPreviewTurn};
+use foxfire_acp::content::{prompt_title, truncate_title};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
@@ -20,7 +20,6 @@ use prompt_history::PromptHistoryIndex;
 
 const PROMPT_HISTORY_FILE: &str = "prompt-history.jsonl";
 const PREVIEW_TRANSCRIPT_TURNS: usize = 8;
-const MAX_TITLE_LEN: usize = 80;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct FileFingerprint {
@@ -85,10 +84,6 @@ pub struct SessionStore {
     dir: PathBuf,
     prompt_history: PromptHistoryIndex,
     summaries: Mutex<HashMap<PathBuf, (FileFingerprint, Option<SessionSummary>)>>,
-}
-
-pub fn prompt_title(text: Option<&str>) -> String {
-    truncate_for_preview(text.and_then(first_line).unwrap_or("Media prompt"))
 }
 
 pub fn sessions_dir() -> Option<PathBuf> {
@@ -166,7 +161,7 @@ impl SessionStore {
             return Err(SessionStoreError::InvalidTitle);
         }
         fs::metadata(self.session_path(session_id))?;
-        let title = truncate_for_preview(title);
+        let title = truncate_title(title);
         write_atomic(&title_path(&self.session_path(session_id)), title.as_bytes())?;
         Ok(title)
     }
@@ -328,17 +323,8 @@ fn push_preview_turn(transcript: &mut Vec<SessionPreviewTurn>, role: SessionPrev
     if transcript.len() >= PREVIEW_TRANSCRIPT_TURNS {
         return false;
     }
-    transcript.push(SessionPreviewTurn { role, text: truncate_for_preview(text) });
+    transcript.push(SessionPreviewTurn { role, text: truncate_title(text) });
     true
-}
-
-fn truncate_for_preview(text: &str) -> String {
-    if text.len() <= MAX_TITLE_LEN {
-        text.to_string()
-    } else {
-        let end = text.floor_char_boundary(MAX_TITLE_LEN);
-        format!("{}…", &text[..end])
-    }
 }
 
 fn extract_title(content: &[ContentBlock]) -> String {

@@ -29,6 +29,14 @@ pub fn git_text<T: AsRef<OsStr>>(repo: Option<&Path>, args: &[T]) -> Result<Stri
     git(repo, args).map(|stdout| String::from_utf8_lossy(&stdout).trim().to_string())
 }
 
+/// The branch checked out in `repo`, or the short commit when `HEAD` is detached; `None` outside a repository.
+pub fn current_ref(repo: &Path) -> Option<String> {
+    git_text(Some(repo), &["branch", "--show-current"])
+        .ok()
+        .filter(|name| !name.is_empty())
+        .or_else(|| git_text(Some(repo), &["rev-parse", "--short", "HEAD"]).ok())
+}
+
 pub fn git_with_stdin<T: AsRef<OsStr>>(repo: Option<&Path>, args: &[T], stdin: &[u8]) -> Result<Vec<u8>, GitError> {
     let mut child = command(repo, args)
         .stdin(Stdio::piped())

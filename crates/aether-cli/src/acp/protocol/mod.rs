@@ -6,6 +6,7 @@
 pub(crate) mod commands;
 pub(crate) mod content;
 pub(crate) mod diff;
+pub(crate) mod elicitation;
 pub(crate) mod events;
 pub(crate) mod mcp;
 pub(crate) mod replay;

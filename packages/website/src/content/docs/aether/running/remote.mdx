@@ -60,9 +60,9 @@ aether client wss://agent.example/acp -H 'Authorization: Bearer ...'
 | `[URL]`                        | `ws://` or `wss://` endpoint; defaults to `ws://127.0.0.1:8765`. Paths and query strings are preserved. |
 | `--session <ID>`               | Select a saved session explicitly. Its directory is looked up on the server.                            |
 | `-H`, `--header 'Name: value'` | Repeatable HTTP headers for your gateway/proxy. Values may contain colons.                              |
-| `--log-dir <DIR>`              | Client UI logs; defaults to `/tmp/wisp-logs`.                                                           |
+| `--log-dir <DIR>`              | Client UI logs; defaults to `/tmp/foxfire-logs`.                                                           |
 
-The client loads local Wisp UI settings, not local Aether project or provider settings. Provider/MCP credentials, workspace files, and session logs stay on the server. Browser-based OAuth flows needing server-local callbacks require suitable deployment connectivity; Aether does not tunnel those callbacks.
+The client loads local Foxfire UI settings, not local Aether project or provider settings. Provider/MCP credentials, workspace files, and session logs stay on the server. Browser-based OAuth flows needing server-local callbacks require suitable deployment connectivity; Aether does not tunnel those callbacks.
 
 ## Start with an initial prompt
 
@@ -96,11 +96,7 @@ Partial streamed chunks, intermediate tool states, and pending dialogs are not g
 
 The status line labels the server path as `remote:`. Server paths are never resolved against your local checkout or HOME. Local Git review/watch, file picking/indexing, and path-based attachments are unavailable in remote mode. Pasted paths remain ordinary text rather than being read as local files; blocked attachment actions leave the composer usable.
 
-Chat, streamed tool output and diffs delivered through ACP, prompt search, configuration, server status, forms, artifact review, `/clear`, and `/resume` remain available. Workspace operations stay server-side. Themes, Wisp settings, rendering, terminal bell, clipboard, and browser integration remain client-local features.
-
-## Browser client
-
-`@aether-agent/browser` is an ACP client for web pages, compiled to WebAssembly from the same client code `aether client` uses. It is not published to npm yet; build it from the repository with `pnpm browser:build` (requires `wasm-pack`). Its [README](https://github.com/contextbridge/aether/tree/main/packages/aether-browser#readme) has a quickstart.
+Chat, streamed tool output and diffs delivered through ACP, prompt search, configuration, server status, forms, artifact review, `/clear`, and `/resume` remain available. Workspace operations stay server-side. Themes, Foxfire settings, rendering, terminal bell, clipboard, and browser integration remain client-local features.
 
 ## Deployment and limitations
 

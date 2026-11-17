@@ -10,12 +10,12 @@ use aether_cli::settings::SettingsCommand;
 use aether_cli::show_prompt::{PromptArgs, run_prompt};
 use aether_project::{AgentCatalog, project_settings_path, user_settings_path};
 use clap::{Parser, Subcommand};
+use foxfire_tui::run_tui;
+use foxfire_tui::settings::{StatusLineSegmentConfig, StatusLineSettings, load_or_create_settings};
 use rustls::crypto::aws_lc_rs;
 use std::env::current_dir;
 use std::process::ExitCode;
 use tokio::runtime::Runtime;
-use wisp::run_tui;
-use wisp::settings::{StatusLineSegmentConfig, StatusLineSettings, load_or_create_settings};
 
 #[derive(Debug, thiserror::Error)]
 enum MainError {
@@ -34,7 +34,7 @@ enum MainError {
     #[error("{0}")]
     Mcp(#[from] McpCommandError),
     #[error("{0}")]
-    Tui(#[from] wisp::error::AppError),
+    Tui(#[from] foxfire_tui::error::AppError),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
     #[error("{0}")]

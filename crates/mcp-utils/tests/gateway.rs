@@ -1,3 +1,4 @@
+use foxfire_acp::mcp_status::McpServerStatus;
 use futures::{FutureExt, StreamExt};
 use mcp_utils::client::{
     ClientError, ClientOptions, HeaderMap, HttpAuth, OAuthSettings, ToolCall, ToolCallOptions, Transport,
@@ -9,7 +10,6 @@ use mcp_utils::testing::{FakeMcpServer, FakeMcpState, FakeTool, FakeToolResponse
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::sync::Weak;
-use utils::mcp_status::McpServerStatus;
 
 #[tokio::test]
 async fn servers_are_connecting_until_their_handshake_completes() {

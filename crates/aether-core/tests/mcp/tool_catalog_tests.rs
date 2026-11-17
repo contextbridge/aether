@@ -2,6 +2,7 @@ use super::support::deferred_tools;
 use aether_core::core::McpInstructions;
 use aether_core::mcp::{McpCatalog, ToolAnnotationMatcher, ToolExposure, ToolFilter, ToolMatcher, mcp};
 use aether_core::testing::ready_catalog;
+use foxfire_acp::mcp_status::{McpServerAuthCapability, McpServerStatus};
 use futures::StreamExt;
 use llm::ToolDefinition;
 use mcp_utils::client::{ToolCallOptions, Transport};
@@ -10,7 +11,6 @@ use mcp_utils::model::ToolAnnotations;
 use mcp_utils::testing::{FakeAuthServer, FakeMcpServer, FakeTool, OAuthPrompt, args, elicitation_sink};
 use serde_json::{Map, json};
 use std::collections::HashMap;
-use utils::mcp_status::{McpServerAuthCapability, McpServerStatus};
 
 #[tokio::test]
 async fn model_tools_are_namespaced_and_keep_their_metadata() {

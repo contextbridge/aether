@@ -16,8 +16,7 @@ use tokio::sync::{Notify, oneshot};
 #[tokio::test(flavor = "current_thread")]
 async fn initialize_remote_metadata_always_tracks_live_session() {
     AcpTestHarness::run(|mut harness| async move {
-        let info =
-            acp_utils::notifications::RemoteServerInfo::from_meta(harness.initialize_response.meta.as_ref()).unwrap();
+        let info = foxfire_acp::aether::RemoteServerInfo::from_meta(harness.initialize_response.meta.as_ref()).unwrap();
         assert_eq!(info.cwd, std::path::PathBuf::from("/tmp"));
         assert!(info.session_id.is_none());
         let session = harness.insert_agent_switching_session().await;
@@ -29,15 +28,13 @@ async fn initialize_remote_metadata_always_tracks_live_session() {
         );
         harness.disconnect().await;
         harness.reconnect().await;
-        let info =
-            acp_utils::notifications::RemoteServerInfo::from_meta(harness.initialize_response.meta.as_ref()).unwrap();
+        let info = foxfire_acp::aether::RemoteServerInfo::from_meta(harness.initialize_response.meta.as_ref()).unwrap();
         assert_eq!(info.cwd, std::path::PathBuf::from("/server/workspace"));
         assert_eq!(info.session_id, Some(id.clone()));
         harness.client_cx.send_request(CloseSessionRequest::new(id)).block_task().await.unwrap();
         harness.disconnect().await;
         harness.reconnect().await;
-        let info =
-            acp_utils::notifications::RemoteServerInfo::from_meta(harness.initialize_response.meta.as_ref()).unwrap();
+        let info = foxfire_acp::aether::RemoteServerInfo::from_meta(harness.initialize_response.meta.as_ref()).unwrap();
         assert_eq!(info.cwd, std::path::PathBuf::from("/tmp"));
         assert!(info.session_id.is_none());
         harness.shutdown().await;
@@ -204,7 +201,7 @@ async fn elicitations_reach_the_client_and_its_answer_reaches_the_server() {
         harness.prompt(&id, "/plan").await.expect("the prompt completes");
 
         let request = harness.peer.next_elicitation_request().await;
-        assert_eq!(acp_utils::elicitation::source_mcp_server_name(request.meta.as_ref()), Some("planner-mcp"));
+        assert_eq!(foxfire_acp::aether::source_mcp_server_name(request.meta.as_ref()), Some("planner-mcp"));
         let ElicitationMode::Form(form) = request.mode else { panic!("expected a form elicitation") };
         let ElicitationScope::Session(scope) = form.scope else { panic!("expected a session-scoped elicitation") };
         assert_eq!(scope.session_id, id);

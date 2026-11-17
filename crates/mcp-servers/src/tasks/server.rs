@@ -1,5 +1,6 @@
 use crate::server_config;
 use clap::Parser;
+use foxfire_acp::display_meta::ToolDisplayMeta;
 use rmcp::{
     ServerHandler,
     handler::server::{router::tool::ToolRouter, tool::schema_for_output, wrapper::Parameters},
@@ -9,7 +10,6 @@ use rmcp::{
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
-use utils::display_meta::ToolDisplayMeta;
 
 use crate::{
     Displayed,

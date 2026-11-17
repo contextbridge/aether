@@ -1,4 +1,5 @@
 use aether_auth::{MemoryCredentialStore, OAuthCredentialStorage, OAuthError};
+use foxfire_acp::mcp_status::McpServerStatus;
 use mcp_utils::client::{
     ClientError, ClientOptions, Elicitation, ElicitationSink, HttpAuth, McpClient, OAuthClientRegistration,
     OAuthSettings, Transport,
@@ -13,7 +14,6 @@ use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::{JoinHandle, yield_now};
-use utils::mcp_status::McpServerStatus;
 
 #[tokio::test]
 async fn connect_reports_the_authorization_challenge() {

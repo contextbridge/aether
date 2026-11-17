@@ -193,10 +193,10 @@ impl ConfiguredServer {
 mod tests {
     use super::*;
     use aether_auth::{MemoryCredentialStore, OAuthCredentialStorage};
+    use foxfire_acp::mcp_status::McpServerStatus;
     use mcp_utils::testing::FakeMcpServer;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
-    use utils::mcp_status::McpServerStatus;
 
     fn config(json: &str) -> McpConfig {
         McpConfig::from_json(json).unwrap()
