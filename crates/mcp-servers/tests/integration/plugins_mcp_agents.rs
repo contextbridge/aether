@@ -329,6 +329,10 @@ async fn background_instrumentation_finishes_when_the_batch_settles() -> TestRes
     await_terminal_task(&mcp, &created.task.task_id).await?;
 
     assert_eq!(finishes.lock().unwrap().as_slice(), [Some("Sub-agent execution cancelled".to_string())]);
+
+    call_complete(&mcp, spawn_input(&[])).await?;
+
+    assert_eq!(finishes.lock().unwrap().as_slice(), [Some("Sub-agent execution cancelled".to_string()), None]);
     Ok(())
 }
 

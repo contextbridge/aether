@@ -5,7 +5,6 @@ edition = "2024"
 description = "Built-in MCP tool servers for the Aether AI agent framework"
 license = "MIT"
 repository = "https://github.com/contextbridge/aether"
-homepage = "https://github.com/contextbridge/aether"
 readme = "README.md"
 keywords = ["mcp", "aether", "agent", "tools"]
 categories = ["development-tools"]

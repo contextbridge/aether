@@ -14,9 +14,7 @@ pub fn resolve_root(base: &Path, root: Option<PathBuf>) -> PathBuf {
 }
 
 pub fn relative_path(root: &Path, path: &str) -> String {
-    Path::new(path)
-        .strip_prefix(root)
-        .map_or_else(|_| path.to_string(), |relative| relative.to_string_lossy().to_string())
+    Path::new(path).trim_prefix(root).to_string_lossy().into_owned()
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -41,6 +39,8 @@ mod tests {
     fn relative_path_strips_root_prefix() {
         assert_eq!(relative_path(Path::new("/workspace"), "/workspace/src/main.rs"), "src/main.rs");
         assert_eq!(relative_path(Path::new("/workspace"), "/elsewhere/lib.rs"), "/elsewhere/lib.rs");
+        assert_eq!(relative_path(Path::new("/workspace"), "/workspace-other/lib.rs"), "/workspace-other/lib.rs");
+        assert_eq!(relative_path(Path::new("/workspace"), "/workspace/workspace/lib.rs"), "workspace/lib.rs");
     }
 
     #[test]
