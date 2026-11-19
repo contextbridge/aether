@@ -39,7 +39,7 @@ dependencies = [
 
 [[package]]
 name = "aether-agent-cli"
-version = "0.9.21"
+version = "0.10.0"
 dependencies = [
  "aether-agent-cli",
  "aether-agent-core",
@@ -85,7 +85,7 @@ dependencies = [
 
 [[package]]
 name = "aether-agent-core"
-version = "0.9.10"
+version = "0.10.0"
 dependencies = [
  "aether-agent-core",
  "aether-auth",
@@ -119,7 +119,7 @@ dependencies = [
 
 [[package]]
 name = "aether-auth"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "aether-utils",
  "age",
@@ -152,7 +152,7 @@ dependencies = [
 
 [[package]]
 name = "aether-evals"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
@@ -171,7 +171,7 @@ dependencies = [
 
 [[package]]
 name = "aether-llm"
-version = "0.9.19"
+version = "0.10.0"
 dependencies = [
  "aether-auth",
  "aether-doctest",
@@ -206,7 +206,7 @@ dependencies = [
 
 [[package]]
 name = "aether-llm-codegen"
-version = "0.2.35"
+version = "0.3.0"
 dependencies = [
  "aether-utils",
  "foxfire-acp",
@@ -222,7 +222,7 @@ dependencies = [
 
 [[package]]
 name = "aether-mcp-servers"
-version = "0.8.10"
+version = "0.9.0"
 dependencies = [
  "aether-agent-core",
  "aether-auth",
@@ -260,7 +260,7 @@ dependencies = [
 
 [[package]]
 name = "aether-mcp-utils"
-version = "0.7.17"
+version = "0.8.0"
 dependencies = [
  "aether-auth",
  "async-stream",
@@ -286,7 +286,7 @@ dependencies = [
 
 [[package]]
 name = "aether-project"
-version = "0.5.64"
+version = "0.6.0"
 dependencies = [
  "aether-agent-core",
  "aether-doctest",
@@ -304,7 +304,7 @@ dependencies = [
 
 [[package]]
 name = "aether-schemas"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "aether-agent-cli",
  "aether-agent-core",
@@ -326,7 +326,7 @@ dependencies = [
 
 [[package]]
 name = "aether-sessions"
-version = "0.3.19"
+version = "0.4.0"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
@@ -346,7 +346,7 @@ dependencies = [
 
 [[package]]
 name = "aether-telemetry"
-version = "0.3.19"
+version = "0.3.20"
 dependencies = [
  "aether-agent-core",
  "aether-llm",
@@ -371,7 +371,7 @@ dependencies = [
 
 [[package]]
 name = "aether-utils"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "futures",
  "regex",

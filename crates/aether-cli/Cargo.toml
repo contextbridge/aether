@@ -1,6 +1,6 @@
 [package]
 name = "aether-agent-cli"
-version = "0.9.21"
+version = "0.10.0"
 edition = "2024"
 description = "CLI and ACP server for the Aether AI coding agent"
 license = "MIT"
@@ -31,15 +31,15 @@ path = "src/main.rs"
 testing = ["foxfire-acp/testing", "mcp_utils/testing", "aether-core/testing", "utils/testing"]
 
 [dependencies]
-aether-auth = { path = "../aether-auth", version = "0.1.21", features = ["keyring"] }
+aether-auth = { path = "../aether-auth", version = "0.1.22", features = ["keyring"] }
 base64 = { workspace = true }
-aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.9.10" }
+aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.10.0" }
 aether-sessions = { workspace = true }
-aether-project = { path = "../aether-project", version = "0.5.64" }
-aether-telemetry = { path = "../aether-telemetry", version = "0.3.19" }
-llm = { package = "aether-llm", path = "../llm", features = ["bedrock", "codex"], version = "0.9.19" }
-mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.7.17" }
-mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", features = ["subagents"], version = "0.8.10" }
+aether-project = { path = "../aether-project", version = "0.6.0" }
+aether-telemetry = { path = "../aether-telemetry", version = "0.3.20" }
+llm = { package = "aether-llm", path = "../llm", features = ["bedrock", "codex"], version = "0.10.0" }
+mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.8.0" }
+mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", features = ["subagents"], version = "0.9.0" }
 foxfire-tui = { workspace = true }
 ratatui = { workspace = true }
 foxfire-acp = { workspace = true, features = ["websocket"] }
@@ -64,7 +64,7 @@ tracing = { workspace = true, features = ["release_max_level_info"] }
 tracing-subscriber = { workspace = true }
 futures = { workspace = true }
 uuid = { workspace = true }
-utils = { package = "aether-utils", path = "../utils", version = "0.3.1" }
+utils = { package = "aether-utils", path = "../utils", version = "0.4.0" }
 tempfile = { workspace = true }
 crossterm = { workspace = true }
 url = { workspace = true }

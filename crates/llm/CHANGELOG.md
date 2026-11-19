@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.0](https://github.com/contextbridge/aether/compare/aether-llm-v0.9.19...aether-llm-v0.10.0) - 2026-11-17
+
+### Added
+
+- *(llm)* add gpt-6.2 sol and astra to codex provider ([#677](https://github.com/contextbridge/aether/pull/677))
+
+### Fixed
+
+- *(llm)* route codex prompt cache by session ([#653](https://github.com/contextbridge/aether/pull/653))
+
+### Other
+
+- [**breaking**] rename Wisp to Foxfire and extract it to a separate repo, standardize ACP reporting ([#674](https://github.com/contextbridge/aether/pull/674))
+- *(llm)* bump codex client version to 0.167.1 ([#661](https://github.com/contextbridge/aether/pull/661))
+- Update models ([#655](https://github.com/contextbridge/aether/pull/655))
+- replace hand-rolled code with existing dependencies ([#652](https://github.com/contextbridge/aether/pull/652))
+
 ## [0.9.19](https://github.com/contextbridge/aether/compare/aether-llm-v0.9.18...aether-llm-v0.9.19) - 2026-11-03
 
 ### Added

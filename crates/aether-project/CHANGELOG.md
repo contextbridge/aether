@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0](https://github.com/contextbridge/aether/compare/aether-project-v0.5.64...aether-project-v0.6.0) - 2026-11-17
+
+### Other
+
+- [**breaking**] rename Wisp to Foxfire and extract it to a separate repo, standardize ACP reporting ([#674](https://github.com/contextbridge/aether/pull/674))
+- replace hand-rolled code with existing dependencies ([#652](https://github.com/contextbridge/aether/pull/652))
+
 ## [0.5.64](https://github.com/contextbridge/aether/compare/aether-project-v0.5.63...aether-project-v0.5.64) - 2026-11-03
 
 ### Other

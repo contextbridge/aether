@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.0](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.8.10...aether-mcp-servers-v0.9.0) - 2026-11-17
+
+### Added
+
+- fix common agent tool-call failures found in session logs ([#654](https://github.com/contextbridge/aether/pull/654))
+
+### Other
+
+- [**breaking**] rename Wisp to Foxfire and extract it to a separate repo, standardize ACP reporting ([#674](https://github.com/contextbridge/aether/pull/674))
+- replace hand-rolled code with existing dependencies ([#652](https://github.com/contextbridge/aether/pull/652))
+
 ## [0.8.10](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.8.9...aether-mcp-servers-v0.8.10) - 2026-11-03
 
 ### Added

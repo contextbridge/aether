@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.10.0](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.9.21...aether-agent-cli-v0.10.0) - 2026-11-17
+
+### Other
+
+- [**breaking**] rename Wisp to Foxfire and extract it to a separate repo, standardize ACP reporting ([#674](https://github.com/contextbridge/aether/pull/674))
+- *(deps)* [**breaking**] upgrade rmcp to 3.8 and agent-client-protocol to 5.0 ([#648](https://github.com/contextbridge/aether/pull/648))
+
 ## [0.9.21](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.9.20...aether-agent-cli-v0.9.21) - 2026-11-03
 
 ### Added
