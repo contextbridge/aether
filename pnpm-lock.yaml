@@ -208,8 +208,8 @@ importers:
   packages/aether-sdk:
     dependencies:
       '@aether-agent/cli':
-        specifier: ^0.9.21
-        version: 0.9.21
+        specifier: ^0.10.0
+        version: 0.10.0
       '@agentclientprotocol/sdk':
         specifier: ^2.4.0
         version: 2.4.0(zod@4.6.7)
@@ -323,8 +323,8 @@ importers:
 
 packages:
 
-  '@aether-agent/cli@0.9.21':
-    resolution: {integrity: sha512-gkXqyn6T8Mwb9RsIIFbEJO1Nhd/EPzZNRGr0FCfhEpSNCAs04sFg5YPBWv++eaPhv8yOd/b0RuFKmiKEjlK1sQ==}
+  '@aether-agent/cli@0.10.0':
+    resolution: {integrity: sha512-MHHb+n+6sOdgVzc3Tvz3P3EQhhsQrJRYaoTBPrVZcJBPSrqRlkgG7QCi5k8ZZerpjnDaUgnpqqpZ2BIKIrwOUA==}
     engines: {node: '>=14.18', npm: '>=6'}
     hasBin: true
 
@@ -4694,7 +4694,7 @@ packages:
 
 snapshots:
 
-  '@aether-agent/cli@0.9.21':
+  '@aether-agent/cli@0.10.0':
     dependencies:
       detect-libc: 2.1.2
 
