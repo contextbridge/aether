@@ -15,3 +15,7 @@ packages/website/dist/
 packages/website/.astro/
 packages/website/*.log
 .DS_Store
+
+# framer:begin framer
+/.framer/target/
+# framer:end framer

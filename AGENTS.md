@@ -7,6 +7,12 @@
 - **Lint** -- `just lint`
 - **Format** -- `just fmt`
 
+## Repository configuration
+
+Framer manages the Cargo workspace members, resolver, lints, and profiles, plus `rust-toolchain.toml`, `rustfmt.toml`, and `.github/workflows/ci.yml`. Edit `.framer/src/` to change them; edit workspace dependencies directly in `Cargo.toml`.
+
+From the repository root, regenerate with `cargo run --locked --manifest-path .framer/Cargo.toml` and commit any changes to the generated files and `.framer/manifest.json`. Append `-- --check` to verify without writing, as CI does. If you have `cargo-framer` installed, `cargo framer` and `cargo framer --check` are equivalent.
+
 ## Workflows 
 
 1. When making code changes, rely on your LSP tools for compile/error checking (as its much faster) and run only targeted tests. Then, run other `just` verification checks only at the end. 
