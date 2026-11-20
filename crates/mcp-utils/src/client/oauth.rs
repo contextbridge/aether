@@ -129,7 +129,8 @@ async fn authorization_flow(
     challenge: Option<String>,
     prompts: &mpsc::Sender<Elicitation>,
 ) -> Result<AuthClient<reqwest::Client>> {
-    let failed = |step| move |source| ClientError::AuthFlow { server: server.to_string(), step, source };
+    let failed =
+        |step| move |source| ClientError::AuthFlow { server: server.to_string(), step, source: Box::new(source) };
     let (listener, port) = bind_loopback(oauth.callback_port).map_err(|error| oauth_failed(server, error.into()))?;
     let mut manager = AuthorizationManager::new(url).await.map_err(failed("setup"))?;
     if let Some(store) = store {

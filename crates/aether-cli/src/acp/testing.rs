@@ -828,7 +828,9 @@ impl FakeRuntimeControl {
             server = server.with_prompt_gate(gate);
         }
         if let Some(results) = self.elicitation_results.clone() {
-            server = server.with_prompt_elicitation(results);
+            server = server
+                .with_protocol_versions([mcp_utils::model::ProtocolVersion::V_2025_11_25])
+                .with_prompt_elicitation(results);
         }
         server
     }
