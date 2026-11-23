@@ -1,6 +1,6 @@
 {
   "name": "@aether-agent/sdk",
-  "version": "0.7.17",
+  "version": "0.7.18",
   "description": "TypeScript SDK for the Aether agent CLI",
   "repository": {
     "type": "git",
@@ -27,7 +27,7 @@
     "e2e": "node scripts/e2e.mjs"
   },
   "dependencies": {
-    "@aether-agent/cli": "^0.10.1",
+    "@aether-agent/cli": "^0.10.2",
     "@agentclientprotocol/sdk": "^2.4.0",
     "@modelcontextprotocol/sdk": "^1.32.2",
     "express": "^5.3.0",
