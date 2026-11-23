@@ -1,6 +1,6 @@
 [package]
 name = "aether-agent-cli"
-version = "0.10.2"
+version = "0.10.3"
 edition = "2024"
 description = "CLI and ACP server for the Aether AI coding agent"
 license = "MIT"
@@ -33,13 +33,13 @@ testing = ["foxfire-acp/testing", "mcp_utils/testing", "aether-core/testing", "u
 [dependencies]
 aether-auth = { path = "../aether-auth", version = "0.1.22", features = ["keyring"] }
 base64 = { workspace = true }
-aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.10.2" }
+aether-core = { package = "aether-agent-core", path = "../aether-core", version = "0.10.3" }
 aether-sessions = { workspace = true }
-aether-project = { path = "../aether-project", version = "0.6.2" }
-aether-telemetry = { path = "../aether-telemetry", version = "0.3.22" }
+aether-project = { path = "../aether-project", version = "0.6.3" }
+aether-telemetry = { path = "../aether-telemetry", version = "0.3.23" }
 llm = { package = "aether-llm", path = "../llm", features = ["bedrock", "codex"], version = "0.10.2" }
 mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", version = "0.8.0" }
-mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", features = ["subagents"], version = "0.9.2" }
+mcp-servers = { package = "aether-mcp-servers", path = "../mcp-servers", features = ["subagents"], version = "0.9.3" }
 foxfire-tui = { workspace = true }
 ratatui = { workspace = true }
 foxfire-acp = { workspace = true, features = ["websocket"] }

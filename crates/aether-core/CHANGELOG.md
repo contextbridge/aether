@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.10.3](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.10.2...aether-agent-core-v0.10.3) - 2026-11-23
+
+### Added
+
+- *(telemetry)* export the root session ID as gen_ai.conversation.id ([#689](https://github.com/contextbridge/aether/pull/689))
+
 ## [0.10.2](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.10.1...aether-agent-core-v0.10.2) - 2026-11-23
 
 ### Other

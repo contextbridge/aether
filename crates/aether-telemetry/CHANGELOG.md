@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.23](https://github.com/contextbridge/aether/compare/aether-telemetry-v0.3.22...aether-telemetry-v0.3.23) - 2026-11-23
+
+### Added
+
+- *(telemetry)* export the root session ID as gen_ai.conversation.id ([#689](https://github.com/contextbridge/aether/pull/689))
+
 ## [0.3.22](https://github.com/contextbridge/aether/compare/aether-telemetry-v0.3.21...aether-telemetry-v0.3.22) - 2026-11-23
 
 ### Other
