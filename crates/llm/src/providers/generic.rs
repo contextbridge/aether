@@ -808,15 +808,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn responses_lift_system_instructions_and_apply_model_settings() {
+    async fn openai_places_system_prompt_first_in_input_and_applies_model_settings() {
         let mut context = Context::new(vec![ChatMessage::system("You are helpful."), ChatMessage::user("Hi")], vec![]);
         context.set_model_settings(ModelSettings { temperature: Some(0.0), top_p: Some(0.5), max_tokens: Some(128) });
 
-        let body = openai_request_body("gpt-4.1", &context).await;
+        let body = openai_request_body("gpt-6.2-sol", &context).await;
 
-        assert_eq!(body["instructions"], "You are helpful.");
-        assert_eq!(body["input"].as_array().unwrap().len(), 1);
-        assert_eq!(body["input"][0]["role"], "user");
+        assert!(body.get("instructions").is_none());
+        assert_eq!(
+            body["input"],
+            json!([
+                {"type": "message", "role": "developer", "content": "You are helpful."},
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Hi"}]}
+            ])
+        );
         assert_eq!(body["temperature"], 0.0);
         assert_eq!(body["top_p"], 0.5);
         assert_eq!(body["max_output_tokens"], 128);
@@ -1056,7 +1061,8 @@ mod tests {
     #[tokio::test]
     async fn xiaomi_omits_encrypted_reasoning_summaries_and_prompt_cache_key() {
         let mut fixture = ProviderFixture::builder(&XIAOMI).build().await;
-        let mut context = Context::new(vec![ChatMessage::user("Hello")], vec![]);
+        let mut context = hello_context();
+        context.set_system_content("You are helpful.".into());
         context.set_reasoning_effort(ReasoningEffort::High);
         context.set_prompt_cache_key(Some("cache-key".to_string()));
 
@@ -1065,6 +1071,12 @@ mod tests {
         assert!(responses.iter().all(Result::is_ok), "{responses:?}");
         assert_eq!(captured.path, "/responses");
         assert_eq!(captured.body["model"], "mimo-v2.6-pro");
+        assert!(captured.body.get("instructions").is_none());
+        assert_eq!(
+            captured.body["input"][0],
+            json!({"type":"message", "role":"developer", "content":"You are helpful."})
+        );
+        assert_eq!(captured.body["input"][1]["role"], "user");
         assert_eq!(captured.body["reasoning"], json!({ "effort": "high" }));
         assert!(captured.body.get("include").is_none());
         assert!(captured.body.get("prompt_cache_key").is_none());

@@ -81,7 +81,7 @@ pub(crate) fn build_request(
     policy: &ResponsesRequestPolicy,
 ) -> Result<ResponsesRequest> {
     let encrypted = policy.reasoning_format == ReasoningFormat::Encrypted;
-    let (instructions, input) = map_messages(identity, context.messages(), policy.reasoning_format)?;
+    let input = map_messages(identity, context.messages(), policy.reasoning_format)?;
     let tools = if context.tools().is_empty() { None } else { Some(map_tools(context.tools(), policy)?) };
     let settings = context.model_settings();
     let effort = policy.effort(context);
@@ -96,7 +96,6 @@ pub(crate) fn build_request(
     Ok(ResponsesRequest {
         include: encrypted.then_some(&["reasoning.encrypted_content"][..]),
         input,
-        instructions,
         max_output_tokens: settings.max_tokens,
         model: wire_model.to_string(),
         parallel_tool_calls: policy.parallel_tool_calls,
@@ -115,7 +114,7 @@ fn map_messages(
     identity: Option<&LlmModel>,
     messages: &[ChatMessage],
     reasoning_format: ReasoningFormat,
-) -> Result<(Option<String>, Vec<InputItem>)> {
+) -> Result<Vec<InputItem>> {
     let mut system_prompt = None;
     let mut items = Vec::new();
 
@@ -147,7 +146,10 @@ fn map_messages(
         }
     }
 
-    Ok((system_prompt, items))
+    if let Some(prompt) = system_prompt {
+        items.insert(0, text_message(Role::Developer, prompt));
+    }
+    Ok(items)
 }
 
 fn map_assistant_block(

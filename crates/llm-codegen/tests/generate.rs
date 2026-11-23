@@ -281,7 +281,7 @@ fn generate_emits_provider_docs() {
 fn generate_routes_only_existing_us_gpt_6_profiles_to_runtime() {
     let mut data = Catalog::new();
     let mut models = Vec::new();
-    for version in ["6-luna", "6-sol", "6-astra", "6.1-sol"] {
+    for version in ["6-luna", "6-sol", "6-astra", "6.1-sol", "6.2-sol", "6.2-astra"] {
         for prefix in ["us", "global"] {
             let id = format!("{prefix}.openai.gpt-{version}");
             models.push(Model::new(id).name(format!("GPT-{version} ({prefix})")));
@@ -294,7 +294,7 @@ fn generate_routes_only_existing_us_gpt_6_profiles_to_runtime() {
     data.models("amazon-bedrock", models);
     let docs = data.generate().unwrap().provider_docs.remove("amazon-bedrock").unwrap();
 
-    for version in ["6-luna", "6-sol", "6-astra", "6.1-sol"] {
+    for version in ["6-luna", "6-sol", "6-astra", "6.1-sol", "6.2-sol", "6.2-astra"] {
         let id = format!("openai.gpt-{version}");
         assert!(docs.contains(&format!(
             "| `us.{id}` | `https://bedrock-runtime.${{AWS_REGION}}.amazonaws.com/openai/v1` | `responses` |"
