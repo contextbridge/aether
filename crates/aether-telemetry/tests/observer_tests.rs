@@ -7,11 +7,12 @@ use aether_core::events::{AgentEvent, AgentObserver, LlmCallOutcome, StreamState
 use aether_core::testing::{AgentTrace, TestScenario, test_agent};
 use aether_telemetry::ContentCaptureSettings;
 use aether_telemetry::{
-    AETHER_INPUT_MESSAGES_SHA256, AETHER_SYSTEM_INSTRUCTIONS_SHA256, GEN_AI_INPUT_MESSAGES, GEN_AI_OUTPUT_MESSAGES,
-    GEN_AI_SYSTEM_INSTRUCTIONS, GEN_AI_TOOL_CALL_ARGUMENTS, GEN_AI_TOOL_CALL_RESULT, GEN_AI_TOOL_DEFINITIONS,
-    GENAI_SEMCONV_SCHEMA_URL, GenAiMetrics, OtelInstrumentation, OtelObserver, genai_instrumentation_scope,
+    AETHER_INPUT_MESSAGES_SHA256, AETHER_SYSTEM_INSTRUCTIONS_SHA256, GEN_AI_CONVERSATION_ID, GEN_AI_INPUT_MESSAGES,
+    GEN_AI_OUTPUT_MESSAGES, GEN_AI_SYSTEM_INSTRUCTIONS, GEN_AI_TOOL_CALL_ARGUMENTS, GEN_AI_TOOL_CALL_RESULT,
+    GEN_AI_TOOL_DEFINITIONS, GENAI_SEMCONV_SCHEMA_URL, GenAiMetrics, OtelInstrumentation, OtelObserver,
+    genai_instrumentation_scope,
 };
-use common::{SYSTEM_INSTRUCTIONS_JSON, SYSTEM_PROMPT, SYSTEM_PROMPT_SHA256, all_content};
+use common::{SYSTEM_INSTRUCTIONS_JSON, SYSTEM_PROMPT, SYSTEM_PROMPT_SHA256, TEST_SESSION_ID, all_content};
 
 mod common;
 use llm::testing::llm_response;
@@ -44,6 +45,9 @@ async fn tool_span_exposes_w3c_parent_context() -> Result<(), Box<dyn Error>> {
 async fn spans_form_a_turn_rooted_hierarchy() -> Result<(), Box<dyn Error>> {
     let spans = otel_test().redacting().observe_trace(&happy_tool_trace().await?).spans();
 
+    for span in spans.iter() {
+        span.assert_attr(GEN_AI_CONVERSATION_ID, TEST_SESSION_ID);
+    }
     let turn = spans.named("invoke_agent");
     let tool = spans.named("execute_tool test__add_numbers");
     let chats = spans.prefixed("chat claude-sonnet-4-5");
@@ -562,6 +566,7 @@ impl OtelHarness {
             content,
             root_parent: None,
             agent_name: None,
+            conversation_id: Some(TEST_SESSION_ID.to_string()),
         });
         Self {
             observer: Some(observer),

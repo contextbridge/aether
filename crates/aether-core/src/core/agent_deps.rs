@@ -19,6 +19,7 @@ pub struct AgentDeps {
     /// that spawned them.
     pub parent_trace_context: Option<TraceContext>,
     pub agent_registry: AgentRegistry,
+    conversation_id: Option<String>,
     pub session_affinity_key: Option<String>,
     pub sub_agents: SubAgentSessions,
 }
@@ -49,6 +50,11 @@ impl AgentDeps {
         self
     }
 
+    pub fn with_conversation_id(mut self, id: impl Into<String>) -> Self {
+        self.conversation_id = Some(id.into());
+        self
+    }
+
     pub fn with_session_affinity_key(mut self, key: impl Into<String>) -> Self {
         self.session_affinity_key = Some(key.into());
         self
@@ -70,8 +76,8 @@ impl AgentDeps {
 
     /// A fresh observer isolated to one agent, if a factory is configured.
     pub fn observer(&self, agent_name: &str) -> Option<Box<dyn AgentObserver>> {
-        self.observer_factory
-            .as_ref()
-            .map(|factory| factory.agent(Some(agent_name), self.parent_trace_context.as_ref()))
+        self.observer_factory.as_ref().map(|factory| {
+            factory.agent(Some(agent_name), self.conversation_id.as_deref(), self.parent_trace_context.as_ref())
+        })
     }
 }

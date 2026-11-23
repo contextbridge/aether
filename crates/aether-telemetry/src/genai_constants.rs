@@ -9,6 +9,7 @@ use opentelemetry_semantic_conventions::{attribute, metric};
 
 pub(crate) const ERROR_TYPE: &str = attribute::ERROR_TYPE;
 pub(crate) const GEN_AI_AGENT_NAME: &str = attribute::GEN_AI_AGENT_NAME;
+pub const GEN_AI_CONVERSATION_ID: &str = attribute::GEN_AI_CONVERSATION_ID;
 pub const GEN_AI_INPUT_MESSAGES: &str = attribute::GEN_AI_INPUT_MESSAGES;
 pub(crate) const GEN_AI_OPERATION_NAME: &str = attribute::GEN_AI_OPERATION_NAME;
 pub const GEN_AI_OUTPUT_MESSAGES: &str = attribute::GEN_AI_OUTPUT_MESSAGES;
