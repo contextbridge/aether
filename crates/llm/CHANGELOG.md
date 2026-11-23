@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.1](https://github.com/contextbridge/aether/compare/aether-llm-v0.10.0...aether-llm-v0.10.1) - 2026-11-23
+
+### Fixed
+
+- *(llm)* keep responses system prompts in the cacheable prefix ([#682](https://github.com/contextbridge/aether/pull/682))
+
 ## [0.10.0](https://github.com/contextbridge/aether/compare/aether-llm-v0.9.19...aether-llm-v0.10.0) - 2026-11-17
 
 ### Added
