@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.10.2](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.10.1...aether-agent-core-v0.10.2) - 2026-11-23
+
+### Other
+
+- updated the following local packages: aether-llm
+
 ## [0.10.1](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.10.0...aether-agent-core-v0.10.1) - 2026-11-23
 
 ### Other
