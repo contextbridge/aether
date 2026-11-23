@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.10.1](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.10.0...aether-agent-cli-v0.10.1) - 2026-11-23
+
+### Other
+
+- updated the following local packages: aether-llm, aether-agent-core, aether-project, aether-sessions, aether-telemetry, aether-mcp-servers
+
 ## [0.10.0](https://github.com/contextbridge/aether/compare/aether-agent-cli-v0.9.21...aether-agent-cli-v0.10.0) - 2026-11-17
 
 ### Other

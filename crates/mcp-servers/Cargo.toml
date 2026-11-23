@@ -1,6 +1,6 @@
 [package]
 name = "aether-mcp-servers"
-version = "0.9.0"
+version = "0.9.1"
 edition = "2024"
 description = "Built-in MCP tool servers for the Aether AI agent framework"
 license = "MIT"
@@ -95,9 +95,9 @@ tempfile = { workspace = true, optional = true }
 
 # subagents feature
 aether-auth = { path = "../aether-auth", optional = true, version = "0.1.22", features = ["keyring"] }
-aether-core = { package = "aether-agent-core", path = "../aether-core", optional = true, version = "0.10.0" }
-aether-project = { path = "../aether-project", optional = true, version = "0.6.0" }
-llm = { package = "aether-llm", path = "../llm", optional = true, version = "0.10.0" }
+aether-core = { package = "aether-agent-core", path = "../aether-core", optional = true, version = "0.10.1" }
+aether-project = { path = "../aether-project", optional = true, version = "0.6.1" }
+llm = { package = "aether-llm", path = "../llm", optional = true, version = "0.10.1" }
 
 [dev-dependencies]
 tempfile = { workspace = true }
@@ -107,7 +107,7 @@ tokio = { workspace = true, features = ["test-util"] }
 clankerdiff-lspd = { workspace = true, features = ["test-support"] }
 mcp-servers = { package = "aether-mcp-servers", path = ".", features = ["test-helpers"] }
 mcp_utils = { package = "aether-mcp-utils", path = "../mcp-utils", features = ["testing"], version = "0.8.0" }
-aether-core = { package = "aether-agent-core", path = "../aether-core", features = ["testing"], version = "0.10.0" }
+aether-core = { package = "aether-agent-core", path = "../aether-core", features = ["testing"], version = "0.10.1" }
 
 [[bin]]
 name = "mcp-servers-stdio"
