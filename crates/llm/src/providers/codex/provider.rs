@@ -194,11 +194,14 @@ mod tests {
         assert_eq!(captured.body["reasoning"]["effort"], "max");
         assert!(captured.body["reasoning"].get("context").is_none());
         assert_eq!(captured.body["model"], "gpt-6-luna");
-        assert_eq!(captured.body["instructions"], "You are helpful");
+        assert!(captured.body.get("instructions").is_none());
         assert_eq!(captured.body["tools"].as_array().unwrap().len(), 1);
         assert!(captured.body["tools"][0].get("strict").is_none());
         assert_eq!(captured.body["parallel_tool_calls"], true);
-        assert_eq!(captured.body["input"][0]["role"], "user");
+        assert_eq!(captured.body["input"].as_array().unwrap().len(), 2);
+        assert_eq!(captured.body["input"][0]["role"], "developer");
+        assert_eq!(captured.body["input"][0]["content"], "You are helpful");
+        assert_eq!(captured.body["input"][1]["role"], "user");
         assert_eq!(captured.body["prompt_cache_key"], "session-abc");
         assert_eq!(captured.body["store"], false);
         assert_eq!(captured.body["stream"], true);

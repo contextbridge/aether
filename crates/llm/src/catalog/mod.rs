@@ -558,6 +558,10 @@ mod tests {
     #[test]
     fn bedrock_responses_models_carry_their_endpoint_and_wire_shape() {
         let cases = [
+            ("openai.gpt-6.2-sol", "https://bedrock-mantle.${AWS_REGION}.api.aws/openai/v1"),
+            ("openai.gpt-6.2-astra", "https://bedrock-mantle.${AWS_REGION}.api.aws/openai/v1"),
+            ("us.openai.gpt-6.2-sol", "https://bedrock-runtime.${AWS_REGION}.amazonaws.com/openai/v1"),
+            ("us.openai.gpt-6.2-astra", "https://bedrock-runtime.${AWS_REGION}.amazonaws.com/openai/v1"),
             ("openai.gpt-6.1-sol", "https://bedrock-mantle.${AWS_REGION}.api.aws/openai/v1"),
             ("us.openai.gpt-6.1-sol", "https://bedrock-runtime.${AWS_REGION}.amazonaws.com/openai/v1"),
             ("openai.gpt-5.6-luna", "https://bedrock-mantle.${AWS_REGION}.api.aws/openai/v1"),

@@ -6,8 +6,6 @@ pub(crate) struct ResponsesRequest {
     pub include: Option<&'static [&'static str]>,
     pub input: Vec<InputItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub instructions: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
     pub model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -77,6 +75,7 @@ pub(crate) enum InputItem {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum Role {
+    Developer,
     User,
     Assistant,
 }

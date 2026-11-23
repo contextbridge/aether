@@ -345,7 +345,7 @@ const PROVIDERS: &[ProviderConfig] = &[
         use_model_transport: true,
         transport_overrides: &[
             TransportOverride {
-                matches: ModelMatch::Prefixes(&["us.openai.gpt-6-", "us.openai.gpt-6.1-sol"]),
+                matches: ModelMatch::Prefixes(&["us.openai.gpt-6-", "us.openai.gpt-6.1-sol", "us.openai.gpt-6.2-"]),
                 transport: TransportInfo::OpenAiResponses {
                     base_url_template: Cow::Borrowed("https://bedrock-runtime.${AWS_REGION}.amazonaws.com/openai/v1"),
                 },
