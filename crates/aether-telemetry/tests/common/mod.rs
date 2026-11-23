@@ -1,5 +1,6 @@
 use aether_telemetry::ContentCaptureSettings;
 
+pub(crate) const TEST_SESSION_ID: &str = "session-0001";
 pub(crate) const SYSTEM_PROMPT: &str = "You are the test agent.";
 pub(crate) const SYSTEM_PROMPT_SHA256: &str = "5304558d6e33e0cf4e4e71c7a6dfde26fac43e41560acbd6289cbcfa04af7719";
 pub(crate) const SYSTEM_INSTRUCTIONS_JSON: &str = r#"[{"type":"text","content":"You are the test agent."}]"#;

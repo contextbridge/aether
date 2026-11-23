@@ -37,6 +37,7 @@ pub struct OtelInstrumentation {
     pub content: ContentCaptureSettings,
     pub root_parent: Option<Context>,
     pub agent_name: Option<String>,
+    pub conversation_id: Option<String>,
 }
 
 impl OtelObserver {
@@ -178,7 +179,13 @@ impl OtelObserver {
 impl OtelInstrumentation {
     /// Starts a span under `parent`. Providers for disabled tracing use an
     /// always-off sampler, so callers never need to branch.
-    pub(crate) fn start_span(&self, builder: SpanBuilder, parent: Option<&Context>) -> Context {
+    pub(crate) fn start_span(&self, mut builder: SpanBuilder, parent: Option<&Context>) -> Context {
+        if let Some(conversation_id) = &self.conversation_id {
+            builder
+                .attributes
+                .get_or_insert_default()
+                .push(KeyValue::new(semconv::GEN_AI_CONVERSATION_ID, conversation_id.clone()));
+        }
         let parent = parent.cloned().unwrap_or_default();
         Context::new().with_span(self.tracer.build_with_context(builder, &parent))
     }
