@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.3](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.9.2...aether-mcp-servers-v0.9.3) - 2026-11-23
+
+### Added
+
+- *(telemetry)* export the root session ID as gen_ai.conversation.id ([#689](https://github.com/contextbridge/aether/pull/689))
+
 ## [0.9.2](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.9.1...aether-mcp-servers-v0.9.2) - 2026-11-23
 
 ### Other

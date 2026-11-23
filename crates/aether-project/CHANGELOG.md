@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.3](https://github.com/contextbridge/aether/compare/aether-project-v0.6.2...aether-project-v0.6.3) - 2026-11-23
+
+### Other
+
+- updated the following local packages: aether-agent-core
+
 ## [0.6.2](https://github.com/contextbridge/aether/compare/aether-project-v0.6.1...aether-project-v0.6.2) - 2026-11-23
 
 ### Other
