@@ -15,7 +15,7 @@ return_self_not_must_use = "allow"
 pub_underscore_fields = "allow"
 
 [workspace.dependencies]
-aether-sessions = { path = "crates/aether-sessions", version = "0.4.1" }
+aether-sessions = { path = "crates/aether-sessions", version = "0.4.2" }
 foxfire-acp = "0.1.0"
 foxfire-core = "0.1.0"
 foxfire-tui = "0.1.0"
