@@ -12,12 +12,14 @@ pub(crate) fn decode_sse_chunk(data: &str, turn: &mut StreamAssembler<i32>) -> R
 }
 
 fn decode_chunk(mut chunk: ChatCompletionStreamResponse, turn: &mut StreamAssembler<i32>) -> Result<Vec<LlmResponse>> {
-    let mut responses: Vec<_> =
-        chunk.usage.map(|usage| LlmResponse::Usage { tokens: usage.into() }).into_iter().collect();
+    if let Some(usage) = chunk.usage {
+        turn.record_usage(usage.into());
+    }
     let Some(choice) = chunk.choices.pop() else {
-        return Ok(responses);
+        return Ok(Vec::new());
     };
 
+    let mut responses = Vec::new();
     let delta = choice.delta;
     if let Some(reasoning) = delta.reasoning_content.filter(|reasoning| !reasoning.is_empty()) {
         responses.push(LlmResponse::Reasoning { chunk: reasoning });
@@ -232,6 +234,41 @@ mod tests {
         .await;
 
         assert_eq!(responses, llm_response().text(&["done"]).usage(10, 5).build_with_stop_reason(StopReason::EndTurn));
+    }
+
+    #[tokio::test]
+    async fn cumulative_usage_is_reported_once() {
+        let usage = |completion_tokens| Usage { prompt_tokens: 10, completion_tokens, ..Default::default() };
+        let responses = collect_responses(
+            chat_stream()
+                .text(&["a"])
+                .usage(usage(1))
+                .text(&["b"])
+                .usage(usage(2))
+                .finish(FinishReason::Stop)
+                .usage(usage(2))
+                .build(),
+        )
+        .await;
+
+        assert_eq!(
+            responses,
+            llm_response().text(&["a", "b"]).usage(10, 2).build_with_stop_reason(StopReason::EndTurn)
+        );
+    }
+
+    #[tokio::test]
+    async fn interrupted_stream_reports_its_latest_usage_once() {
+        let usage = |completion_tokens| Usage { prompt_tokens: 10, completion_tokens, ..Default::default() };
+        let chunks = chat_stream().usage(usage(1)).usage(usage(2)).build();
+        let interrupted = Err(ProviderError::stream_interrupted("connection lost").into());
+
+        let responses = process_chunks(chunks.into_iter().map(Ok).chain([interrupted])).await;
+
+        let [Ok(LlmResponse::Start), Ok(LlmResponse::Usage { tokens }), Err(_)] = responses.as_slice() else {
+            panic!("{responses:?}");
+        };
+        assert_eq!(*tokens, TokenUsage::new(10, 2));
     }
 
     #[tokio::test]

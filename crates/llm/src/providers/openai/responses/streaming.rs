@@ -167,8 +167,11 @@ fn decode_event(event: ResponsesStreamEvent, turn: &mut StreamAssembler<u32>) ->
                 Some(Status::Other) | None if incomplete => turn.stop(StopReason::Length),
                 Some(Status::Other) | None => {}
             }
+            if let Some(usage) = e.response.usage {
+                turn.record_usage(usage.into());
+            }
             turn.finish_now();
-            e.response.usage.map(|usage| LlmResponse::Usage { tokens: usage.into() }).into_iter().collect()
+            vec![]
         }
         ResponsesStreamEvent::Failed(e) => {
             let error = e.response.error.map_or_else(
