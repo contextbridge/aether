@@ -8,7 +8,9 @@ import type { Props } from "@astrojs/starlight/props";
 import StarlightHead from "@astrojs/starlight/components/Head.astro";
 ---
 
-<StarlightHead {...Astro.props}><slot /></StarlightHead>
+<StarlightHead {...Astro.props}>
+  <slot />
+</StarlightHead>
 <script is:inline>
   (function () {
     var t = localStorage.getItem("aether-color-theme");
