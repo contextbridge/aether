@@ -39,7 +39,9 @@ use llm::{ChatMessage, Context, LlmModel, LlmResponse, SessionUsageEvent, Stream
 use llm::{MessageId, ProviderConnectionOverrides};
 use mcp_utils::client::{Elicitation, ElicitationSink};
 use mcp_utils::gateway::ServerSpec;
-use mcp_utils::model::{CallToolResult, CreateTaskResult, DetailedTask, ElicitResult, Task, TaskPayload, TaskStatus};
+use mcp_utils::model::{
+    CallToolResult, CreateTaskResult, DetailedTask, ElicitResult, ProtocolVersion, Task, TaskPayload, TaskStatus,
+};
 use mcp_utils::testing::{FakeMcpServer, FakeTool, FakeToolResponse, Gate, completed_task_payload, elicitation_sink};
 use std::collections::HashMap;
 use std::future::Future;
@@ -828,7 +830,8 @@ impl FakeRuntimeControl {
             server = server.with_prompt_gate(gate);
         }
         if let Some(results) = self.elicitation_results.clone() {
-            server = server.with_prompt_elicitation(results);
+            // Server-initiated elicitation is only valid for pre-2026-07-28 peers.
+            server = server.with_protocol_versions([ProtocolVersion::V_2025_11_25]).with_prompt_elicitation(results);
         }
         server
     }

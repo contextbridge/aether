@@ -41,7 +41,7 @@ pub enum ClientError {
         server: String,
         step: &'static str,
         #[source]
-        source: AuthError,
+        source: Box<AuthError>,
     },
     #[error("Authentication for MCP server '{server}' timed out after {timeout:?}")]
     AuthTimedOut { server: String, timeout: Duration },
