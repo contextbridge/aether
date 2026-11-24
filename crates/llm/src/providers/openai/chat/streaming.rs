@@ -41,12 +41,15 @@ fn decode_chunk(mut chunk: ChatCompletionStreamResponse, turn: &mut StreamAssemb
 }
 
 fn decode_tool_call_delta(delta: ToolCallDelta, turn: &mut StreamAssembler<i32>) -> impl Iterator<Item = LlmResponse> {
-    let ToolCallDelta { index, id, function, .. } = delta;
+    let ToolCallDelta { index, id, function, extra_content } = delta;
     let FunctionCallDelta { name, arguments } = function.unwrap_or_default();
+    let index = index.unwrap_or_else(|| turn.last_tool_index().map_or(0, |last| last + 1));
+    let id = id.unwrap_or_else(|| format!("tool_call_{index}"));
 
-    let start = name.map(|name| turn.start_tool(index, id.unwrap_or_else(|| format!("tool_call_{index}")), name));
+    let extra = extra_content.map(|extra| LlmResponse::encrypted_reasoning(&id, &extra.to_string()));
+    let start = name.map(|name| turn.start_tool(index, id, name));
     let chunk = arguments.and_then(|chunk| turn.append_tool_args(&index, chunk));
-    start.into_iter().chain(chunk)
+    extra.into_iter().chain(start).chain(chunk)
 }
 
 fn map_finish_reason(reason: FinishReason) -> Result<StopReason> {
@@ -422,12 +425,13 @@ mod tests {
         fn tool_delta(self, index: i32, id: Option<&str>, name: Option<&str>, arguments: Option<&str>) -> Self {
             self.delta(ChatCompletionStreamResponseDelta {
                 tool_calls: Some(vec![ToolCallDelta {
-                    index,
+                    index: Some(index),
                     id: id.map(ToString::to_string),
                     function: Some(FunctionCallDelta {
                         name: name.map(ToString::to_string),
                         arguments: arguments.map(ToString::to_string),
                     }),
+                    extra_content: None,
                 }]),
                 ..Default::default()
             })

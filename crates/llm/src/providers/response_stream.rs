@@ -72,6 +72,10 @@ impl<T: Ord + Debug> StreamAssembler<T> {
         start
     }
 
+    pub(crate) fn last_tool_index(&self) -> Option<&T> {
+        self.tool_calls.last_key_value().map(|(index, _)| index)
+    }
+
     pub(crate) fn append_tool_args(&mut self, index: &T, chunk: String) -> Option<LlmResponse> {
         if chunk.is_empty() {
             return None;

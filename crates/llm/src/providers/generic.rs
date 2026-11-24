@@ -16,15 +16,15 @@ use crate::providers::http::{SseData, anthropic_code, http_client, post_sse, res
 pub use crate::providers::openai::chat::ChatRequestPolicy;
 use crate::providers::openai::chat::build_chat_request;
 use crate::providers::openai::chat::streaming::decode_sse_chunk;
-use crate::providers::openai::chat::types::CompatibleChatRequest;
+use crate::providers::openai::chat::types::{CompatibleChatMessage, CompatibleChatRequest, ToolCall};
 use crate::providers::openai::responses::mappers::build_request as build_responses_request;
 use crate::providers::openai::responses::streaming::decode_responses;
 use crate::providers::openai::wire::PromptCacheKeySource;
 use crate::providers::response_stream::{OpenedStream, error_stream, response_stream};
 use crate::tool_schema::normalize_for_moonshot;
 use crate::{
-    Context, LlmError, LlmModel, LlmResponseStream, ProviderAuthMode, ProviderConnectionConfig, Result,
-    StreamingModelProvider,
+    AssistantContent, ChatMessage, Context, LlmError, LlmModel, LlmResponseStream, ProviderAuthMode,
+    ProviderConnectionConfig, Result, StreamingModelProvider,
 };
 
 pub use crate::providers::openai::responses::mappers::ResponsesRequestPolicy;
@@ -121,7 +121,7 @@ pub const GEMINI: ProviderConfig = ProviderConfig {
     api_base: Some("https://generativelanguage.googleapis.com/v1beta/openai"),
     api_base_env: None,
     default_model: "",
-    api: Api::ChatCompletions(ChatRequestPolicy::DEFAULT),
+    api: Api::ChatCompletions(ChatRequestPolicy { customize: Some(gemini_request), ..ChatRequestPolicy::DEFAULT }),
 };
 
 pub const OPENROUTER: ProviderConfig = ProviderConfig {
@@ -327,6 +327,32 @@ fn api_headers(api: &Api, api_key: &str, auth_mode: ProviderAuthMode) -> Result<
     Ok(headers)
 }
 
+fn gemini_request(request: &mut CompatibleChatRequest, context: &Context) {
+    for message in &mut request.messages {
+        let CompatibleChatMessage::Assistant { tool_calls: Some(calls), .. } = message else { continue };
+        for (position, ToolCall::Function { id, extra_content, .. }) in calls.iter_mut().enumerate() {
+            *extra_content = gemini_signature(context, id).or_else(|| {
+                let unsigned =
+                    || serde_json::json!({ "google": { "thought_signature": "skip_thought_signature_validator" } });
+                (position == 0).then(unsigned)
+            });
+        }
+    }
+}
+
+fn gemini_signature(context: &Context, tool_call_id: &str) -> Option<serde_json::Value> {
+    let replies = context.messages().iter().filter_map(|message| match message {
+        ChatMessage::Assistant { content, .. } => Some(content.blocks()),
+        _ => None,
+    });
+    replies.flatten().find_map(|block| match block {
+        AssistantContent::Reasoning { encrypted: Some(encrypted), .. } if encrypted.id == tool_call_id => {
+            serde_json::from_str(&encrypted.content).ok()
+        }
+        _ => None,
+    })
+}
+
 fn openrouter_request(request: &mut CompatibleChatRequest, context: &Context) {
     request.extra.insert("usage".into(), serde_json::json!({ "include": true }));
     request.extra.insert("cache_control".into(), serde_json::json!({ "type": "ephemeral" }));
@@ -351,8 +377,8 @@ mod tests {
     use crate::testing::{assistant_message, llm_response, tool_error, tool_result};
     use crate::types::IsoString;
     use crate::{
-        AssistantReply, ChatMessage, ContentBlock, LlmResponse, MessageId, ModelSettings, ProviderErrorKind,
-        ReasoningEffort, StopReason, ToolCallRequest, ToolCallResult, ToolDefinition,
+        AssistantReply, ContentBlock, LlmResponse, MessageId, ModelSettings, ProviderErrorKind, ReasoningEffort,
+        StopReason, ToolCallRequest, ToolCallResult, ToolDefinition,
     };
 
     #[tokio::test]
@@ -366,6 +392,40 @@ mod tests {
 
         assert_successful_stream(&responses);
         assert_eq!(captured.body["reasoning_effort"], "none");
+    }
+
+    #[tokio::test]
+    async fn gemini_replays_indexless_tool_calls_with_their_thought_signatures() {
+        let calls = json!([
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": { "name": "lookup", "arguments": r#"{"label":"alpha"}"# },
+                "extra_content": { "google": { "thought_signature": "sig-1" } }
+            },
+            { "id": "call_2", "type": "function", "function": { "name": "lookup", "arguments": r#"{"label":"beta"}"# } }
+        ]);
+        let body = [
+            json!({ "delta": { "tool_calls": [calls[0]] } }),
+            json!({ "delta": { "tool_calls": [calls[1]] } }),
+            json!({ "delta": {}, "finish_reason": "stop" }),
+        ]
+        .map(|choice| format!("data: {}\n\n", json!({ "choices": [choice] })))
+        .concat();
+
+        assert_eq!(replayed_messages(&GEMINI, &body).await[1]["tool_calls"], calls);
+    }
+
+    #[tokio::test]
+    async fn gemini_skips_signature_validation_for_unsigned_tool_calls() {
+        let mut fixture = ProviderFixture::builder(&GEMINI).build().await;
+        let reply = assistant_message().tool_call("call_1", "lookup", "{}").tool_call("call_2", "lookup", "{}").build();
+
+        let (captured, _) = fixture.run(&Context::new(vec![reply], vec![])).await;
+
+        let calls = &captured.body["messages"][0]["tool_calls"];
+        assert_eq!(calls[0]["extra_content"]["google"]["thought_signature"], "skip_thought_signature_validator");
+        assert!(calls[1].get("extra_content").is_none());
     }
 
     #[tokio::test]
@@ -1405,12 +1465,13 @@ mod tests {
     }
 
     async fn anthropic_replay(stream: AnthropicStreamBuilder) -> serde_json::Value {
-        let model = LlmModel::all().iter().find(|model| model.provider_enum() == Provider::Anthropic).unwrap();
-        let mut fixture = ProviderFixture::builder(&ANTHROPIC)
-            .model(&model.model_id())
-            .response(ResponseSpec::sse(&stream.sse()))
-            .build()
-            .await;
+        replayed_messages(&ANTHROPIC, &stream.sse()).await[1]["content"].clone()
+    }
+
+    async fn replayed_messages(config: &'static ProviderConfig, body: &str) -> serde_json::Value {
+        let model = LlmModel::all().iter().find(|model| model.provider_enum() == config.provider).unwrap();
+        let mut fixture =
+            ProviderFixture::builder(config).model(&model.model_id()).response(ResponseSpec::sse(body)).build().await;
 
         let (_, responses) = fixture.run(&hello_context()).await;
         let (mut reply, mut results) = (AssistantReply::default(), Vec::new());
@@ -1429,7 +1490,7 @@ mod tests {
         context.add_message(ChatMessage::user("Continue"));
 
         let (captured, _) = fixture.run(&context).await;
-        captured.body["messages"][1]["content"].clone()
+        captured.body["messages"].clone()
     }
 
     fn assert_successful_stream(responses: &[Result<LlmResponse>]) {
