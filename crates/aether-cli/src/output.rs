@@ -253,7 +253,7 @@ mod tests {
             (AgentEvent::thought("id", "reasoning here", StreamState::Complete), Some("Thought: reasoning here")),
             (AgentEvent::thought("id", "partial", StreamState::Partial), None),
             (AgentEvent::tool_call("tc1", "bash", r#"{"cmd":"ls"}"#), Some(r#"Tool call: bash({"cmd":"ls"})"#)),
-            (AgentEvent::Tool(ToolEvent::InputStarted { id: "tc1".into(), name: "bash".into() }), None),
+            (AgentEvent::Tool(ToolEvent::InputStarted { id: "tc1".into(), name: "bash".into(), kind: None }), None),
             (AgentEvent::Tool(ToolEvent::InputDelta { id: "tc1".into(), chunk: "partial".into() }), None),
             (AgentEvent::tool_result("tc1", "bash", "{}", "ok"), Some("Tool result [bash]: ok")),
             (AgentEvent::tool_error("tc1", "bash", "{}", "not found"), Some("Tool error [bash]: not found")),

@@ -1,5 +1,6 @@
 use crate::server_config;
 use clap::Parser;
+use mcp_utils::tool_kind::{ToolKind, tool_kind_meta};
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     handler::server::{
@@ -123,6 +124,7 @@ impl ServerHandler for SkillsMcp {
 impl SkillsMcp {
     #[doc = include_str!("tools/list_skills/description.md")]
     #[tool(
+        meta = tool_kind_meta(ToolKind::Read),
         annotations(read_only_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<ListSkillsOutput>()
     )]
@@ -143,7 +145,7 @@ impl SkillsMcp {
     }
 
     #[doc = include_str!("tools/get_skills/description.md")]
-    #[tool(annotations(read_only_hint = true, open_world_hint = false))]
+    #[tool(meta = tool_kind_meta(ToolKind::Read), annotations(read_only_hint = true, open_world_hint = false))]
     pub async fn get_skills(&self, Parameters(args): Parameters<LoadSkillsInput>) -> Json<LoadSkillsOutput> {
         let mut files = Vec::with_capacity(args.requests.len());
         for request in &args.requests {

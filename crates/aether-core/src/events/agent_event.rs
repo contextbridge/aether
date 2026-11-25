@@ -41,6 +41,7 @@ impl AgentEvent {
     pub fn tool_call(id: &str, name: &str, arguments: &str) -> Self {
         Self::Tool(ToolEvent::Call {
             request: ToolCallRequest { id: id.into(), name: name.into(), arguments: arguments.into() },
+            kind: None,
         })
     }
 
@@ -250,7 +251,7 @@ mod tests {
         let complete = [
             AgentEvent::text("m", "partial", StreamState::Complete),
             AgentEvent::thought("m", "partial", StreamState::Complete),
-            AgentEvent::Tool(ToolEvent::InputStarted { id: "call".into(), name: "read".into() }),
+            AgentEvent::Tool(ToolEvent::InputStarted { id: "call".into(), name: "read".into(), kind: None }),
             AgentEvent::tool_call("call", "read", "{}"),
             AgentEvent::turn_ended(TurnOutcome::Completed),
         ];

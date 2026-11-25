@@ -4,9 +4,9 @@ use rmcp::{
         CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, CancelTaskParams, ClientCapabilities,
         ContentBlock, CreateTaskResult, DetailedTask, DiscoverRequestMethod, DiscoverResult, ElicitResult,
         GetPromptRequestParams, GetPromptResponse, GetPromptResult, GetTaskParams, GetTaskResult, Implementation,
-        ListPromptsResult, ListToolsResult, NumberOrString, PaginatedRequestParams, ProgressNotificationParam,
-        ProgressToken, Prompt, PromptMessage, PromptsCapability, ProtocolVersion, ResultType, Role, ServerCapabilities,
-        ServerConfig, TaskPayload, Tool, ToolAnnotations, UpdateTaskParams,
+        ListPromptsResult, ListToolsResult, MetaObject, NumberOrString, PaginatedRequestParams,
+        ProgressNotificationParam, ProgressToken, Prompt, PromptMessage, PromptsCapability, ProtocolVersion,
+        ResultType, Role, ServerCapabilities, ServerConfig, TaskPayload, Tool, ToolAnnotations, UpdateTaskParams,
     },
     service::RequestContext,
 };
@@ -322,6 +322,11 @@ impl FakeTool {
 
     pub fn annotations(mut self, annotations: ToolAnnotations) -> Self {
         self.definition.annotations = Some(annotations);
+        self
+    }
+
+    pub fn meta(mut self, meta: MetaObject) -> Self {
+        self.definition.meta = Some(meta);
         self
     }
 
