@@ -68,7 +68,11 @@ impl AgentEventBuilder {
 
     fn push_tool_call(&mut self, tool_call_id: &str, name: &str, arguments: &str) {
         self.chunks.extend([
-            AgentEvent::Tool(ToolEvent::InputStarted { id: tool_call_id.to_string(), name: name.to_string() }),
+            AgentEvent::Tool(ToolEvent::InputStarted {
+                id: tool_call_id.to_string(),
+                name: name.to_string(),
+                kind: None,
+            }),
             AgentEvent::Tool(ToolEvent::InputDelta { id: tool_call_id.to_string(), chunk: arguments.to_string() }),
             AgentEvent::tool_call(tool_call_id, name, arguments),
         ]);

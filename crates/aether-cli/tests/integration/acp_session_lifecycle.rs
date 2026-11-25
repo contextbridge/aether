@@ -3,12 +3,15 @@ use agent_client_protocol::Error;
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::v2::schema::{
     AbsolutePath, CloseSessionRequest, CloseSessionResponse, ContentBlock, ListSessionsRequest, ListSessionsResponse,
-    NewSessionRequest, ReplayFrom, ReplayFromStart, ResumeSessionRequest, SessionId, SessionUpdate, StopReason,
-    ToolCallStatus,
+    NewSessionRequest, ReplayFrom, ReplayFromStart, ResumeSessionRequest, SessionId, SessionUpdate, StateUpdate,
+    StopReason, ToolCallStatus, ToolKind,
 };
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use llm::testing::{FakeLlmProvider, llm_response};
+use mcp_utils::gateway::ServerSpec;
+use mcp_utils::testing::{FakeMcpServer, FakeTool, FakeToolResponse};
+use mcp_utils::tool_kind::tool_kind_meta;
 use serde_json::json;
 use std::fmt::Debug;
 use std::future::Future;
@@ -121,6 +124,33 @@ async fn close_cancels_prompt_before_returning() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn mcp_tool_kind_is_reported_live_and_replayed_without_the_server() {
+    AcpTestHarness::run(|mut harness| async move {
+        let provider = FakeLlmProvider::new(vec![
+            llm_response().tool_call("probe-call", "custom__probe", &["{}"]).build(),
+            llm_response().text(&["done"]).build(),
+        ]);
+        let tool = FakeTool::new("probe").meta(tool_kind_meta(ToolKind::Search)).responds(FakeToolResponse::text("ok"));
+        let server = ServerSpec::in_process("custom", FakeMcpServer::new().with_tool(tool));
+        let id = harness.session("tool-kinds", provider).mcp_server(server).insert().await;
+        harness.append_stored_session(id.0.as_ref(), "2026-05-01T00:00:00Z");
+
+        harness.prompt(&id, "try the tool").await.expect("prompt accepted");
+        let live = harness
+            .updates_until(&id, |update| matches!(update, SessionUpdate::StateUpdate(StateUpdate::Idle(_))))
+            .await;
+        assert_eq!(first_tool_kind(&live), Some(&ToolKind::Search));
+
+        close(&harness, CloseSessionRequest::new(id.clone())).await.expect("close original runtime");
+        harness.resume_with_replay(&id).await;
+        let replay = harness.updates_until(&id, |update| matches!(update, SessionUpdate::AgentMessage(_))).await;
+        assert_eq!(first_tool_kind(&replay), Some(&ToolKind::Search));
+        harness.shutdown().await;
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn resume_replays_persisted_transcript_over_the_server_connection() {
     AcpTestHarness::run(|mut harness| async move {
         let session_id = "replay-session";
@@ -153,6 +183,7 @@ async fn resume_replays_persisted_transcript_over_the_server_connection() {
         assert_eq!(tool.raw_input, MaybeUndefined::Value(arguments), "the resumed tool keeps its complete input");
         assert_eq!(tool.title.value().map(String::as_str), Some("Bash"));
         assert_eq!(tool.status, MaybeUndefined::Value(ToolCallStatus::Completed));
+        assert!(tool.kind.is_undefined(), "a stored call without kind has the client default");
         let SessionUpdate::AgentMessage(agent) = next_history(&mut harness).await else { panic!("agent history last") };
         assert!(
             matches!(&agent.content.value().unwrap()[0], ContentBlock::Text(text) if text.text == "prior assistant")
@@ -287,6 +318,18 @@ async fn start_twice_concurrently<T: Debug, F: Future<Output = Result<T, Error>>
     startup.finish(true);
     let (first, second) = tokio::join!(first, second);
     [first, second]
+}
+
+fn first_tool_kind(updates: &[SessionUpdate]) -> Option<&ToolKind> {
+    updates
+        .iter()
+        .find_map(|update| match update {
+            SessionUpdate::ToolCallUpdate(tool) => Some(tool),
+            _ => None,
+        })
+        .expect("expected a tool call update")
+        .kind
+        .value()
 }
 
 async fn next_history(harness: &mut AcpTestHarness) -> SessionUpdate {

@@ -7,7 +7,8 @@ use aether_core::events::{
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::v2::schema::{
     self as acp, ContentBlock, ContentChunk, IdleStateUpdate, MessageId, PlanEntry, PlanEntryPriority, PlanEntryStatus,
-    RunningStateUpdate, SessionUpdate, StateUpdate, ToolCallContent, ToolCallStatus, ToolCallUpdate, UsageUpdate,
+    RunningStateUpdate, SessionUpdate, StateUpdate, ToolCallContent, ToolCallStatus, ToolCallUpdate, ToolKind,
+    UsageUpdate,
 };
 use foxfire_acp::aether::{AetherMeta, ContextClearedParams, SubAgentMeta};
 use foxfire_acp::display_meta::{PlanMetaStatus, ToolResultMeta};
@@ -77,11 +78,13 @@ pub(crate) fn map_agent_event_to_notification(msg: &AgentEvent, mode: Notificati
             map_message_to_notification(MessageKind::Thought, message_id, chunk, *is_complete, mode)
         }
 
-        AgentEvent::Tool(ToolEvent::InputStarted { id, name }) => {
-            Some(SessionUpdate::ToolCallUpdate(tool_call_upsert(id, name)))
+        AgentEvent::Tool(ToolEvent::InputStarted { id, name, kind }) => {
+            Some(SessionUpdate::ToolCallUpdate(tool_call_upsert(id, name, kind.as_ref())))
         }
 
-        AgentEvent::Tool(ToolEvent::Call { request }) => Some(map_tool_call_to_notification(request)),
+        AgentEvent::Tool(ToolEvent::Call { request, kind }) => {
+            Some(map_tool_call_to_notification(request, kind.as_ref()))
+        }
 
         AgentEvent::Tool(
             ToolEvent::Result { result, result_meta, .. } | ToolEvent::TaskCompleted { result, result_meta, .. },
@@ -226,16 +229,17 @@ fn thought_message_id(message_id: &llm::MessageId) -> MessageId {
     MessageId::new(format!("{message_id}:thought"))
 }
 
-fn tool_call_upsert(id: &str, name: &str) -> ToolCallUpdate {
+fn tool_call_upsert(id: &str, name: &str, kind: Option<&ToolKind>) -> ToolCallUpdate {
     ToolCallUpdate::new(id.to_string())
         .title(humanize_tool_name(name))
         .status(ToolCallStatus::InProgress)
         .name(name.to_string())
+        .kind(kind.cloned().map_or(MaybeUndefined::Undefined, MaybeUndefined::Value))
 }
 
-fn map_tool_call_to_notification(request: &ToolCallRequest) -> SessionUpdate {
+fn map_tool_call_to_notification(request: &ToolCallRequest, kind: Option<&ToolKind>) -> SessionUpdate {
     let raw_input = MaybeUndefined::from(serde_json::from_str::<Option<serde_json::Value>>(&request.arguments).ok());
-    SessionUpdate::ToolCallUpdate(tool_call_upsert(&request.id, &request.name).raw_input(raw_input))
+    SessionUpdate::ToolCallUpdate(tool_call_upsert(&request.id, &request.name, kind).raw_input(raw_input))
 }
 
 fn map_tool_result_to_notification(result: &ToolCallResult, result_meta: Option<&ToolResultMeta>) -> SessionUpdate {
@@ -401,6 +405,7 @@ mod tests {
         let started = mapped_tool(&AgentEvent::Tool(ToolEvent::InputStarted {
             id: "call_1".into(),
             name: "coding__read_file".into(),
+            kind: None,
         }));
         assert_eq!(started.title, MaybeUndefined::Value("Read file".into()));
         assert_eq!(started.name.value().map(String::as_str), Some("coding__read_file"));

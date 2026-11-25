@@ -263,6 +263,7 @@ name = "aether-mcp-utils"
 version = "0.8.0"
 dependencies = [
  "aether-auth",
+ "agent-client-protocol",
  "async-stream",
  "async-trait",
  "aws-credential-types",
