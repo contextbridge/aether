@@ -255,6 +255,24 @@ async fn test_bash_pwd_uses_workspace_root() -> TestResult {
 }
 
 #[tokio::test]
+async fn coding_tool_catalog_advertises_presentation_kinds() -> TestResult {
+    let workspace = CodingWorkspace::new().await;
+    let catalog = workspace.client.list_tools().await?;
+    for (name, kind) in [
+        ("read_file", "read"),
+        ("write_file", "edit"),
+        ("edit_file", "edit"),
+        ("bash", "execute"),
+        ("web_fetch", "fetch"),
+    ] {
+        let tool = catalog.iter().find(|tool| tool.name == name).expect("tool is listed");
+        let actual = tool.meta.as_ref().and_then(|meta| meta.0.get("aether-agent.io/tool-kind"));
+        assert_eq!(actual, Some(&json!(kind)), "advertised kind for {name}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn coding_tool_catalog_uses_bash_for_search_and_directory_listings() -> TestResult {
     let workspace = CodingWorkspace::new().await;
     let catalog = workspace.client.list_tools().await?;

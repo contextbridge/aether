@@ -46,6 +46,7 @@ base64 = { workspace = true, optional = true }
 chrono = { workspace = true }
 eventsource-stream = { workspace = true }
 reqwest = { workspace = true }
+tokio-tungstenite = { workspace = true }
 futures = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }
@@ -73,7 +74,7 @@ llm-codegen = { package = "aether-llm-codegen", path = "../llm-codegen", version
 [dev-dependencies]
 aether-doctest = { path = "../doctest" }
 aws-smithy-eventstream = { workspace = true }
-axum = { workspace = true }
+axum = { workspace = true, features = ["ws"] }
 http = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 tracing-subscriber = { workspace = true }

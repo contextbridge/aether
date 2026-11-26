@@ -85,6 +85,7 @@ fn only_the_complete_tool_call_is_persisted() {
     let started = SessionEvent::Agent(AgentEvent::Tool(ToolEvent::InputStarted {
         id: "bash".into(),
         name: "coding__bash".into(),
+        kind: None,
     }));
     let delta =
         SessionEvent::Agent(AgentEvent::Tool(ToolEvent::InputDelta { id: "bash".into(), chunk: "partial".into() }));

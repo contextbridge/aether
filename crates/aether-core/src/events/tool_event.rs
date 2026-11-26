@@ -1,6 +1,7 @@
 use super::SubAgentProgressPayload;
 use foxfire_acp::display_meta::ToolResultMeta;
 use llm::{ChatMessage, ContentBlock, MessageId, ToolCallError, ToolCallRequest, ToolCallResult, ToolDefinition};
+use mcp_utils::tool_kind::ToolKind;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -11,6 +12,8 @@ pub enum ToolEvent {
     InputStarted {
         id: String,
         name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kind: Option<ToolKind>,
     },
     InputDelta {
         id: String,
@@ -18,6 +21,8 @@ pub enum ToolEvent {
     },
     Call {
         request: ToolCallRequest,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kind: Option<ToolKind>,
     },
     Progress {
         request: ToolCallRequest,

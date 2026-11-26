@@ -214,7 +214,12 @@ fn generate_assigns_codex_model_specific_reasoning_levels() {
 fn generate_applies_codex_subscription_context_window_override() {
     let output = Catalog::new().generate().unwrap();
     for &id in CODEX_MODELS {
-        let codex_window = if id == "gpt-6.1-terra" { "context_window: 500_000" } else { "context_window: 272_000" };
+        let codex_window = match id {
+            "gpt-6.2-sol" | "gpt-6.2-astra" | "gpt-6.1-sol" | "gpt-6.1-terra" | "gpt-6-sol" | "gpt-6-astra" => {
+                "context_window: 500_000"
+            }
+            _ => "context_window: 272_000",
+        };
         assert!(catalog_entry(&output, "CodexModel", id).contains(codex_window), "{id}");
         assert!(catalog_entry(&output, "OpenaiModel", id).contains("context_window: 1_050_000"), "{id}");
     }
@@ -241,7 +246,7 @@ fn generate_uses_codex_subscription_model_ids() {
     let codex_doc = &output.provider_docs["codex"];
     assert!(!codex_doc.contains("`gpt-5.6`"));
     assert!(!codex_doc.contains("`gpt-5.1-codex`"));
-    assert!(codex_doc.contains("| `gpt-6.1-sol` | `GPT-6.1 Sol` | `272k` |"));
+    assert!(codex_doc.contains("| `gpt-6.1-sol` | `GPT-6.1 Sol` | `500k` |"));
     assert!(codex_doc.contains("| `gpt-6.1-terra` | `GPT-6.1 Terra` | `500k` |"));
     assert!(codex_doc.contains("| `gpt-5.6-sol` | `GPT-5.6 Sol` | `272k` |"));
     assert!(codex_doc.contains("| `gpt-5.6-terra` | `GPT-5.6 Terra` | `272k` |"));

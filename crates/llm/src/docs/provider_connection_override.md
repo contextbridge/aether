@@ -26,6 +26,12 @@ Give a slow local model more time to produce its first token. A request fails wi
 { "idleTimeoutSecs": 900 }
 ```
 
+`OpenAI` and Codex send Responses API requests over a WebSocket, so a turn that continues the previous one carries only what is new instead of the whole conversation. A provider with a custom `url` uses plain HTTP unless told otherwise, and an endpoint that refuses the upgrade falls back to HTTP on its own. Set `transport` to `http` or `websocket` to choose explicitly:
+
+```json
+{ "transport": "http" }
+```
+
 Pin a Bedrock application inference profile:
 
 ```json

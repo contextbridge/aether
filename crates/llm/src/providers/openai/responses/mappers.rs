@@ -1,15 +1,16 @@
 use schemars::Schema;
 
+use super::streaming::{OutputContent, OutputItem};
 use super::types::{
-    InputContent, InputItem, MessageContent, Reasoning, ReasoningContent, ResponsesRequest, Role, TextFormat,
-    TextParam, Tool,
+    InputContent, InputItem, MessageContent, Reasoning, ReasoningContent, RequestSettings, ResponsesRequest, Role,
+    TextFormat, TextParam, Tool,
 };
 use crate::assistant_reply::replays_encrypted_reasoning;
 use crate::providers::openai::wire::{PromptCacheKeySource, reasoning_effort_param};
 use crate::tool_schema::normalize_for_xiaomi;
 use crate::{
-    AssistantContent, ChatMessage, ContentBlock, Context, LlmError, LlmModel, ReasoningEffort, Result, ToolDefinition,
-    tool_result_parts,
+    AssistantContent, AssistantReply, ChatMessage, ContentBlock, Context, LlmError, LlmModel, LlmResponse,
+    ReasoningEffort, Result, ToolCallRequest, ToolDefinition, tool_result_parts,
 };
 
 pub struct ResponsesRequestPolicy {
@@ -94,20 +95,53 @@ pub(crate) fn build_request(
     });
 
     Ok(ResponsesRequest {
-        include: encrypted.then_some(&["reasoning.encrypted_content"][..]),
-        input,
-        max_output_tokens: settings.max_tokens,
-        model: wire_model.to_string(),
-        parallel_tool_calls: policy.parallel_tool_calls,
-        prompt_cache_key: policy.prompt_cache_key.resolve(context).map(String::from),
-        reasoning,
-        store: false,
         stream: true,
-        temperature: settings.temperature,
-        text: policy.text_verbosity.map(|verbosity| TextParam { format: TextFormat::Text, verbosity }),
-        tools,
-        top_p: settings.top_p,
+        input,
+        settings: RequestSettings {
+            include: encrypted.then_some(&["reasoning.encrypted_content"][..]),
+            max_output_tokens: settings.max_tokens,
+            model: wire_model.to_string(),
+            parallel_tool_calls: policy.parallel_tool_calls,
+            prompt_cache_key: policy.prompt_cache_key.resolve(context).map(String::from),
+            reasoning,
+            store: false,
+            temperature: settings.temperature,
+            text: policy.text_verbosity.map(|verbosity| TextParam { format: TextFormat::Text, verbosity }),
+            tools,
+            top_p: settings.top_p,
+        },
     })
+}
+
+pub(super) fn replay_output(output: &[OutputItem]) -> Option<Vec<InputItem>> {
+    let mut reply = AssistantReply::default();
+    for item in output {
+        match item {
+            OutputItem::Message { content } => {
+                for part in content {
+                    let OutputContent::OutputText { text } = part else { return None };
+                    reply.push(&LlmResponse::Text { chunk: text.clone() });
+                }
+            }
+            OutputItem::Reasoning { id: Some(id), encrypted_content: Some(content) } => {
+                reply.push(&LlmResponse::EncryptedReasoning { id: id.clone(), content: content.clone() });
+            }
+            OutputItem::Reasoning { .. } => {}
+            OutputItem::FunctionCall { call_id, name, arguments } => {
+                let tool_call =
+                    ToolCallRequest { id: call_id.clone(), name: name.clone(), arguments: arguments.clone() };
+                reply.push(&LlmResponse::ToolRequestComplete { tool_call });
+            }
+            OutputItem::Other => return None,
+        }
+    }
+    Some(
+        reply
+            .blocks()
+            .iter()
+            .filter_map(|block| map_assistant_block(block, ReasoningFormat::Encrypted, true))
+            .collect(),
+    )
 }
 
 fn map_messages(

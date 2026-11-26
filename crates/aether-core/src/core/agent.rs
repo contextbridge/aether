@@ -522,7 +522,8 @@ impl Agent {
             EncryptedReasoning { .. } => {}
 
             ToolRequestStart { id, name } => {
-                self.emit(AgentEvent::Tool(ToolEvent::InputStarted { id, name })).await;
+                let kind = self.mcp.tool_kind(&name);
+                self.emit(AgentEvent::Tool(ToolEvent::InputStarted { id, name, kind })).await;
             }
 
             ToolRequestArg { id, chunk } => {
@@ -559,7 +560,8 @@ impl Agent {
 
         let tool_id = tool_call.id.clone();
         tracing::debug!("Tool execution started: {} ({})", tool_call.name, tool_id);
-        self.emit(AgentEvent::Tool(ToolEvent::Call { request: tool_call.clone() })).await;
+        let kind = self.mcp.tool_kind(&tool_call.name);
+        self.emit(AgentEvent::Tool(ToolEvent::Call { request: tool_call.clone(), kind })).await;
 
         let trace_context = self.observers.tool_trace_context(&tool_id);
         let options = ToolCallOptions {
