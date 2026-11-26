@@ -132,7 +132,7 @@ impl EventProjection {
 
     fn from_tool(event: &ToolEvent) -> Self {
         match event {
-            ToolEvent::Call { request } => Self::for_tool_request("tool_call", request, None),
+            ToolEvent::Call { request, .. } => Self::for_tool_request("tool_call", request, None),
             ToolEvent::Result { result, .. } => Self {
                 tool_call_id: Some(result.id.clone()),
                 tool_name: Some(result.name.clone()),

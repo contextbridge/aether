@@ -49,7 +49,8 @@ async fn a_failed_sub_agent_goes_idle_with_an_error() {
 async fn sub_agent_tool_calls_report_on_the_sub_agent_session() {
     let call = ToolCallRequest { id: "grep-call".into(), name: "coding__grep".into(), arguments: "{}".into() };
 
-    let notifications = spawn_sub_agents([sub_agent(AgentEvent::Tool(ToolEvent::Call { request: call }))]).await;
+    let notifications =
+        spawn_sub_agents([sub_agent(AgentEvent::Tool(ToolEvent::Call { request: call, kind: None }))]).await;
 
     let tool_calls: Vec<_> = notifications
         .iter()

@@ -74,7 +74,12 @@ pub(crate) enum CompatibleChatMessage {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum ToolCall {
-    Function { id: String, function: FunctionCall },
+    Function {
+        id: String,
+        function: FunctionCall,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        extra_content: Option<serde_json::Value>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -143,6 +148,7 @@ pub(crate) fn map_messages(
                     .map(|call| ToolCall::Function {
                         id: call.id.clone(),
                         function: FunctionCall { name: call.name.clone(), arguments: call.arguments.clone() },
+                        extra_content: None,
                     })
                     .collect();
 
@@ -218,9 +224,10 @@ pub(crate) struct ChatCompletionStreamResponseDelta {
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct ToolCallDelta {
-    pub index: i32,
+    pub index: Option<i32>,
     pub id: Option<String>,
     pub function: Option<FunctionCallDelta>,
+    pub extra_content: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

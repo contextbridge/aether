@@ -239,7 +239,7 @@ impl TurnState {
             AgentEvent::Message(MessageEvent::Text { chunk, is_complete: true, .. }) => {
                 self.output.push(chunk);
             }
-            AgentEvent::Tool(ToolEvent::InputStarted { id, name }) => {
+            AgentEvent::Tool(ToolEvent::InputStarted { id, name, .. }) => {
                 if let Some(chat) = &mut self.chat_call {
                     chat.record_tool_input_started(id, name);
                 }
@@ -249,7 +249,7 @@ impl TurnState {
                     chat.record_tool_input_delta();
                 }
             }
-            AgentEvent::Tool(ToolEvent::Call { request }) => self.on_tool_call(request, instrumentation),
+            AgentEvent::Tool(ToolEvent::Call { request, .. }) => self.on_tool_call(request, instrumentation),
             AgentEvent::Tool(ToolEvent::Result { result, .. }) => self.on_tool_result(result, instrumentation),
             AgentEvent::Tool(ToolEvent::Error { error, .. }) => self.on_tool_error(error),
             _ => {}
