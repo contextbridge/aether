@@ -56,7 +56,7 @@ async fn replace_conversation_preserves_token_usage() {
         .iter()
         .rev()
         .find_map(|event| match event {
-            AgentEvent::Context(ContextEvent::UsageUpdated { usage }) => Some(usage),
+            AgentEvent::Context(ContextEvent::UsageUpdated { usage, .. }) => Some(usage),
             _ => None,
         })
         .expect("expected context usage update after conversation replacement");

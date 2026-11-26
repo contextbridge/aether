@@ -90,7 +90,7 @@ impl SearchClient for BraveSearchClient {
                 .await
                 .map_err(|e| WebSearchError::ParseError(format!("Failed to parse JSON response: {e}")))?;
 
-            Ok(response_body.web.map(|web| web.results).unwrap_or_default())
+            Ok(response_body.web.map_or_default(|web| web.results))
         })
     }
 }
@@ -151,8 +151,7 @@ impl SearchClient for FakeSearchClient {
             None => Ok(self
                 .results
                 .get(&params.query)
-                .map(|results| results.iter().take(params.count as usize).cloned().collect())
-                .unwrap_or_default()),
+                .map_or_default(|results| results.iter().take(params.count as usize).cloned().collect())),
         };
         Box::pin(std::future::ready(response))
     }

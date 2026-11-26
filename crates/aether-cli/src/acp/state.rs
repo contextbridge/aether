@@ -1,11 +1,5 @@
 use super::agent::acp_agent_builder;
 use super::protocol::notify;
-use acp_utils::notifications::{
-    AetherCapabilities, AetherMeta, AuthMethodsUpdatedParams, GitDiffClosePayload, GitDiffCommandPayload, McpRequest,
-    PromptSearchParams, PromptSearchResponse, RemoteServerInfo, SessionDisplayMeta, SessionPreviewParams,
-    SessionPreviewResponse, WorkspaceListParams, WorkspaceListResponse, WorkspaceMoveParams, WorkspaceMoveResponse,
-    WorkspaceStatusPayload, WorkspaceStatusResponse,
-};
 use aether_auth::OAuthCredentialStorage;
 use aether_telemetry::TelemetryRuntime;
 use agent_client_protocol::schema::ProtocolVersion;
@@ -18,6 +12,12 @@ use agent_client_protocol::v2::schema::{
     SetSessionConfigOptionRequest, SetSessionConfigOptionResponse, SetSessionTitleRequest, SetSessionTitleResponse,
 };
 use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, Error, Responder};
+use foxfire_acp::aether::{
+    AetherCapabilities, AetherMeta, GitDiffClosePayload, GitDiffCommandPayload, McpRequest, PromptSearchParams,
+    PromptSearchResponse, RemoteServerInfo, SessionDisplayMeta, SessionPreviewParams, SessionPreviewResponse,
+    WorkspaceListParams, WorkspaceListResponse, WorkspaceMoveParams, WorkspaceMoveResponse, WorkspaceStatusPayload,
+    WorkspaceStatusResponse,
+};
 use llm::ContentBlock;
 use llm::catalog::{LlmModel, ModelSpec};
 use mcp_utils::model::{ElicitationCapability, FormElicitationCapability, UrlElicitationCapability};
@@ -147,7 +147,7 @@ impl AcpState {
         on_connected: oneshot::Sender<ConnectionTo<Client>>,
     ) -> Result<(), Error> {
         let guard = self.try_attach().ok_or_else(|| Error::internal_error().data("client already attached"))?;
-        self.serve_attached(transport, stop, guard, acp_utils::testing::CaptureConnection(on_connected)).await
+        self.serve_attached(transport, stop, guard, foxfire_acp::testing::CaptureConnection(on_connected)).await
     }
 
     pub(crate) fn new(config: AcpStateConfig) -> Self {
@@ -178,10 +178,14 @@ impl AcpState {
     pub(crate) async fn initialize(&self, args: InitializeRequest) -> Result<InitializeResponse, Error> {
         info!("Received initialize request: {:?}", args);
         self.factory.set_elicitation(mcp_elicitation(&args.capabilities));
-        let auth_methods = build_auth_methods(self.oauth_credential_store.as_ref());
         let prompt_capabilities = prompt_capabilities_for_models(&self.factory.available_models().await);
-        let aether_capabilities =
-            AetherCapabilities { prompt_search: true, session_preview: true, workspace_move: true, git_diff: true };
+        let aether_capabilities = AetherCapabilities {
+            prompt_search: true,
+            session_preview: true,
+            workspace_move: true,
+            git_diff: true,
+            workspace_status: true,
+        };
         let session_capabilities = acp::SessionCapabilities::new()
             .prompt(prompt_capabilities)
             .mcp(McpCapabilities::new().stdio(acp::McpStdioCapabilities::new()).http(acp::McpHttpCapabilities::new()))
@@ -196,8 +200,23 @@ impl AcpState {
         let remote_meta = Some(RemoteServerInfo { cwd, session_id }.to_meta());
         Ok(InitializeResponse::new(ProtocolVersion::V2, Implementation::new("Aether", "0.1.0"))
             .meta(remote_meta)
-            .capabilities(AgentCapabilities::new().session(session_capabilities))
-            .auth_methods(auth_methods))
+            .capabilities(
+                AgentCapabilities::new()
+                    .session(session_capabilities)
+                    .auth(acp::AgentAuthCapabilities::new().status(acp::AuthStatusCapabilities::new())),
+            )
+            .auth_methods(build_auth_methods()))
+    }
+
+    pub(crate) fn auth_status(&self) -> acp::AuthStatusResponse {
+        let mut seen = HashSet::new();
+        let accounts: Vec<_> = LlmModel::all()
+            .iter()
+            .filter(|model| seen.insert(model.provider()))
+            .filter_map(|model| provider_account(model, self.oauth_credential_store.as_ref()))
+            .collect();
+        let state = if accounts.is_empty() { acp::AuthState::Unauthenticated } else { acp::AuthState::Authenticated };
+        acp::AuthStatusResponse::new(state).accounts(accounts)
     }
 
     pub(crate) async fn login(
@@ -470,7 +489,7 @@ impl AcpState {
     pub(crate) async fn route_prompt(&self, args: PromptRequest, responder: Responder<PromptResponse>) {
         info!("Received prompt for session: {:?}", args.session_id);
         let session_id = args.session_id.0.to_string();
-        let display_content = map_acp_to_content_blocks(acp_utils::content::display_content_blocks(&args.prompt));
+        let display_content = map_acp_to_content_blocks(foxfire_acp::content::display_content_blocks(&args.prompt));
         let content = map_acp_to_content_blocks(args.prompt);
         let command = SessionCommand::Prompt {
             content,
@@ -593,8 +612,8 @@ impl AcpState {
     }
 
     async fn broadcast_auth_state(&self, cx: &ConnectionTo<Client>) {
-        let auth_methods = build_auth_methods(self.oauth_credential_store.as_ref());
-        notify(cx, AuthMethodsUpdatedParams { auth_methods });
+        let status = self.auth_status();
+        notify(cx, acp::AuthStatusUpdateNotification::new(status.state).accounts(status.accounts));
         self.broadcast_config_options().await;
     }
 
@@ -654,20 +673,25 @@ fn mcp_elicitation(client: &acp::ClientCapabilities) -> ElicitationCapability {
     capability
 }
 
-fn build_auth_methods(store: &dyn OAuthCredentialStorage) -> Vec<AuthMethod> {
+fn build_auth_methods() -> Vec<AuthMethod> {
     let mut seen = HashSet::new();
     LlmModel::all()
         .iter()
         .filter_map(|model| Some((model.oauth_provider_id()?, model.provider_display_name())))
         .filter(|(id, _)| seen.insert(*id))
-        .map(|(id, display)| {
-            let mut method = acp::AuthMethodAgent::new(id, display);
-            if store.contains(id) {
-                method = method.description("authenticated");
-            }
-            AuthMethod::Agent(method)
-        })
+        .map(|(id, display)| AuthMethod::Agent(acp::AuthMethodAgent::new(id, display)))
         .collect()
+}
+
+fn provider_account(model: &LlmModel, store: &dyn OAuthCredentialStorage) -> Option<acp::AuthAccount> {
+    let provider = model.provider_display_name();
+    if model.oauth_provider_id().is_some_and(|id| store.contains(id)) {
+        return Some(acp::AuthAccount::new(provider));
+    }
+    model
+        .required_env_var()
+        .filter(|var| std::env::var_os(var).is_some())
+        .map(|_| acp::AuthAccount::new(format!("{provider} API key")))
 }
 
 fn prompt_capabilities_for_models(models: &[LlmModel]) -> PromptCapabilities {

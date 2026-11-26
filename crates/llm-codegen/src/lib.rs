@@ -1,5 +1,6 @@
 #![doc = include_str!("../README.md")]
 
+use foxfire_acp::ReasoningEffort;
 use proc_macro2::{Ident, TokenStream};
 use quote::{ToTokens, format_ident, quote};
 use serde::Deserialize;
@@ -7,7 +8,6 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write;
 use std::path::Path;
-use utils::ReasoningEffort;
 
 /// Output of the code generator.
 pub struct GeneratedOutput {
@@ -345,7 +345,7 @@ const PROVIDERS: &[ProviderConfig] = &[
         use_model_transport: true,
         transport_overrides: &[
             TransportOverride {
-                matches: ModelMatch::Prefixes(&["us.openai.gpt-6-", "us.openai.gpt-6.1-sol"]),
+                matches: ModelMatch::Prefixes(&["us.openai.gpt-6-", "us.openai.gpt-6.1-sol", "us.openai.gpt-6.2-"]),
                 transport: TransportInfo::OpenAiResponses {
                     base_url_template: Cow::Borrowed("https://bedrock-runtime.${AWS_REGION}.amazonaws.com/openai/v1"),
                 },
@@ -374,10 +374,12 @@ impl ExplicitModel {
 }
 
 const CODEX_SUBSCRIPTION_MODELS: &[ExplicitModel] = &[
-    ExplicitModel::new("gpt-6.1-sol", 272_000),
+    ExplicitModel::new("gpt-6.2-sol", 500_000),
+    ExplicitModel::new("gpt-6.2-astra", 500_000),
+    ExplicitModel::new("gpt-6.1-sol", 500_000),
     ExplicitModel::new("gpt-6.1-terra", 500_000),
-    ExplicitModel::new("gpt-6-sol", 272_000),
-    ExplicitModel::new("gpt-6-astra", 272_000),
+    ExplicitModel::new("gpt-6-sol", 500_000),
+    ExplicitModel::new("gpt-6-astra", 500_000),
     ExplicitModel::new("gpt-6-luna", 272_000),
     ExplicitModel::new("gpt-5.6-sol", 272_000),
     ExplicitModel::new("gpt-5.6-terra", 272_000),

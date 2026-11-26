@@ -2,11 +2,16 @@ use serde::Serialize;
 
 #[derive(Debug, Serialize)]
 pub(crate) struct ResponsesRequest {
+    pub input: Vec<InputItem>,
+    pub stream: bool,
+    #[serde(flatten)]
+    pub settings: RequestSettings,
+}
+
+#[derive(Debug, PartialEq, Serialize)]
+pub(crate) struct RequestSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub include: Option<&'static [&'static str]>,
-    pub input: Vec<InputItem>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub instructions: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
     pub model: String,
@@ -17,7 +22,6 @@ pub(crate) struct ResponsesRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<Reasoning>,
     pub store: bool,
-    pub stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -28,7 +32,7 @@ pub(crate) struct ResponsesRequest {
     pub top_p: Option<f32>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, PartialEq, Serialize)]
 pub(crate) struct Reasoning {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<&'static str>,
@@ -36,19 +40,19 @@ pub(crate) struct Reasoning {
     pub effort: Option<&'static str>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, PartialEq, Serialize)]
 pub(crate) struct TextParam {
     pub format: TextFormat,
     pub verbosity: &'static str,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum TextFormat {
     Text,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum InputItem {
     Message {
@@ -77,31 +81,32 @@ pub(crate) enum InputItem {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum Role {
+    Developer,
     User,
     Assistant,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, PartialEq, Serialize)]
 #[serde(untagged)]
 pub(crate) enum MessageContent {
     Text(String),
     Parts(Vec<InputContent>),
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum InputContent {
     InputText { text: String },
     InputImage { detail: &'static str, image_url: String },
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum ReasoningContent {
     ReasoningText { text: String },
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum Tool {
     Function {

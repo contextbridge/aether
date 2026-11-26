@@ -1,4 +1,4 @@
-use acp_utils::notifications::{WorkspaceEntry, WorkspaceMoveTarget};
+use foxfire_acp::aether::{WorkspaceEntry, WorkspaceMoveTarget};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -10,9 +10,9 @@ mod registry;
 #[doc(hidden)]
 pub mod testing;
 
-pub(crate) use git::current_ref;
 use registry::{RegistryError, WorkspaceRegistry};
 use utils::git::GitError;
+pub(crate) use utils::git::current_ref;
 
 /// Manages the workspaces of a repository: listing the known clones and
 /// moving uncommitted changes between them.

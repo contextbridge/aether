@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.3](https://github.com/contextbridge/aether/compare/aether-sessions-v0.4.2...aether-sessions-v0.4.3) - 2026-11-23
+
+### Other
+
+- updated the following local packages: aether-agent-core
+
+## [0.4.2](https://github.com/contextbridge/aether/compare/aether-sessions-v0.4.1...aether-sessions-v0.4.2) - 2026-11-23
+
+### Other
+
+- updated the following local packages: aether-llm, aether-agent-core
+
+## [0.4.1](https://github.com/contextbridge/aether/compare/aether-sessions-v0.4.0...aether-sessions-v0.4.1) - 2026-11-23
+
+### Other
+
+- updated the following local packages: aether-llm, aether-agent-core
+
+## [0.4.0](https://github.com/contextbridge/aether/compare/aether-sessions-v0.3.19...aether-sessions-v0.4.0) - 2026-11-17
+
+### Added
+
+- fix common agent tool-call failures found in session logs ([#654](https://github.com/contextbridge/aether/pull/654))
+
+### Other
+
+- [**breaking**] rename Wisp to Foxfire and extract it to a separate repo, standardize ACP reporting ([#674](https://github.com/contextbridge/aether/pull/674))
+- *(deps)* [**breaking**] upgrade rmcp to 3.8 and agent-client-protocol to 5.0 ([#648](https://github.com/contextbridge/aether/pull/648))
+
 ## [0.3.19](https://github.com/contextbridge/aether/compare/aether-sessions-v0.3.18...aether-sessions-v0.3.19) - 2026-11-03
 
 ### Added

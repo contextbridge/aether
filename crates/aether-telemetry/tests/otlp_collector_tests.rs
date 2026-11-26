@@ -6,7 +6,7 @@ use aether_telemetry::{
     AETHER_SYSTEM_INSTRUCTIONS_SHA256, AgentTraceContext, ContentCaptureSettings, GEN_AI_SYSTEM_INSTRUCTIONS,
     TelemetryConfig, TelemetryRuntime,
 };
-use common::{SYSTEM_INSTRUCTIONS_JSON, SYSTEM_PROMPT, SYSTEM_PROMPT_SHA256, all_content};
+use common::{SYSTEM_INSTRUCTIONS_JSON, SYSTEM_PROMPT, SYSTEM_PROMPT_SHA256, TEST_SESSION_ID, all_content};
 
 mod common;
 use axum::Router;
@@ -126,7 +126,7 @@ async fn observer_factory_names_agent_spans() {
     })
     .expect("runtime initializes against collector");
     {
-        let mut observer = runtime.observer_factory().agent(Some("PatchWaveFix"), None);
+        let mut observer = runtime.observer_factory().agent(Some("PatchWaveFix"), None, None);
         observer.on_event(&AgentEvent::Turn(TurnEvent::Started { content: vec![] }));
         observer.on_event(&AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Completed }));
     }
@@ -136,6 +136,7 @@ async fn observer_factory_names_agent_spans() {
     let spans = trace_spans(&exports);
     let turn = spans.iter().find(|span| span.name == "invoke_agent PatchWaveFix").expect("named agent span exported");
 
+    assert_eq!(string_attribute(turn, "gen_ai.conversation.id"), None);
     assert_eq!(string_attribute(turn, "gen_ai.operation.name"), Some("invoke_agent"));
     assert_eq!(string_attribute(turn, "gen_ai.agent.name"), Some("PatchWaveFix"));
 }
@@ -150,13 +151,13 @@ async fn propagated_mcp_context_connects_parent_tool_server_and_child_agent_span
     .expect("runtime initializes against collector");
     {
         let factory = runtime.observer_factory();
-        let mut parent = factory.agent(Some("PatchWaveFix"), None);
+        let mut parent = factory.agent(Some("PatchWaveFix"), Some(TEST_SESSION_ID), None);
         parent.on_event(&AgentEvent::Turn(TurnEvent::Started { content: vec![] }));
         parent.on_event(&AgentEvent::tool_call("call_1", "subagents__spawn_subagent", "{}"));
         let outbound = parent.tool_trace_context("call_1").expect("outbound tool span provides propagation context");
 
         let server = factory.tool_call_request("spawn_subagent", Some(&outbound));
-        let mut child = factory.agent(Some("Explore"), server.trace_context().as_ref());
+        let mut child = factory.agent(Some("Explore"), Some(TEST_SESSION_ID), server.trace_context().as_ref());
         child.on_event(&AgentEvent::Turn(TurnEvent::Started { content: vec![] }));
         child.on_event(&AgentEvent::Turn(TurnEvent::Ended { outcome: TurnOutcome::Completed }));
         server.finish(None);
@@ -179,10 +180,13 @@ async fn propagated_mcp_context_connects_parent_tool_server_and_child_agent_span
     assert_eq!(server.trace_id, tool.trace_id);
     assert_eq!(server.parent_span_id, tool.span_id);
     assert_eq!(child.trace_id, tool.trace_id);
+    assert_eq!(string_attribute(child, "gen_ai.conversation.id"), Some(TEST_SESSION_ID));
+    assert_eq!(string_attribute(tool, "gen_ai.conversation.id"), Some(TEST_SESSION_ID));
     // Both ends of the call agree on the tool's wire name, so a backend can
     // group them even though the caller knows it by its namespaced name.
     assert_eq!(string_attribute(tool, "mcp.tool.name"), Some("spawn_subagent"));
     assert_eq!(string_attribute(server, "mcp.tool.name"), Some("spawn_subagent"));
+    assert_eq!(string_attribute(server, "gen_ai.conversation.id"), None, "inbound MCP requests belong to no session");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -230,6 +234,9 @@ async fn runtime_exports_genai_spans_and_metrics_to_an_otlp_collector() {
     runtime.shutdown().expect("runtime flushes both signals");
     let exports = collector.exports();
     let spans = trace_spans(&exports);
+    for span in &spans {
+        assert_eq!(string_attribute(span, "gen_ai.conversation.id"), Some(TEST_SESSION_ID), "{}", span.name);
+    }
     let span_names = spans.iter().map(|span| span.name.as_str()).collect::<Vec<_>>();
 
     let metric_names = exports
@@ -340,7 +347,7 @@ fn observe_a_turn(
     agent_name: Option<&str>,
     system_prompt: Option<&str>,
 ) {
-    let mut observer = runtime.observer_factory().agent(agent_name, parent);
+    let mut observer = runtime.observer_factory().agent(agent_name, Some(TEST_SESSION_ID), parent);
     if let Some(prompt) = system_prompt {
         observer.on_system_prompt(prompt);
     }

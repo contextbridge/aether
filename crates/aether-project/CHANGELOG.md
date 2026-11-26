@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.3](https://github.com/contextbridge/aether/compare/aether-project-v0.6.2...aether-project-v0.6.3) - 2026-11-23
+
+### Other
+
+- updated the following local packages: aether-agent-core
+
+## [0.6.2](https://github.com/contextbridge/aether/compare/aether-project-v0.6.1...aether-project-v0.6.2) - 2026-11-23
+
+### Other
+
+- updated the following local packages: aether-llm, aether-agent-core
+
+## [0.6.1](https://github.com/contextbridge/aether/compare/aether-project-v0.6.0...aether-project-v0.6.1) - 2026-11-23
+
+### Other
+
+- updated the following local packages: aether-llm, aether-agent-core
+
+## [0.6.0](https://github.com/contextbridge/aether/compare/aether-project-v0.5.64...aether-project-v0.6.0) - 2026-11-17
+
+### Other
+
+- [**breaking**] rename Wisp to Foxfire and extract it to a separate repo, standardize ACP reporting ([#674](https://github.com/contextbridge/aether/pull/674))
+- replace hand-rolled code with existing dependencies ([#652](https://github.com/contextbridge/aether/pull/652))
+
 ## [0.5.64](https://github.com/contextbridge/aether/compare/aether-project-v0.5.63...aether-project-v0.5.64) - 2026-11-03
 
 ### Other

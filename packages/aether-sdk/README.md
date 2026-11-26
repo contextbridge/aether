@@ -153,22 +153,29 @@ await using rootSession = await AetherSession.start({
 
 ## Tracking token usage and cost
 
-Each provider call emits a typed `usage` message with per-call usage and the
-cumulative session totals:
+Sessions report usage through standard ACP `usage_update` session updates:
+the context window (`used` of `size` tokens) and the session's cumulative
+estimated cost:
 
 ```ts
 for await (const message of session.prompt("Implement the feature")) {
-  if (message.type === "usage") {
-    console.log(message.usage.tokens);
-    console.log(message.usage.estimated_cost?.total_usd);
-    console.log(message.usage.totals.estimated_usd);
+  if (
+    message.type === "session_update" &&
+    message.update.sessionUpdate === "usage_update"
+  ) {
+    console.log(message.update.used, message.update.size);
+    console.log(message.update.cost?.amount);
   }
 }
 ```
 
-Costs are catalog-based USD estimates. `totals.estimated_usd` excludes calls
-whose model pricing is unknown; `totals.unpriced_calls` reports how many were
-excluded.
+`cost` is a catalog-based USD estimate, refreshed with each of the session's
+own model calls; cost from sub-agents and compaction appears with the next
+refresh. It is left out until a call is priced, and it excludes calls whose
+model pricing is unknown.
+
+For per-call tokens and cost breakdowns, use `runHeadless`, whose
+`session_usage` events carry the full accounting.
 
 ## Multi-turn usage
 

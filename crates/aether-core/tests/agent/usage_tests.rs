@@ -1,5 +1,7 @@
 use aether_core::context::CompactionConfig;
-use aether_core::events::{AgentEvent, LlmCallOutcome, SubAgentProgressPayload, ToolEvent, TurnEvent, TurnOutcome};
+use aether_core::events::{
+    AgentEvent, ContextEvent, LlmCallOutcome, SubAgentProgressPayload, ToolEvent, TurnEvent, TurnOutcome,
+};
 use aether_core::testing::{TestScenario, fast_retry, test_agent};
 use llm::alloyed::AlloyedModelProvider;
 use llm::testing::{FakeLlmProvider, llm_response, priced_model, session_usage_event};
@@ -54,6 +56,20 @@ async fn priced_model_costs_each_call_and_keeps_totals_priced() {
     assert_eq!(usage[1].sequence, 2);
     assert_eq!(usage[1].totals.tokens.input_tokens.get(), 3_000);
     assert!(usage[1].model.provider.is_some() && usage[1].model.model_id.is_some());
+}
+
+#[tokio::test]
+async fn context_usage_carries_the_session_cost_including_the_call_it_reports() {
+    let events = test_agent()
+        .model(priced_model())
+        .llm_responses(&[llm_response().usage(1_000, 500).build(), llm_response().usage(2_000, 100).build()])
+        .without_mcp()
+        .scenario(TestScenario::new().user_text("one").wait_for_turn_end().user_text("two").wait_for_turn_end())
+        .run()
+        .await
+        .unwrap();
+
+    assert_eq!(reported_costs(&events), session_costs(&events));
 }
 
 #[tokio::test]
@@ -149,6 +165,7 @@ async fn compaction_usage_is_recorded_once_before_the_compaction_call_ends() {
     assert_eq!(usage[1].totals.tokens.input_tokens.get(), 70);
     assert_eq!(usage[1].totals.tokens.output_tokens.get(), 15);
     assert_cumulative_cost_components(&usage);
+    assert_eq!(reported_costs(&events), session_costs(&events), "compaction's cost reaches context usage too");
 
     let compaction_usage_index = position(
         &events,
@@ -206,6 +223,7 @@ async fn sub_agent_usage_is_folded_into_the_parent_totals_before_the_tool_result
     assert_eq!(own.totals.tokens.input_tokens.get(), 9);
     assert_eq!(own.totals.tokens.output_tokens.get(), 5);
     assert_eq!(own.totals.unpriced_calls, 2);
+    assert_eq!(reported_costs(&events), session_costs(&events), "the child's cost reaches context usage too");
 
     let folded_index = position(&events, |event| matches!(event, AgentEvent::SessionUsage(_)));
     let result_index = position(
@@ -307,6 +325,20 @@ fn session_usage(events: &[AgentEvent]) -> Vec<&SessionUsageEvent> {
         .iter()
         .filter_map(|event| match event {
             AgentEvent::SessionUsage(usage) => Some(usage),
+            _ => None,
+        })
+        .collect()
+}
+
+fn session_costs(events: &[AgentEvent]) -> Vec<Usd> {
+    session_usage(events).iter().map(|usage| usage.totals.estimated_usd).collect()
+}
+
+fn reported_costs(events: &[AgentEvent]) -> Vec<Usd> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::Context(ContextEvent::UsageUpdated { estimated_usd, .. }) => Some(*estimated_usd),
             _ => None,
         })
         .collect()

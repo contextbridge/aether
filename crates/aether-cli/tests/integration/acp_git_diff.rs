@@ -1,10 +1,10 @@
-use acp_utils::notifications::{GitDiffClosePayload, GitDiffCommandPayload, WorkspaceStatusPayload};
 use aether_cli::acp::testing::AcpTestHarness;
 use aether_cli::workspace::testing::init_repo;
 use agent_client_protocol::v2::schema::AbsolutePath;
 use clankerdiff_core::{DiffScope, RepositoryAction};
 use clankerdiff_protocol::client::ClientCommand;
 use clankerdiff_protocol::shared::{DocumentUpdate, Event, FileEntry, LIVE_PROTOCOL_VERSION};
+use foxfire_acp::aether::{GitDiffClosePayload, GitDiffCommandPayload, WorkspaceStatusPayload};
 use std::fs;
 use utils::testing::git;
 

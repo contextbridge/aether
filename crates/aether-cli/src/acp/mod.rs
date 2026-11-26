@@ -184,7 +184,7 @@ impl AcpRunConfig {
 
 fn create_acp_state(args: AcpArgs, cwd: &Path, hooks: SessionHooks) -> Result<AcpState, AcpRunError> {
     let config = AcpRunConfig::from_args(args)?;
-    wisp::init_file_logging(&config.log_dir, "aether-acp.log", "warn");
+    foxfire_tui::init_file_logging(&config.log_dir, "aether-acp.log", "warn");
 
     let settings = config.settings_source.load_settings(cwd)?;
     let telemetry = match build_telemetry_runtime(settings.telemetry.as_ref(), config.trace_context) {

@@ -61,7 +61,7 @@ impl GitRepo {
     #[tracing::instrument(skip(self))]
     pub(crate) fn diff(&self, from_commit: &str, to_commit: &str, exclude: &[String]) -> Result<String, GitError> {
         let stdout = self.git(&diff_args(&["diff", from_commit, to_commit], exclude))?;
-        Ok(String::from_utf8_lossy(&stdout).into_owned())
+        Ok(String::from_utf8_lossy_owned(stdout))
     }
 
     #[tracing::instrument(skip(self))]
@@ -79,7 +79,7 @@ impl GitRepo {
         }
         self.git_with_env(&["add", "--all"], &env)?;
         let stdout = self.git_with_env(&diff_args(&["diff", "--cached", from_commit], exclude), &env)?;
-        Ok(String::from_utf8_lossy(&stdout).into_owned())
+        Ok(String::from_utf8_lossy_owned(stdout))
     }
 
     fn git<S: AsRef<OsStr>>(&self, args: &[S]) -> Result<Vec<u8>, GitError> {

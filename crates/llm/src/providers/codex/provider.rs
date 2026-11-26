@@ -2,29 +2,25 @@ use super::oauth::CodexTokenManager;
 use crate::catalog::Provider;
 use crate::provider::{LlmResponseStream, StreamingModelProvider, display_name, validate_reasoning};
 use crate::provider_connection::DEFAULT_STREAM_IDLE_TIMEOUT;
-use crate::providers::http::{SseData, http_client, post_sse, responses_code};
+use crate::providers::http::http_client;
+use crate::providers::openai::responses::client::{ResponsesCall, ResponsesClient};
 use crate::providers::openai::responses::mappers::{ResponsesRequestPolicy, build_request};
-use crate::providers::openai::responses::streaming::decode_responses;
 use crate::providers::openai::responses::types::ResponsesRequest;
-use crate::providers::response_stream::{OpenedStream, response_stream};
-use crate::{Context, LlmModel, Result};
+use crate::{Context, LlmModel, ProviderErrorKind, ResponsesTransport, Result};
 use aether_auth::OAuthCredentialStorage;
+use futures::TryStreamExt;
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use std::sync::Arc;
-use std::time::Duration;
-use tracing::debug;
 
 const CODEX_API_BASE: &str = "https://chatgpt.com/backend-api/codex";
 const CODEX_CLIENT_VERSION: &str = "0.167.1";
 
 #[derive(Clone)]
 pub struct CodexProvider {
-    base_url: String,
-    client: reqwest::Client,
+    responses: ResponsesClient,
     model: String,
     request_model: Option<String>,
     token_manager: Arc<CodexTokenManager>,
-    idle_timeout: Duration,
 }
 
 impl CodexProvider {
@@ -34,25 +30,28 @@ impl CodexProvider {
 
     pub(crate) fn from_token_manager(token_manager: CodexTokenManager) -> Self {
         Self {
-            base_url: CODEX_API_BASE.to_string(),
-            client: http_client(),
+            responses: ResponsesClient::new(
+                http_client(),
+                CODEX_API_BASE,
+                ResponsesTransport::WebSocket,
+                DEFAULT_STREAM_IDLE_TIMEOUT,
+            ),
             model: "gpt-5.5".to_string(),
             request_model: None,
             token_manager: Arc::new(token_manager),
-            idle_timeout: DEFAULT_STREAM_IDLE_TIMEOUT,
         }
     }
 
     pub fn with_connection(mut self, connection: crate::ProviderConnectionConfig) -> Self {
-        if let Some(base_url) = connection.base_url {
-            self.base_url = base_url.trim_end_matches('/').to_string();
-        }
+        let transport = connection.responses_transport(ResponsesTransport::WebSocket);
+        let base_url = connection.base_url.as_deref().map_or(CODEX_API_BASE, |url| url.trim_end_matches('/'));
+        self.responses = ResponsesClient::new(http_client(), base_url, transport, connection.idle_timeout);
         self.request_model = connection.request_model;
-        self.idle_timeout = connection.idle_timeout;
         self
     }
 
     pub fn with_model(mut self, model: &str) -> Self {
+        self.responses = self.responses.for_another_owner();
         self.model = model.to_string();
         self
     }
@@ -86,24 +85,6 @@ impl CodexProvider {
 
         Ok(headers)
     }
-
-    /// Send the request and return a stream of SSE lines parsed into typed events.
-    async fn send_request(&self, request: ResponsesRequest, headers: HeaderMap) -> Result<OpenedStream<SseData>> {
-        let url = format!("{}/responses", self.base_url);
-
-        debug!("Sending request to Codex API: {url}");
-        debug!(?request, "Codex request body");
-
-        match post_sse(&self.client, &url, headers, &request, responses_code).await {
-            Ok(opened) => Ok(opened),
-            Err(error) => {
-                if error.provider().map(|provider| provider.kind) == Some(crate::ProviderErrorKind::Authentication) {
-                    self.token_manager.clear_cache().await;
-                }
-                Err(error)
-            }
-        }
-    }
 }
 
 impl StreamingModelProvider for CodexProvider {
@@ -118,16 +99,23 @@ impl StreamingModelProvider for CodexProvider {
     fn stream_response(&self, context: &Context) -> LlmResponseStream {
         let provider = self.clone();
         let context = context.clone();
+        let token_manager = Arc::clone(&self.token_manager);
 
-        response_stream(
+        let responses = self.responses.stream(async move {
+            let request = provider.build_wire_request(&context)?;
+            let headers = provider.build_headers(context.session_affinity_key()).await?;
+            Ok(ResponsesCall { request, headers })
+        });
+
+        Box::pin(responses.or_else(move |error| {
+            let token_manager = Arc::clone(&token_manager);
             async move {
-                let request = provider.build_wire_request(&context)?;
-                let headers = provider.build_headers(context.session_affinity_key()).await?;
-                provider.send_request(request, headers).await
-            },
-            decode_responses(),
-            self.idle_timeout,
-        )
+                if error.provider().is_some_and(|provider| provider.kind == ProviderErrorKind::Authentication) {
+                    token_manager.clear_cache().await;
+                }
+                Err(error)
+            }
+        }))
     }
 }
 
@@ -137,7 +125,7 @@ mod tests {
     use crate::ChatMessage;
     use crate::LlmError;
     use crate::ToolDefinition;
-    use crate::providers::test_capture_server::{CaptureServer, hello_context};
+    use crate::providers::test_capture_server::{CaptureServer, SocketBehavior, hello_context};
     use aether_auth::{MemoryCredentialStore, OAuthCredential};
     use base64::Engine;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -194,11 +182,14 @@ mod tests {
         assert_eq!(captured.body["reasoning"]["effort"], "max");
         assert!(captured.body["reasoning"].get("context").is_none());
         assert_eq!(captured.body["model"], "gpt-6-luna");
-        assert_eq!(captured.body["instructions"], "You are helpful");
+        assert!(captured.body.get("instructions").is_none());
         assert_eq!(captured.body["tools"].as_array().unwrap().len(), 1);
         assert!(captured.body["tools"][0].get("strict").is_none());
         assert_eq!(captured.body["parallel_tool_calls"], true);
-        assert_eq!(captured.body["input"][0]["role"], "user");
+        assert_eq!(captured.body["input"].as_array().unwrap().len(), 2);
+        assert_eq!(captured.body["input"][0]["role"], "developer");
+        assert_eq!(captured.body["input"][0]["content"], "You are helpful");
+        assert_eq!(captured.body["input"][1]["role"], "user");
         assert_eq!(captured.body["prompt_cache_key"], "session-abc");
         assert_eq!(captured.body["store"], false);
         assert_eq!(captured.body["stream"], true);
@@ -269,6 +260,36 @@ mod tests {
         assert!(responses.iter().all(Result::is_ok), "{responses:?}");
         assert_eq!(captured.body["model"], "codex-deployment");
         assert_eq!(provider.model().unwrap().to_string(), "codex:gpt-5.5");
+    }
+
+    #[tokio::test]
+    async fn websocket_turns_authenticate_the_handshake_and_continue_the_previous_response() {
+        let mut server = CaptureServer::start_responses_with_sockets(SocketBehavior::Remembers).await;
+        let store = authenticated_store();
+        let provider = CodexProvider::new(store.clone()).with_connection(crate::ProviderConnectionConfig {
+            base_url: Some(server.base_url.clone()),
+            transport: Some(crate::ResponsesTransport::WebSocket),
+            ..Default::default()
+        });
+        let mut context = hello_context();
+        context.set_session_affinity_key(Some("session-abc".to_string()));
+
+        for (account, previous) in [("account-1", None), ("account-1", Some("resp_0_0")), ("account-2", None)] {
+            let mut credential = store.load_credential("codex").await.unwrap().unwrap();
+            credential.access_token = test_jwt(account);
+            store.save_credential("codex", credential).await.unwrap();
+            provider.forget_cached_token().await;
+            let events = provider.stream_response(&context).collect::<Vec<_>>().await;
+            assert!(events.iter().all(Result::is_ok), "{events:?}");
+            let [request] = server.drain().try_into().unwrap();
+            assert!(request.socket.is_some());
+            assert_eq!(request.headers["authorization"], format!("Bearer {}", test_jwt(account)));
+            assert_eq!(request.headers["chatgpt-account-id"], account);
+            assert_eq!(request.headers["session-id"], "session-abc");
+            assert_eq!(request.body["previous_response_id"].as_str(), previous);
+            context.add_message(crate::testing::assistant_message().text("hi").build());
+            context.add_message(ChatMessage::user("Again?"));
+        }
     }
 
     #[tokio::test]

@@ -1,5 +1,7 @@
 use crate::server_config;
 use clap::Parser;
+use foxfire_acp::display_meta::ToolDisplayMeta;
+use mcp_utils::tool_kind::{ToolKind, tool_kind_meta};
 use rmcp::{
     ServerHandler,
     handler::server::{router::tool::ToolRouter, tool::schema_for_output, wrapper::Parameters},
@@ -9,7 +11,6 @@ use rmcp::{
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
-use utils::display_meta::ToolDisplayMeta;
 
 use crate::{
     Displayed,
@@ -102,6 +103,7 @@ impl ServerHandler for TasksMcp {
 impl TasksMcp {
     #[doc = include_str!("./tools/create/description.md")]
     #[tool(
+        meta = tool_kind_meta(ToolKind::Think),
         annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false, open_world_hint = false),
         output_schema = schema_for_output::<TaskCreateOutput>()
     )]
@@ -119,6 +121,7 @@ impl TasksMcp {
 
     #[doc = include_str!("./tools/update/description.md")]
     #[tool(
+        meta = tool_kind_meta(ToolKind::Think),
         annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false),
         output_schema = schema_for_output::<TaskUpdateOutput>()
     )]
@@ -136,6 +139,7 @@ impl TasksMcp {
 
     #[doc = include_str!("./tools/list/description.md")]
     #[tool(
+        meta = tool_kind_meta(ToolKind::Read),
         annotations(read_only_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<TaskListOutput>()
     )]
@@ -154,6 +158,7 @@ impl TasksMcp {
 
     #[doc = include_str!("./tools/get/description.md")]
     #[tool(
+        meta = tool_kind_meta(ToolKind::Read),
         annotations(read_only_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<TaskGetOutput>()
     )]

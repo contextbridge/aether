@@ -28,12 +28,11 @@ async fn encrypted_credentials_default_to_aether_home() -> TestResult {
 
     let mut agent = homes.spawn_acp(r#"{"credentialsStore":{"type":"encryptedFile"},"agents":[]}"#)?;
     let response: acp::InitializeResponse = serde_json::from_value(agent.initialize()?)?;
+    let status: acp::AuthStatusResponse = serde_json::from_value(agent.request("auth/status", &json!({}))?)?;
 
-    assert!(response.auth_methods.iter().any(|method| matches!(
-        method,
-        acp::AuthMethod::Agent(method)
-            if method.method_id.0.as_ref() == "codex" && method.description.as_deref() == Some("authenticated")
-    )));
+    let codex = response.auth_methods.iter().find(|method| method.method_id().0.as_ref() == "codex");
+    let codex = codex.expect("aether offers a codex login").name();
+    assert!(status.accounts.iter().any(|account| account.label == codex));
     Ok(())
 }
 

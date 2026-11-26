@@ -52,8 +52,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 eprintln!("\nTool '{}' failed: {}", error.name, error.error);
             }
             Some(AgentEvent::Tool(ToolEvent::Progress { request, progress, total, message })) => {
-                let msg = message.as_ref().map(|m| format!("{m} ")).unwrap_or_default();
-                let total_str = total.map(|t| format!("/{t}")).unwrap_or_default();
+                let msg = message.as_ref().map_or_default(|m| format!("{m} "));
+                let total_str = total.map_or_default(|t| format!("/{t}"));
                 println!("\nTool '{}' progress: {}{}{}", request.name, msg, progress, total_str);
             }
             Some(AgentEvent::Tool(ToolEvent::TaskStatus { request, status, status_message, .. })) => {
@@ -86,7 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Some(AgentEvent::Context(ContextEvent::CompactionResult { messages_removed, .. })) => {
                 println!("Context compacted: {messages_removed} messages removed");
             }
-            Some(AgentEvent::Context(ContextEvent::UsageUpdated { usage })) => {
+            Some(AgentEvent::Context(ContextEvent::UsageUpdated { usage, .. })) => {
                 match (usage.usage_ratio, usage.context_limit) {
                     (Some(usage_ratio), Some(context_limit)) => {
                         println!(

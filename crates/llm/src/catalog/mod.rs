@@ -149,7 +149,7 @@ impl LlmModel {
     }
 
     pub(crate) fn reasoning_control(&self) -> ReasoningControl {
-        self.entry().map(|entry| entry.reasoning_control).unwrap_or_default()
+        self.entry().map_or_default(|entry| entry.reasoning_control)
     }
 
     pub fn pricing(&self) -> Option<ModelPricing> {
@@ -418,10 +418,18 @@ mod tests {
             ReasoningEffort::Xhigh,
             ReasoningEffort::Max,
         ];
-        for id in ["gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-6-luna"] {
+        for (id, context_window) in [
+            ("gpt-6.2-sol", 500_000),
+            ("gpt-6.2-astra", 500_000),
+            ("gpt-6.1-sol", 500_000),
+            ("gpt-6.1-terra", 500_000),
+            ("gpt-6-sol", 500_000),
+            ("gpt-6-astra", 500_000),
+            ("gpt-6-luna", 272_000),
+        ] {
             let model: LlmModel = format!("codex:{id}").parse().unwrap();
             assert_eq!(model.model_id(), id);
-            assert_eq!(model.context_window(), Some(272_000));
+            assert_eq!(model.context_window(), Some(context_window), "{id}");
             assert_eq!(model.reasoning_levels(), expected_levels);
             assert_eq!(model.oauth_provider_id(), Some("codex"));
         }
@@ -558,6 +566,10 @@ mod tests {
     #[test]
     fn bedrock_responses_models_carry_their_endpoint_and_wire_shape() {
         let cases = [
+            ("openai.gpt-6.2-sol", "https://bedrock-mantle.${AWS_REGION}.api.aws/openai/v1"),
+            ("openai.gpt-6.2-astra", "https://bedrock-mantle.${AWS_REGION}.api.aws/openai/v1"),
+            ("us.openai.gpt-6.2-sol", "https://bedrock-runtime.${AWS_REGION}.amazonaws.com/openai/v1"),
+            ("us.openai.gpt-6.2-astra", "https://bedrock-runtime.${AWS_REGION}.amazonaws.com/openai/v1"),
             ("openai.gpt-6.1-sol", "https://bedrock-mantle.${AWS_REGION}.api.aws/openai/v1"),
             ("us.openai.gpt-6.1-sol", "https://bedrock-runtime.${AWS_REGION}.amazonaws.com/openai/v1"),
             ("openai.gpt-5.6-luna", "https://bedrock-mantle.${AWS_REGION}.api.aws/openai/v1"),

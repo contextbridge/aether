@@ -67,7 +67,7 @@ mod tests {
     #[tokio::test]
     async fn replay_preserves_message_identity_and_media_without_chunks_or_controls() {
         tokio::task::LocalSet::new().run_until(async {
-            let (cx, mut peer) = acp_utils::testing::test_connection().await;
+            let (cx, mut peer) = foxfire_acp::testing::test_connection().await;
             let session_id = SessionId::new("test");
             let io = SessionIo::new(Some(cx), session_id.clone());
             let events = vec![

@@ -16,7 +16,7 @@ use crate::mcp::tool_bridge::call_tool;
 use futures::{FutureExt, Stream};
 use llm::{
     AssistantReply, ChatMessage, Context, LlmCallPurpose, LlmError, LlmModel, LlmResponse, MessageId, ModelIdentity,
-    StopReason, StreamingModelProvider, TokenUsage, ToolCallRequest,
+    SessionUsageEvent, StopReason, StreamingModelProvider, TokenUsage, ToolCallRequest,
 };
 use mcp_utils::client::{ToolCallEvent, ToolCallOptions};
 use std::collections::VecDeque;
@@ -522,7 +522,8 @@ impl Agent {
             EncryptedReasoning { .. } => {}
 
             ToolRequestStart { id, name } => {
-                self.emit(AgentEvent::Tool(ToolEvent::InputStarted { id, name })).await;
+                let kind = self.mcp.tool_kind(&name);
+                self.emit(AgentEvent::Tool(ToolEvent::InputStarted { id, name, kind })).await;
             }
 
             ToolRequestArg { id, chunk } => {
@@ -559,7 +560,8 @@ impl Agent {
 
         let tool_id = tool_call.id.clone();
         tracing::debug!("Tool execution started: {} ({})", tool_call.name, tool_id);
-        self.emit(AgentEvent::Tool(ToolEvent::Call { request: tool_call.clone() })).await;
+        let kind = self.mcp.tool_kind(&tool_call.name);
+        self.emit(AgentEvent::Tool(ToolEvent::Call { request: tool_call.clone(), kind })).await;
 
         let trace_context = self.observers.tool_trace_context(&tool_id);
         let options = ToolCallOptions {
@@ -585,18 +587,25 @@ impl Agent {
         let remaining = self.token_tracker.tokens_remaining();
         tracing::debug!(?sample, ?ratio_pct, ?remaining, "Token usage");
 
-        self.emit(self.context_usage_message()).await;
-        self.emit_session_usage(LlmCallPurpose::Chat, sample).await;
+        self.record_session_usage(LlmCallPurpose::Chat, sample).await;
     }
 
-    async fn emit_session_usage(&mut self, purpose: LlmCallPurpose, tokens: TokenUsage) {
+    async fn record_session_usage(&mut self, purpose: LlmCallPurpose, tokens: TokenUsage) {
         let model = ModelIdentity::of(self.active_model.as_ref());
-        let event = self.session_usage.record(purpose, model, tokens);
-        self.emit(AgentEvent::SessionUsage(event)).await;
+        let usage = self.session_usage.record(purpose, model, tokens);
+        self.publish_session_usage(usage).await;
+    }
+
+    async fn publish_session_usage(&mut self, usage: SessionUsageEvent) {
+        self.emit(self.context_usage_message()).await;
+        self.emit(AgentEvent::SessionUsage(usage)).await;
     }
 
     fn context_usage_message(&self) -> AgentEvent {
-        AgentEvent::Context(ContextEvent::UsageUpdated { usage: self.token_tracker.snapshot().clone() })
+        AgentEvent::Context(ContextEvent::UsageUpdated {
+            usage: self.token_tracker.snapshot().clone(),
+            estimated_usd: self.session_usage.totals().estimated_usd,
+        })
     }
 
     fn compaction_needed(&self) -> bool {
@@ -629,7 +638,7 @@ impl Agent {
         if let Ok(result) = &result
             && let Some(usage) = result.usage
         {
-            self.emit_session_usage(LlmCallPurpose::Compaction, usage).await;
+            self.record_session_usage(LlmCallPurpose::Compaction, usage).await;
         }
         let outcome = match &result {
             Ok(result) => LlmCallOutcome::Completed { stop_reason: None, usage: result.usage },
@@ -672,7 +681,7 @@ impl Agent {
                 if let AgentEvent::SessionUsage(child) = &payload.event =>
             {
                 let folded = self.session_usage.record_child(&payload.session_id, child.clone());
-                self.emit(AgentEvent::SessionUsage(folded)).await;
+                self.publish_session_usage(folded).await;
             }
             ToolExecutionUpdate::Event(event) => self.emit(AgentEvent::Tool(event)).await,
             ToolExecutionUpdate::Completed(event) => {

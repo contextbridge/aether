@@ -2,13 +2,13 @@ use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 use std::str::FromStr;
 
-use llm::{ProviderAuthMode, ProviderConnectionOverride, ProviderConnectionOverrides};
+use llm::{ProviderAuthMode, ProviderConnectionOverride, ProviderConnectionOverrides, ResponsesTransport};
 
 #[derive(Clone, Debug, Default, clap::Args)]
 pub struct ProviderConnectionArgs {
     #[arg(
         long = "provider",
-        value_name = "PROVIDER.url=URL|PROVIDER.auth=default|none|PROVIDER.request-model=MODEL|PROVIDER.idle-timeout-secs=SECS|bedrock.inference-profile-arn=ARN"
+        value_name = "PROVIDER.url=URL|PROVIDER.auth=default|none|PROVIDER.request-model=MODEL|PROVIDER.idle-timeout-secs=SECS|PROVIDER.transport=http|websocket|bedrock.inference-profile-arn=ARN"
     )]
     pub providers: Vec<ProviderArg>,
 }
@@ -36,7 +36,7 @@ impl FromStr for ProviderArg {
         let (key, setting) = split_key_value(value)?;
         let (provider, field) = key
             .split_once('.')
-            .ok_or_else(|| "provider override must be PROVIDER.url=URL, PROVIDER.auth=default|none, PROVIDER.request-model=MODEL, PROVIDER.idle-timeout-secs=SECS, or bedrock.inference-profile-arn=ARN".to_string())?;
+            .ok_or_else(|| "provider override must be PROVIDER.url=URL, PROVIDER.auth=default|none, PROVIDER.request-model=MODEL, PROVIDER.idle-timeout-secs=SECS, PROVIDER.transport=http|websocket, or bedrock.inference-profile-arn=ARN".to_string())?;
 
         validate_provider(provider)?;
         if setting.trim().is_empty() {
@@ -51,6 +51,7 @@ impl FromStr for ProviderArg {
             "auth" => ProviderConnectionOverride::auth(parse_auth_mode(setting)?),
             "request-model" => ProviderConnectionOverride::request_model(setting),
             "idle-timeout-secs" => ProviderConnectionOverride::idle_timeout_secs(parse_idle_timeout_secs(setting)?),
+            "transport" => ProviderConnectionOverride::transport(parse_transport(setting)?),
             "inference-profile-arn" => {
                 if provider != "bedrock" {
                     return Err("inference-profile-arn is only supported for the bedrock provider".to_string());
@@ -59,7 +60,7 @@ impl FromStr for ProviderArg {
             }
             _ => {
                 return Err(
-                    "provider override field must be url, auth, request-model, idle-timeout-secs, or inference-profile-arn"
+                    "provider override field must be url, auth, request-model, idle-timeout-secs, transport, or inference-profile-arn"
                         .to_string()
                 );
             }
@@ -90,6 +91,14 @@ fn validate_url(url: &str) -> Result<(), String> {
 
 fn parse_idle_timeout_secs(value: &str) -> Result<NonZeroU64, String> {
     value.parse().map_err(|_| "provider idle timeout must be a positive number of seconds".to_string())
+}
+
+fn parse_transport(value: &str) -> Result<ResponsesTransport, String> {
+    match value {
+        "http" => Ok(ResponsesTransport::Http),
+        "websocket" => Ok(ResponsesTransport::WebSocket),
+        _ => Err("provider transport must be http or websocket".to_string()),
+    }
 }
 
 fn parse_auth_mode(value: &str) -> Result<ProviderAuthMode, String> {
@@ -133,6 +142,17 @@ mod tests {
     fn parses_provider_idle_timeout() {
         let arg: ProviderArg = "ollama.idle-timeout-secs=900".parse().unwrap();
         assert_eq!(arg.connection.idle_timeout_secs, NonZeroU64::new(900));
+    }
+
+    #[test]
+    fn parses_provider_transport() {
+        let arg: ProviderArg = "openai.transport=http".parse().unwrap();
+        assert_eq!(arg.connection.transport, Some(ResponsesTransport::Http));
+
+        let arg: ProviderArg = "openai.transport=websocket".parse().unwrap();
+        assert_eq!(arg.connection.transport, Some(ResponsesTransport::WebSocket));
+
+        assert!("openai.transport=carrier-pigeon".parse::<ProviderArg>().is_err());
     }
 
     #[test]

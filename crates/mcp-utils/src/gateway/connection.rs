@@ -2,12 +2,12 @@ use super::{ConnectedServer, GatewayError, ServerSpec};
 use crate::client::{ClientError, ClientOptions, McpClient};
 use aether_auth::OAuthError;
 use async_stream::stream;
+use foxfire_acp::mcp_status::{McpServerAuthCapability, McpServerStatus, McpServerStatusEntry};
 use futures::{Stream, StreamExt};
 use std::pin::pin;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
-use utils::mcp_status::{McpServerAuthCapability, McpServerStatus, McpServerStatusEntry};
 
 pub(super) struct Connection {
     name: String,

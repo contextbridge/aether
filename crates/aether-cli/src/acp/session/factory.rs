@@ -146,11 +146,12 @@ impl SessionFactory {
         Ok(self.prepare_session(session_id, cwd, mcp_servers, mode_catalog, resolved, events, replay, Some(cx)))
     }
 
-    fn session_deps(&self, catalog: &AgentCatalog, session_affinity_key: &str) -> AgentDeps {
+    fn session_deps(&self, catalog: &AgentCatalog, session_id: &str) -> AgentDeps {
         self.agent_deps
             .clone()
             .with_agent_registry(catalog.registry().clone())
-            .with_session_affinity_key(session_affinity_key)
+            .with_session_affinity_key(session_id)
+            .with_conversation_id(session_id)
     }
 
     fn production_runtime_factory(

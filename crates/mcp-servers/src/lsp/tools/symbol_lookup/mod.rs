@@ -10,7 +10,7 @@ use std::path::Path;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use utils::display_meta::{ToolDisplayMeta, basename};
+use foxfire_acp::display_meta::{ToolDisplayMeta, basename};
 
 use crate::Displayed;
 use crate::lsp::common::{DEFAULT_RESULT_LIMIT, truncate_results};

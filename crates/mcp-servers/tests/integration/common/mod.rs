@@ -78,7 +78,7 @@ impl McpClientExt for McpClient {
 
     async fn call_displayed(&self, tool: &str, args: impl Serialize) -> TestResult<(Value, Value)> {
         let result = self.call_raw(tool, args).await?;
-        let meta = result.meta.map(|meta| Value::Object(meta.0)).unwrap_or_default();
+        let meta = result.meta.map_or_default(|meta| Value::Object(meta.0));
         let output = result.structured_content.ok_or_else(|| test_error(format!("{tool} returned no output")))?;
         Ok((output, meta))
     }

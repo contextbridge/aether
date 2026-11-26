@@ -214,7 +214,12 @@ fn generate_assigns_codex_model_specific_reasoning_levels() {
 fn generate_applies_codex_subscription_context_window_override() {
     let output = Catalog::new().generate().unwrap();
     for &id in CODEX_MODELS {
-        let codex_window = if id == "gpt-6.1-terra" { "context_window: 500_000" } else { "context_window: 272_000" };
+        let codex_window = match id {
+            "gpt-6.2-sol" | "gpt-6.2-astra" | "gpt-6.1-sol" | "gpt-6.1-terra" | "gpt-6-sol" | "gpt-6-astra" => {
+                "context_window: 500_000"
+            }
+            _ => "context_window: 272_000",
+        };
         assert!(catalog_entry(&output, "CodexModel", id).contains(codex_window), "{id}");
         assert!(catalog_entry(&output, "OpenaiModel", id).contains("context_window: 1_050_000"), "{id}");
     }
@@ -241,7 +246,7 @@ fn generate_uses_codex_subscription_model_ids() {
     let codex_doc = &output.provider_docs["codex"];
     assert!(!codex_doc.contains("`gpt-5.6`"));
     assert!(!codex_doc.contains("`gpt-5.1-codex`"));
-    assert!(codex_doc.contains("| `gpt-6.1-sol` | `GPT-6.1 Sol` | `272k` |"));
+    assert!(codex_doc.contains("| `gpt-6.1-sol` | `GPT-6.1 Sol` | `500k` |"));
     assert!(codex_doc.contains("| `gpt-6.1-terra` | `GPT-6.1 Terra` | `500k` |"));
     assert!(codex_doc.contains("| `gpt-5.6-sol` | `GPT-5.6 Sol` | `272k` |"));
     assert!(codex_doc.contains("| `gpt-5.6-terra` | `GPT-5.6 Terra` | `272k` |"));
@@ -281,7 +286,7 @@ fn generate_emits_provider_docs() {
 fn generate_routes_only_existing_us_gpt_6_profiles_to_runtime() {
     let mut data = Catalog::new();
     let mut models = Vec::new();
-    for version in ["6-luna", "6-sol", "6-astra", "6.1-sol"] {
+    for version in ["6-luna", "6-sol", "6-astra", "6.1-sol", "6.2-sol", "6.2-astra"] {
         for prefix in ["us", "global"] {
             let id = format!("{prefix}.openai.gpt-{version}");
             models.push(Model::new(id).name(format!("GPT-{version} ({prefix})")));
@@ -294,7 +299,7 @@ fn generate_routes_only_existing_us_gpt_6_profiles_to_runtime() {
     data.models("amazon-bedrock", models);
     let docs = data.generate().unwrap().provider_docs.remove("amazon-bedrock").unwrap();
 
-    for version in ["6-luna", "6-sol", "6-astra", "6.1-sol"] {
+    for version in ["6-luna", "6-sol", "6-astra", "6.1-sol", "6.2-sol", "6.2-astra"] {
         let id = format!("openai.gpt-{version}");
         assert!(docs.contains(&format!(
             "| `us.{id}` | `https://bedrock-runtime.${{AWS_REGION}}.amazonaws.com/openai/v1` | `responses` |"
@@ -487,6 +492,8 @@ impl Catalog {
 }
 
 const CODEX_MODELS: &[&str] = &[
+    "gpt-6.2-sol",
+    "gpt-6.2-astra",
     "gpt-6.1-sol",
     "gpt-6.1-terra",
     "gpt-6-sol",

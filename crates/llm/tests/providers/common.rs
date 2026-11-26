@@ -89,5 +89,5 @@ fn fixture_path(provider: &str, scenario: &str) -> PathBuf {
 
 fn relative_to_manifest(path: &Path) -> PathBuf {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.strip_prefix(&manifest).map_or_else(|_| path.to_path_buf(), PathBuf::from)
+    path.trim_prefix(&manifest).to_path_buf()
 }

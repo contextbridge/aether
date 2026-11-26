@@ -1,8 +1,8 @@
-use acp_utils::config_meta::{ConfigOptionMeta, SelectOptionMeta};
-use acp_utils::config_option_id::ConfigOptionId;
 use aether_auth::OAuthCredentialStorage;
 use aether_core::agent_spec::AgentSpec;
 use agent_client_protocol::v2::schema::{self as acp, SessionConfigOption, SessionConfigOptionCategory};
+use foxfire_acp::aether::{ConfigOptionMeta, SelectOptionMeta};
+use foxfire_acp::config_option_id::ConfigOptionId;
 use llm::ReasoningEffort;
 use llm::catalog::{LlmModel, ModelSpec};
 use std::collections::BTreeMap;
@@ -64,12 +64,10 @@ pub(crate) fn build_model_config_option(
             let mut option = acp::SessionConfigSelectOption::new(model.to_string(), name);
             let meta = SelectOptionMeta {
                 reasoning_levels: model.effective_reasoning_levels(),
-                supports_image: model.supports_image(),
-                supports_audio: model.supports_audio(),
+                supports_image: Some(model.supports_image()),
+                supports_audio: Some(model.supports_audio()),
             };
-            if meta != SelectOptionMeta::default() {
-                option = option.meta(meta.into_meta());
-            }
+            option = option.meta(meta.into_meta());
             if needs_login || !available.contains(model) {
                 option = option.description(unavailable_reason(model, credential_store));
             }
@@ -193,7 +191,7 @@ impl Modes {
 
         options.push(build_model_config_option(available, current_model, all_models, credential_store));
 
-        let levels = current_model.parse::<ModelSpec>().map(|spec| spec.reasoning_levels()).unwrap_or_default();
+        let levels = current_model.parse::<ModelSpec>().map_or_default(|spec| spec.reasoning_levels());
 
         if let Some(opt) = build_reasoning_effort_config_option(reasoning_effort, &levels) {
             options.push(opt);
@@ -301,6 +299,19 @@ mod tests {
     fn config_options_include_mode_option_with_mode_category() {
         let options = config_opts("anthropic:claude-sonnet-4-5", Some(ReasoningEffort::High));
         assert_eq!(find_option(&options, "mode").category, Some(SessionConfigOptionCategory::Mode));
+    }
+
+    #[test]
+    fn clients_find_the_model_and_reasoning_options_by_category_and_read_media_support_from_every_model() {
+        let options = config_opts("anthropic:claude-opus-4-6", Some(ReasoningEffort::High));
+        assert_eq!(find_option(&options, "model").category, Some(SessionConfigOptionCategory::Model));
+        assert_eq!(find_option(&options, "reasoning_effort").category, Some(SessionConfigOptionCategory::ThoughtLevel));
+
+        let models = model_option();
+        for model in select_options(&models).iter().filter(|model| !model.value.0.starts_with("__unavailable:")) {
+            let meta = SelectOptionMeta::from_meta(model.meta.as_ref());
+            assert!(meta.supports_image.is_some() && meta.supports_audio.is_some(), "{} says nothing", model.value.0);
+        }
     }
 
     #[test]

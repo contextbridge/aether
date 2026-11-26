@@ -1,5 +1,6 @@
 use crate::common::{McpClientExt, TestResult, call_tool_error, cancels_prompts, connect, scripted, test_error};
 use axum::{Router, extract::Query, http::header::CONTENT_TYPE, response::Html, routing::get};
+use foxfire_acp::artifact_review::ArtifactReviewElicitationMeta;
 use mcp_servers::review::ReviewMcp;
 use mcp_utils::client::{ClientOptions, McpClient};
 use mcp_utils::testing::ElicitationScript;
@@ -13,7 +14,6 @@ use serde_json::{Value, json};
 use std::{collections::HashMap, fs, path::Path, path::PathBuf};
 use tempfile::TempDir;
 use tokio::task::JoinHandle;
-use utils::artifact_review::ArtifactReviewElicitationMeta;
 
 #[tokio::test]
 async fn reviews_relative_markdown_file_and_returns_feedback_verbatim() -> TestResult {

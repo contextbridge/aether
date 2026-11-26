@@ -1,6 +1,7 @@
 use crate::server_config;
 use aether_project::PromptCatalog;
 use clap::Parser;
+use mcp_utils::tool_kind::{ToolKind, tool_kind_meta};
 use rmcp::{
     ErrorData, RoleServer, ServerHandler,
     handler::server::{
@@ -38,13 +39,13 @@ use crate::lsp::tools::symbol_lookup::{LspSymbolInput, LspSymbolOutput, execute_
 use crate::request_context::{CLIENT_CANNOT_ELICIT, parse_response, require_tasks, supports_elicitation};
 use crate::workspace_paths::{resolve_file, resolve_path, resolve_root};
 
+use foxfire_acp::display_meta::{ToolDisplayMeta, ToolLocation, ToolResultMeta, basename, truncate};
 use tools::bash::{BashEnvironment, BashInput, BashOutput, execute_command, validate_args};
 use tools::edit_file::{EditFileArgs, EditFileResponse, edit_file_contents};
 use tools::read_file::{ReadFileArgs, ReadFileResult, read_file_contents};
 use tools::web_fetch::{WebFetchInput, WebFetchOutput, WebFetcher};
 use tools::web_search::{WebSearchInput, WebSearchOutput, WebSearcher};
 use tools::write_file::{WriteFileArgs, WriteFileResponse, write_file_contents};
-use utils::display_meta::{ToolDisplayMeta, ToolLocation, ToolResultMeta, basename, truncate};
 use utils::temp_dir::TempDir;
 use utils::tool_result_truncator::ToolResultTruncator;
 
@@ -231,6 +232,7 @@ impl CodingMcp {
 
     #[doc = include_str!("tools/read_file/description.md")]
     #[tool(
+        meta = tool_kind_meta(ToolKind::Read),
         annotations(read_only_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<ReadFileResult>()
     )]
@@ -246,6 +248,7 @@ impl CodingMcp {
 
     #[doc = include_str!("tools/write_file/description.md")]
     #[tool(
+        meta = tool_kind_meta(ToolKind::Edit),
         annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false),
         output_schema = schema_for_output::<WriteFileResponse>()
     )]
@@ -269,6 +272,7 @@ impl CodingMcp {
 
     #[doc = include_str!("tools/edit_file/description.md")]
     #[tool(
+        meta = tool_kind_meta(ToolKind::Edit),
         annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false),
         output_schema = schema_for_output::<EditFileResponse>()
     )]
@@ -290,6 +294,7 @@ impl CodingMcp {
 
     #[doc = include_str!("tools/bash/description.md")]
     #[tool(
+        meta = tool_kind_meta(ToolKind::Execute),
         annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = true),
         output_schema = schema_for_output::<BashOutput>()
     )]
@@ -305,6 +310,7 @@ impl CodingMcp {
 
     #[doc = include_str!("tools/web_fetch/description.md")]
     #[tool(
+        meta = tool_kind_meta(ToolKind::Fetch),
         annotations(read_only_hint = true, open_world_hint = true),
         output_schema = schema_for_output::<WebFetchOutput>()
     )]
@@ -322,6 +328,7 @@ impl CodingMcp {
 
     #[doc = include_str!("tools/web_search/description.md")]
     #[tool(
+        meta = tool_kind_meta(ToolKind::Search),
         annotations(read_only_hint = true, open_world_hint = true),
         output_schema = schema_for_output::<WebSearchOutput>()
     )]
@@ -344,6 +351,7 @@ impl CodingMcp {
 
     #[doc = include_str!("../lsp/tools/symbol_lookup/description.md")]
     #[tool(
+        meta = tool_kind_meta(ToolKind::Search),
         annotations(read_only_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<LspSymbolOutput>()
     )]
@@ -373,6 +381,7 @@ impl CodingMcp {
 
     #[doc = include_str!("../lsp/tools/rename/description.md")]
     #[tool(
+        meta = tool_kind_meta(ToolKind::Edit),
         annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false),
         output_schema = schema_for_output::<LspRenameOutput>()
     )]

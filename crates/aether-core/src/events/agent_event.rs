@@ -41,6 +41,7 @@ impl AgentEvent {
     pub fn tool_call(id: &str, name: &str, arguments: &str) -> Self {
         Self::Tool(ToolEvent::Call {
             request: ToolCallRequest { id: id.into(), name: name.into(), arguments: arguments.into() },
+            kind: None,
         })
     }
 
@@ -112,8 +113,8 @@ impl AgentEvent {
 mod tests {
     use super::*;
     use crate::events::{CompactionOutcome, LlmCallOutcome};
+    use foxfire_acp::display_meta::ToolDisplayMeta;
     use llm::{ContextUsage, LlmCallPurpose};
-    use utils::display_meta::ToolDisplayMeta;
 
     #[test]
     fn serializes_nested_event_contract() {
@@ -133,7 +134,10 @@ mod tests {
                 purpose: LlmCallPurpose::Chat,
                 outcome: LlmCallOutcome::Cancelled,
             }),
-            AgentEvent::Context(ContextEvent::UsageUpdated { usage: ContextUsage::default() }),
+            AgentEvent::Context(ContextEvent::UsageUpdated {
+                usage: ContextUsage::default(),
+                estimated_usd: llm::Usd::ZERO,
+            }),
             AgentEvent::Context(ContextEvent::CompactionEnded {
                 compaction_id: "compaction".into(),
                 outcome: CompactionOutcome::Completed,
@@ -247,7 +251,7 @@ mod tests {
         let complete = [
             AgentEvent::text("m", "partial", StreamState::Complete),
             AgentEvent::thought("m", "partial", StreamState::Complete),
-            AgentEvent::Tool(ToolEvent::InputStarted { id: "call".into(), name: "read".into() }),
+            AgentEvent::Tool(ToolEvent::InputStarted { id: "call".into(), name: "read".into(), kind: None }),
             AgentEvent::tool_call("call", "read", "{}"),
             AgentEvent::turn_ended(TurnOutcome::Completed),
         ];

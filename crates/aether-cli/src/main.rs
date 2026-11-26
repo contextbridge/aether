@@ -6,16 +6,17 @@ use aether_cli::generate_command::{GenerateArgs, GenerateCommandError, run as ru
 use aether_cli::headless::{HeadlessArgs, run_headless};
 use aether_cli::init::{InitError, InitOutcome, InitRequest, next_steps_message, run_init};
 use aether_cli::mcp_command::{McpArgs, McpCommandError, run as run_mcp_command};
+use aether_cli::sessions::{SessionsCommand, SessionsCommandError, run as run_sessions_command};
 use aether_cli::settings::SettingsCommand;
 use aether_cli::show_prompt::{PromptArgs, run_prompt};
 use aether_project::{AgentCatalog, project_settings_path, user_settings_path};
 use clap::{Parser, Subcommand};
+use foxfire_tui::run_tui;
+use foxfire_tui::settings::{StatusLineSegmentConfig, StatusLineSettings, load_or_create_settings};
 use rustls::crypto::aws_lc_rs;
 use std::env::current_dir;
 use std::process::ExitCode;
 use tokio::runtime::Runtime;
-use wisp::run_tui;
-use wisp::settings::{StatusLineSegmentConfig, StatusLineSettings, load_or_create_settings};
 
 #[derive(Debug, thiserror::Error)]
 enum MainError {
@@ -34,7 +35,9 @@ enum MainError {
     #[error("{0}")]
     Mcp(#[from] McpCommandError),
     #[error("{0}")]
-    Tui(#[from] wisp::error::AppError),
+    Sessions(#[from] SessionsCommandError),
+    #[error("{0}")]
+    Tui(#[from] foxfire_tui::error::AppError),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
     #[error("{0}")]
@@ -69,6 +72,9 @@ enum Command {
     /// Manage Aether settings
     #[command(subcommand)]
     Settings(SettingsCommand),
+    /// Manage stored sessions
+    #[command(subcommand)]
+    Sessions(SessionsCommand),
 }
 
 fn main() -> ExitCode {
@@ -98,6 +104,8 @@ fn main() -> ExitCode {
         Some(Command::Settings(SettingsCommand::Init(args))) => {
             success(rt.block_on(run_init(args.into())).map(|outcome| print_next_steps(&outcome)))
         }
+
+        Some(Command::Sessions(command)) => success(run_sessions_command(command)),
 
         None => rt.block_on(run_default_command()),
     };

@@ -2,7 +2,7 @@ use super::CompactionId;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use llm::{ChatMessage, ContextUsage, MessageId};
+use llm::{ChatMessage, ContextUsage, MessageId, Usd};
 
 /// Terminal result of a context compaction operation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -27,7 +27,11 @@ pub enum ContextEvent {
     /// Context was compacted to reduce token usage.
     CompactionResult { compaction_id: CompactionId, message_id: MessageId, summary: String, messages_removed: usize },
     /// Context usage update for UI display.
-    UsageUpdated { usage: ContextUsage },
+    UsageUpdated {
+        usage: ContextUsage,
+        #[serde(default)]
+        estimated_usd: Usd,
+    },
     /// The agent context was cleared and reset to its blank state.
     Cleared,
     /// An assistant reply was appended to the context. Replaying it restores

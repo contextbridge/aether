@@ -3,12 +3,9 @@ use crate::common::{
 };
 use aether_auth::MemoryCredentialStore;
 use aether_core::core::{AgentDeps, AgentRegistry};
-use aether_core::events::{
-    AgentEvent, AgentObserver, McpRequestInstrumentation, ObserverFactory, SubAgentProgressPayload, TraceContext,
-    TurnEvent, TurnOutcome,
-};
+use aether_core::events::{AgentEvent, SubAgentProgressPayload, TurnEvent, TurnOutcome};
 use aether_core::mcp::{McpBuilder, McpConfig, ToolFilter};
-use aether_core::testing::ready_catalog;
+use aether_core::testing::{FakeObserverFactory, ready_catalog};
 use aether_project::{AetherSettings, AetherSettingsSource, AgentCatalog, SettingsFileSource};
 use futures::StreamExt;
 use llm::ContentBlock;
@@ -21,7 +18,7 @@ use mcp_utils::testing::args;
 use rmcp::model::{CallToolResponse, CallToolResult, CancelTaskParams, GetTaskParams, TaskPayload};
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 
@@ -105,7 +102,10 @@ async fn cancelling_a_running_sub_agent_ends_it_as_cancelled() -> TestResult {
     let llm_server = TcpListener::bind("127.0.0.1:0").await?;
     let workspace = TestWorkspace::new();
     let registry = runtime_registry(workspace.root(), &format!("http://{}", llm_server.local_addr()?))?;
-    let deps = AgentDeps::default().with_agent_registry(registry);
+    let factory = Arc::new(FakeObserverFactory::new());
+    let agents = factory.agents();
+    let mut deps = AgentDeps::default().with_agent_registry(registry).with_conversation_id("parent-session");
+    deps.observer_factory = Some(factory);
 
     let (result, progress) = cancel_once_connected(
         &llm_server,
@@ -116,6 +116,12 @@ async fn cancelling_a_running_sub_agent_ends_it_as_cancelled() -> TestResult {
     .await?;
 
     assert_ended_as_cancelled(&result, &progress);
+    let result: serde_json::Value = serde_json::from_str(&result)?;
+    let agents = agents.lock().unwrap();
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0].conversation_id.as_deref(), Some("parent-session"));
+    assert_ne!(progress[0].session_id, "parent-session");
+    assert_eq!(result["results"][0]["sessionId"], progress[0].session_id);
     Ok(())
 }
 
@@ -310,10 +316,10 @@ async fn cancelling_background_subagents_cancels_the_batch_without_publishing_a_
 async fn background_instrumentation_finishes_when_the_batch_settles() -> TestResult {
     let (workspace, _mcp_server) = create_project_with_blocked_agent().await?;
     let project_root = workspace.root().to_path_buf();
-    let finishes = Arc::new(Mutex::new(Vec::new()));
-    let recorded = Arc::clone(&finishes);
+    let factory = Arc::new(FakeObserverFactory::new());
+    let finishes = factory.finishes();
     let mut deps = AgentDeps::default().with_agent_registry(test_registry(&project_root));
-    deps.observer_factory = Some(Arc::new(RecordingObserverFactory { finishes: recorded }));
+    deps.observer_factory = Some(factory);
     let mcp = connect(SubAgentsMcp::new(project_root.clone(), deps), cancels_prompts()).await;
 
     let response = mcp
@@ -329,6 +335,10 @@ async fn background_instrumentation_finishes_when_the_batch_settles() -> TestRes
     await_terminal_task(&mcp, &created.task.task_id).await?;
 
     assert_eq!(finishes.lock().unwrap().as_slice(), [Some("Sub-agent execution cancelled".to_string())]);
+
+    call_complete(&mcp, spawn_input(&[])).await?;
+
+    assert_eq!(finishes.lock().unwrap().as_slice(), [Some("Sub-agent execution cancelled".to_string()), None]);
     Ok(())
 }
 
@@ -537,42 +547,4 @@ fn test_registry(test_dir: &Path) -> AgentRegistry {
 fn create_test_server(test_dir: &Path) -> SubAgentsMcp {
     let deps = AgentDeps::default().with_agent_registry(test_registry(test_dir));
     SubAgentsMcp::new(test_dir.to_path_buf(), deps)
-}
-
-struct RecordingObserverFactory {
-    finishes: Arc<Mutex<Vec<Option<String>>>>,
-}
-
-impl ObserverFactory for RecordingObserverFactory {
-    fn agent(&self, _agent_name: Option<&str>, _parent: Option<&TraceContext>) -> Box<dyn AgentObserver> {
-        Box::new(NoopAgentObserver)
-    }
-
-    fn tool_call_request(
-        &self,
-        _tool_name: &str,
-        _parent: Option<&TraceContext>,
-    ) -> Box<dyn McpRequestInstrumentation> {
-        Box::new(RecordingInstrumentation { finishes: Arc::clone(&self.finishes) })
-    }
-}
-
-struct NoopAgentObserver;
-
-impl AgentObserver for NoopAgentObserver {
-    fn on_event(&mut self, _message: &AgentEvent) {}
-}
-
-struct RecordingInstrumentation {
-    finishes: Arc<Mutex<Vec<Option<String>>>>,
-}
-
-impl McpRequestInstrumentation for RecordingInstrumentation {
-    fn trace_context(&self) -> Option<TraceContext> {
-        None
-    }
-
-    fn finish(self: Box<Self>, error: Option<&str>) {
-        self.finishes.lock().unwrap().push(error.map(str::to_string));
-    }
 }

@@ -98,8 +98,7 @@ impl<T> Picker<T> {
                 (false, true) => "● ",
                 (false, false) => "○ ",
             };
-            let description =
-                option.description.as_deref().map(|description| format!(" - {description}")).unwrap_or_default();
+            let description = option.description.as_deref().map_or_default(|description| format!(" - {description}"));
             let style = if self.multi && index == self.cursor {
                 primary_style().add_modifier(Modifier::BOLD)
             } else if self.is_selected(index) {
@@ -179,7 +178,7 @@ async fn run_picker<T>(
                 return Ok(Some(chosen.collect()));
             }
             KeyCode::Char(' ') if picker.multi && len > 0 => {
-                picker.toggled[picker.cursor] = !picker.toggled[picker.cursor];
+                picker.toggled[picker.cursor].toggle();
             }
             KeyCode::Up if len > 0 => picker.cursor = (picker.cursor + len - 1) % len,
             KeyCode::Down if len > 0 => picker.cursor = (picker.cursor + 1) % len,

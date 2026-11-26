@@ -3,13 +3,6 @@ use std::io;
 use std::path::{Path, PathBuf};
 use utils::git::{GitError, git, git_text, git_with_stdin};
 
-pub(crate) fn current_ref(repo: &Path) -> Option<String> {
-    git_text(Some(repo), &["branch", "--show-current"])
-        .ok()
-        .filter(|name| !name.is_empty())
-        .or_else(|| git_text(Some(repo), &["rev-parse", "--short", "HEAD"]).ok())
-}
-
 /// Resolves the root of the git working tree containing `path`.
 pub(super) fn repo_root(path: &Path) -> Result<PathBuf, GitError> {
     git_text(Some(path), &["rev-parse", "--show-toplevel"]).map(PathBuf::from)
@@ -80,6 +73,7 @@ mod tests {
     use crate::workspace::testing::{StdCopyCloner, init_repo};
     use std::fs;
     use tempfile::TempDir;
+    use utils::git::current_ref;
     use utils::testing::git_commit;
 
     #[test]

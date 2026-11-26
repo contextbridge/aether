@@ -7,6 +7,7 @@ use aether_core::{
     events::{AgentEvent, Command, MessageEvent, SubAgentProgressPayload, TurnEvent, TurnOutcome, UserCommand},
     mcp::McpSpawnError,
 };
+use foxfire_acp::display_meta::ToolDisplayMeta;
 use futures::FutureExt;
 use llm::{ContentBlock, MessageId};
 use schemars::JsonSchema;
@@ -18,7 +19,6 @@ use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tokio::time::timeout;
-use utils::display_meta::ToolDisplayMeta;
 use utils::panic::panic_message;
 
 /// Input for a single agent task within a batch

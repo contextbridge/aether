@@ -1,10 +1,10 @@
-use acp_utils::testing::{announced, idle_notification, idle_state, running_notification, running_state};
 use aether_cli::acp::testing::{AcpTestHarness, FakeSubAgents};
 use aether_core::events::{AgentEvent, StreamState, SubAgentProgressPayload, ToolEvent, TurnEvent, TurnOutcome};
 use agent_client_protocol::schema::MaybeUndefined;
 use agent_client_protocol::v2::schema::{
     self as acp, CancelSessionNotification, SessionId, SessionUpdate, StateUpdate, UpdateSessionNotification,
 };
+use foxfire_acp::testing::{announced, idle_notification, idle_state, running_notification, running_state};
 use llm::ToolCallRequest;
 use llm::testing::{FakeLlmProvider, llm_response};
 
@@ -49,7 +49,8 @@ async fn a_failed_sub_agent_goes_idle_with_an_error() {
 async fn sub_agent_tool_calls_report_on_the_sub_agent_session() {
     let call = ToolCallRequest { id: "grep-call".into(), name: "coding__grep".into(), arguments: "{}".into() };
 
-    let notifications = spawn_sub_agents([sub_agent(AgentEvent::Tool(ToolEvent::Call { request: call }))]).await;
+    let notifications =
+        spawn_sub_agents([sub_agent(AgentEvent::Tool(ToolEvent::Call { request: call, kind: None }))]).await;
 
     let tool_calls: Vec<_> = notifications
         .iter()

@@ -13,7 +13,6 @@ import {
   type AetherMessage,
   tool,
 } from "../src/index.js";
-import { sessionUsageFactory } from "./factories/sessionUsage.js";
 import { TRACE_CONTEXT } from "./traceContext.js";
 
 // Every fake-agent turn streams four session_update messages before the
@@ -330,41 +329,6 @@ describe("AetherSession with a fake ACP agent", () => {
     }
   });
 
-  it("exposes session usage", async () => {
-    const session = await AetherSession.start({
-      binaryPath: FAKE_AETHER,
-      env: {
-        PATH: process.env.PATH,
-        FAKE_AETHER_EXT_NOTIFICATION: JSON.stringify({
-          method: "_aether/session_usage",
-          params: { usage: sessionUsageFactory.build() },
-        }),
-      },
-    });
-
-    try {
-      const messages: AetherMessage[] = [];
-      for await (const message of session.prompt("test prompt")) {
-        messages.push(message);
-      }
-
-      expect(
-        messages
-          .slice(0, -1)
-          .map((message) => message.type)
-          .sort(),
-      ).toEqual([...SESSION_UPDATES, "usage"]);
-      expect(messages.at(-1)?.type).toBe("result");
-
-      expect(messages.find((message) => message.type === "usage")).toEqual({
-        type: "usage",
-        usage: sessionUsageFactory.build(),
-      });
-    } finally {
-      await session.close();
-    }
-  });
-
   it("ignores unknown ACP extension notifications", async () => {
     const notification = {
       method: "_example.com/status",
@@ -387,29 +351,6 @@ describe("AetherSession with a fake ACP agent", () => {
         ...SESSION_UPDATES,
         "result",
       ]);
-    } finally {
-      await session.close();
-    }
-  });
-
-  it("rejects malformed session usage notifications", async () => {
-    const session = await AetherSession.start({
-      binaryPath: FAKE_AETHER,
-      env: {
-        PATH: process.env.PATH,
-        FAKE_AETHER_EXT_NOTIFICATION: JSON.stringify({
-          method: "_aether/session_usage",
-          params: {},
-        }),
-      },
-    });
-
-    try {
-      await expect(async () => {
-        for await (const _message of session.prompt("test prompt")) {
-          void _message;
-        }
-      }).rejects.toMatchObject({ code: "invalid_protocol_message" });
     } finally {
       await session.close();
     }

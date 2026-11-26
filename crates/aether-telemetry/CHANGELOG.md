@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.23](https://github.com/contextbridge/aether/compare/aether-telemetry-v0.3.22...aether-telemetry-v0.3.23) - 2026-11-23
+
+### Added
+
+- *(telemetry)* export the root session ID as gen_ai.conversation.id ([#689](https://github.com/contextbridge/aether/pull/689))
+
+## [0.3.22](https://github.com/contextbridge/aether/compare/aether-telemetry-v0.3.21...aether-telemetry-v0.3.22) - 2026-11-23
+
+### Other
+
+- updated the following local packages: aether-llm, aether-agent-core
+
+## [0.3.21](https://github.com/contextbridge/aether/compare/aether-telemetry-v0.3.20...aether-telemetry-v0.3.21) - 2026-11-23
+
+### Other
+
+- updated the following local packages: aether-llm, aether-agent-core
+
+## [0.3.20](https://github.com/contextbridge/aether/compare/aether-telemetry-v0.3.19...aether-telemetry-v0.3.20) - 2026-11-17
+
+### Other
+
+- updated the following local packages: aether-utils, aether-llm, aether-agent-core
+
 ## [0.3.19](https://github.com/contextbridge/aether/compare/aether-telemetry-v0.3.18...aether-telemetry-v0.3.19) - 2026-11-03
 
 ### Other

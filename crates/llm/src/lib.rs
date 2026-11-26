@@ -33,6 +33,7 @@ pub use model_settings::ModelSettings;
 pub use provider::{LlmResponseStream, StreamingModelProvider};
 pub use provider_connection::{
     ProviderAuthMode, ProviderConnectionConfig, ProviderConnectionOverride, ProviderConnectionOverrides,
+    ResponsesTransport,
 };
 pub use reasoning::{ReasoningDisabledSupport, ReasoningEffort};
 pub use tools::*;

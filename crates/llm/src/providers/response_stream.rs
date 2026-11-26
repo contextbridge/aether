@@ -1,5 +1,5 @@
 use crate::providers::http::HttpResponseMetadata;
-use crate::{LlmError, LlmResponse, LlmResponseStream, ProviderError, Result, StopReason, ToolCallRequest};
+use crate::{LlmError, LlmResponse, LlmResponseStream, ProviderError, Result, StopReason, TokenUsage, ToolCallRequest};
 use async_stream::{stream, try_stream};
 use futures::{Stream, StreamExt};
 use std::collections::BTreeMap;
@@ -49,6 +49,10 @@ impl<T> OpenedStream<T> {
         Self { events, http: None }
     }
 
+    pub(crate) fn map_events<U>(self, map: impl FnOnce(T) -> U) -> OpenedStream<U> {
+        OpenedStream { events: map(self.events), http: self.http }
+    }
+
     pub(crate) fn with_http(mut self, http: HttpResponseMetadata) -> Self {
         self.http = Some(http);
         self
@@ -57,19 +61,24 @@ impl<T> OpenedStream<T> {
 
 pub(crate) struct StreamAssembler<T> {
     tool_calls: BTreeMap<T, ToolCallRequest>,
+    usage: Option<TokenUsage>,
     stop_reason: Option<StopReason>,
     termination: Termination,
 }
 
 impl<T: Ord + Debug> StreamAssembler<T> {
     pub(crate) fn new() -> Self {
-        Self { tool_calls: BTreeMap::new(), stop_reason: None, termination: Termination::Pending }
+        Self { tool_calls: BTreeMap::new(), usage: None, stop_reason: None, termination: Termination::Pending }
     }
 
     pub(crate) fn start_tool(&mut self, index: T, id: String, name: String) -> LlmResponse {
         let start = LlmResponse::ToolRequestStart { id: id.clone(), name: name.clone() };
         self.tool_calls.insert(index, ToolCallRequest { id, name, arguments: String::new() });
         start
+    }
+
+    pub(crate) fn last_tool_index(&self) -> Option<&T> {
+        self.tool_calls.last_key_value().map(|(index, _)| index)
     }
 
     pub(crate) fn append_tool_args(&mut self, index: &T, chunk: String) -> Option<LlmResponse> {
@@ -110,6 +119,10 @@ impl<T: Ord + Debug> StreamAssembler<T> {
             .collect()
     }
 
+    pub(crate) fn record_usage(&mut self, usage: TokenUsage) {
+        self.usage = Some(usage);
+    }
+
     pub(crate) fn stop(&mut self, stop_reason: StopReason) {
         self.stop_reason = Some(stop_reason);
     }
@@ -122,14 +135,22 @@ impl<T: Ord + Debug> StreamAssembler<T> {
         self.termination = Termination::Immediate;
     }
 
-    fn finish(mut self) -> Result<Vec<LlmResponse>> {
-        if matches!(self.termination, Termination::Pending) {
-            return Err(ProviderError::stream_interrupted("stream ended before the provider's terminal event").into());
-        }
+    fn finish(mut self, outcome: Result<()>) -> (Vec<LlmResponse>, Result<()>) {
+        let outcome = outcome.and_then(|()| match self.termination {
+            Termination::Pending => {
+                Err(ProviderError::stream_interrupted("stream ended before the provider's terminal event").into())
+            }
+            Termination::AtEof | Termination::Immediate => Ok(()),
+        });
 
-        let mut responses = self.complete_all_tools();
-        responses.push(LlmResponse::Done { stop_reason: self.stop_reason });
-        Ok(responses)
+        let mut responses = if outcome.is_ok() { self.complete_all_tools() } else { Vec::new() };
+        if let Some(tokens) = self.usage {
+            responses.push(LlmResponse::Usage { tokens });
+        }
+        if outcome.is_ok() {
+            responses.push(LlmResponse::Done { stop_reason: self.stop_reason });
+        }
+        (responses, outcome)
     }
 }
 
@@ -153,19 +174,30 @@ where
         let mut turn = StreamAssembler::new();
         yield LlmResponse::Start;
 
-        while let Some(event) = within(idle_timeout, events.next()).await? {
-            for response in decode(event?, &mut turn)? {
-                yield response;
+        let outcome = loop {
+            let decoded = within(idle_timeout, events.next())
+                .await
+                .and_then(|event| event.map(|event| decode(event?, &mut turn)).transpose());
+            match decoded {
+                Ok(Some(responses)) => {
+                    for response in responses {
+                        yield response;
+                    }
+                }
+                Ok(None) => break Ok(()),
+                Err(error) => break Err(error),
             }
 
             if matches!(turn.termination, Termination::Immediate) {
-                break;
+                break Ok(());
             }
-        }
+        };
 
-        for response in turn.finish()? {
+        let (tail, outcome) = turn.finish(outcome);
+        for response in tail {
             yield response;
         }
+        outcome?;
     }
 }
 

@@ -1,9 +1,13 @@
+use futures::Stream;
 use serde::Deserialize;
+use std::pin::Pin;
 use tracing::debug;
 
 use crate::providers::openai::wire::Usage;
 use crate::providers::response_stream::StreamAssembler;
 use crate::{LlmResponse, ProviderError, ProviderErrorKind, Result, StopReason, ToolCallRequest};
+
+pub(crate) type ResponseEvents = Pin<Box<dyn Stream<Item = Result<ResponsesStreamEvent>> + Send>>;
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
@@ -27,14 +31,33 @@ pub(crate) enum ResponsesStreamEvent {
     #[serde(rename = "response.failed")]
     Failed(ResponsesFailedEvent),
     #[serde(rename = "error")]
-    Error(ResponsesErrorEvent),
+    Error {
+        status: Option<u16>,
+        error: Option<ResponsesErrorEvent>,
+        #[serde(flatten)]
+        detail: ResponsesErrorEvent,
+    },
     #[serde(other)]
     Ignored,
 }
 
 impl ResponsesStreamEvent {
-    fn may_precede_creation(&self) -> bool {
-        matches!(self, Self::Ignored | Self::Error(_) | Self::Failed(_))
+    pub(super) fn parse(data: &str, started: &mut bool) -> Result<Self> {
+        let event = serde_json::from_str(data).map_err(|error| {
+            debug!(data, %error, "Failed to decode Responses stream event");
+            ProviderError::stream_interrupted(format!("Invalid Responses stream event: {error}"))
+        })?;
+        match event {
+            Self::Created => *started = true,
+            Self::Ignored | Self::Error { .. } | Self::Failed(_) => {}
+            _ if !*started => {
+                return Err(
+                    ProviderError::stream_interrupted("Responses stream emitted data before response.created").into()
+                );
+            }
+            _ => {}
+        }
+        Ok(event)
     }
 }
 
@@ -59,9 +82,13 @@ pub(crate) struct ResponsesOutputItemEvent {
     pub item: OutputItem,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum OutputItem {
+    Message {
+        #[serde(default)]
+        content: Vec<OutputContent>,
+    },
     FunctionCall {
         call_id: String,
         name: String,
@@ -71,6 +98,16 @@ pub(crate) enum OutputItem {
     Reasoning {
         id: Option<String>,
         encrypted_content: Option<String>,
+    },
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(crate) enum OutputContent {
+    OutputText {
+        text: String,
     },
     #[serde(other)]
     Other,
@@ -89,6 +126,7 @@ pub(crate) struct ResponsesCompletedEvent {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct ResponsesCompleted {
+    pub id: Option<String>,
     pub usage: Option<Usage>,
     pub status: Option<Status>,
 }
@@ -109,41 +147,33 @@ pub(crate) struct ResponsesErrorEvent {
     pub message: String,
 }
 
-pub(crate) fn decode_responses() -> impl FnMut(String, &mut StreamAssembler<u32>) -> Result<Vec<LlmResponse>> + Send {
+pub(super) const LOST_CONTINUATION_CODES: [&str; 2] =
+    ["previous_response_not_found", "websocket_connection_limit_reached"];
+
+#[cfg(any(feature = "bedrock", test))]
+pub(crate) fn decode_responses() -> impl FnMut(String, &mut StreamAssembler<u32>) -> Result<Vec<LlmResponse>> {
     let mut started = false;
-    move |data, turn| {
-        let event = serde_json::from_str::<ResponsesStreamEvent>(&data).map_err(|error| {
-            debug!(data, %error, "Failed to decode Responses SSE event");
-            ProviderError::stream_interrupted(format!("Invalid Responses SSE event: {error}"))
-        })?;
-        if matches!(event, ResponsesStreamEvent::Created) {
-            started = true;
-        } else if !started && !event.may_precede_creation() {
-            return Err(
-                ProviderError::stream_interrupted("Responses stream emitted data before response.created").into()
-            );
-        }
-        decode_event(event, turn)
-    }
+    move |data, turn| decode_event(ResponsesStreamEvent::parse(&data, &mut started)?, turn)
 }
 
 fn map_responses_error(code: Option<String>, message: String, fallback: ProviderErrorKind) -> ProviderError {
     let kind = match code.as_deref() {
         Some("server_error") => ProviderErrorKind::Server,
         Some("rate_limit_exceeded") => ProviderErrorKind::RateLimit,
+        Some(code) if LOST_CONTINUATION_CODES.contains(&code) => ProviderErrorKind::StreamInterrupted,
         _ => fallback,
     };
     ProviderError::new(kind, message).with_code(code)
 }
 
-fn decode_event(event: ResponsesStreamEvent, turn: &mut StreamAssembler<u32>) -> Result<Vec<LlmResponse>> {
+pub(crate) fn decode_event(event: ResponsesStreamEvent, turn: &mut StreamAssembler<u32>) -> Result<Vec<LlmResponse>> {
     let incomplete = matches!(&event, ResponsesStreamEvent::Incomplete(_));
 
     let responses = match event {
         ResponsesStreamEvent::OutputTextDelta(e) if !e.delta.is_empty() => vec![LlmResponse::Text { chunk: e.delta }],
         ResponsesStreamEvent::OutputItemAdded(e) => match e.item {
             OutputItem::FunctionCall { call_id, name, .. } => vec![turn.start_tool(e.output_index, call_id, name)],
-            OutputItem::Reasoning { .. } | OutputItem::Other => vec![],
+            OutputItem::Reasoning { .. } | OutputItem::Message { .. } | OutputItem::Other => vec![],
         },
         ResponsesStreamEvent::FunctionCallArgumentsDelta(e) => {
             turn.append_tool_args(&e.output_index, e.delta).into_iter().collect()
@@ -158,7 +188,7 @@ fn decode_event(event: ResponsesStreamEvent, turn: &mut StreamAssembler<u32>) ->
             OutputItem::Reasoning { id: Some(id), encrypted_content: Some(content) } => {
                 vec![LlmResponse::EncryptedReasoning { id, content }]
             }
-            OutputItem::Reasoning { .. } | OutputItem::Other => vec![],
+            OutputItem::Reasoning { .. } | OutputItem::Message { .. } | OutputItem::Other => vec![],
         },
         ResponsesStreamEvent::Completed(e) | ResponsesStreamEvent::Incomplete(e) => {
             match e.response.status {
@@ -167,8 +197,11 @@ fn decode_event(event: ResponsesStreamEvent, turn: &mut StreamAssembler<u32>) ->
                 Some(Status::Other) | None if incomplete => turn.stop(StopReason::Length),
                 Some(Status::Other) | None => {}
             }
+            if let Some(usage) = e.response.usage {
+                turn.record_usage(usage.into());
+            }
             turn.finish_now();
-            e.response.usage.map(|usage| LlmResponse::Usage { tokens: usage.into() }).into_iter().collect()
+            vec![]
         }
         ResponsesStreamEvent::Failed(e) => {
             let error = e.response.error.map_or_else(
@@ -177,9 +210,11 @@ fn decode_event(event: ResponsesStreamEvent, turn: &mut StreamAssembler<u32>) ->
             );
             return Err(error.into());
         }
-        ResponsesStreamEvent::Error(e) => {
-            let message = format!("Responses API error: {}", e.message);
-            return Err(map_responses_error(e.code, message, ProviderErrorKind::Unknown).into());
+        ResponsesStreamEvent::Error { status, error, detail } => {
+            let detail = error.unwrap_or(detail);
+            let fallback = status.map_or(ProviderErrorKind::Unknown, |s| ProviderError::from_http_status(s, "").kind);
+            let message = format!("Responses API error: {}", detail.message);
+            return Err(map_responses_error(detail.code, message, fallback).with_http_metadata(status, None).into());
         }
         ResponsesStreamEvent::Created
         | ResponsesStreamEvent::Ignored
@@ -431,20 +466,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn error_events_map_codes_to_retryable_kinds() {
-        for (code, kind) in [
-            (None, ProviderErrorKind::Unknown),
-            (Some("bogus"), ProviderErrorKind::Unknown),
-            (Some("rate_limit_exceeded"), ProviderErrorKind::RateLimit),
-            (Some("server_error"), ProviderErrorKind::Server),
+    async fn error_events_preserve_code_status_and_message_on_both_transports() {
+        use ProviderErrorKind::{Api, Authentication, RateLimit, Server, StreamInterrupted, Unknown};
+        for (code, status, kind) in [
+            (None, None, Unknown),
+            (Some("bogus"), None, Unknown),
+            (Some("rate_limit_exceeded"), None, RateLimit),
+            (Some("server_error"), None, Server),
+            (Some("rate_limit_exceeded"), Some(429), RateLimit),
+            (Some("invalid_api_key"), Some(401), Authentication),
+            (Some("invalid_stream_id"), Some(400), Api),
+            (Some("server_error"), Some(500), Server),
+            (Some("previous_response_not_found"), Some(400), StreamInterrupted),
+            (Some("websocket_connection_limit_reached"), Some(400), StreamInterrupted),
         ] {
-            let responses = process_events(responses_stream().error(code, "slow down").build()).await;
-
-            let err = responses[1].as_ref().expect_err("expected the error event to surface as Err");
-            assert_eq!(err.provider().map(|provider| provider.kind), Some(kind), "{code:?}: {err:?}");
-            assert_eq!(err.provider().and_then(|provider| provider.code.as_deref()), code);
-            assert!(err.is_retryable(), "{code:?}: {err:?}");
-            assert!(err.to_string().contains("slow down"), "server message was dropped: {err}");
+            let detail = json!({"code":code, "message":"slow down"});
+            let events = match status {
+                None => responses_stream().error(code, "slow down").build(),
+                Some(status) => vec![json!({"type":"error", "status":status, "error":detail})],
+            };
+            let responses = process_events(events).await;
+            let error = responses.last().unwrap().as_ref().unwrap_err().provider().unwrap();
+            assert_eq!((error.kind, error.code.as_deref(), error.http_status), (kind, code, status));
+            assert!(error.message.contains("slow down"));
         }
     }
 

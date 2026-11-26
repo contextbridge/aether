@@ -225,7 +225,7 @@ fn assert_queued_text_discarded(Scenario { messages, contexts }: Scenario, final
     assert_eq!(inserted, 1, "only the prompt that started the turn is inserted: {:?}", trace.events());
     assert_eq!(discarded.len(), 1, "the queued text is discarded once: {:?}", trace.events());
     assert!(discarded[0] < first_end, "the queued text is discarded before the turn ends: {:?}", trace.events());
-    assert_eq!(contexts.last().map(user_texts).unwrap_or_default(), final_user_texts);
+    assert_eq!(contexts.last().map_or_default(user_texts), final_user_texts);
 }
 
 fn is_user_message_inserted(m: &AgentEvent) -> bool {

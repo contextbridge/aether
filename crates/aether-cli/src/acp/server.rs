@@ -2,7 +2,7 @@ use super::state::{AcpState, ClientGuard};
 use super::{AcpArgs, AcpRunError, IdleHook, SessionHooks, create_acp_state};
 use crate::output::OutputFormat;
 use crate::prompt::prompt_or_stdin;
-use acp_utils::websocket::WebSocketTransport;
+use foxfire_acp::websocket::WebSocketTransport;
 use std::fs::canonicalize;
 use std::future::Future;
 use std::io;

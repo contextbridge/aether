@@ -7,5 +7,6 @@ pub mod gateway;
 pub mod server;
 #[cfg(all(feature = "client", any(test, feature = "testing")))]
 pub mod testing;
+pub mod tool_kind;
 
 pub use rmcp::model;

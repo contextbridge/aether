@@ -6,7 +6,6 @@ on:
     paths:
       - "packages/aether-sdk/package.json"
       - "packages/aether-evals/package.json"
-      - "packages/aether-browser/package.json"
   workflow_dispatch:
 
 permissions:
@@ -28,7 +27,7 @@ jobs:
 
       - uses: $/.github/actions/setup-workspace
 
-      - uses: jdx/mise-action@b44d12e7d0d8ee7461bb893e1b1993500433185b # v5.2.7
+      - uses: jdx/mise-action@236a21c3b91f5db6d4e174b348674a0f0caac06d # v5.2.9
         with:
           cache: false
 
@@ -48,9 +47,6 @@ jobs:
       - name: Build evals
         run: pnpm evals:build
 
-      - name: Build browser client
-        run: pnpm browser:build
-
       # pnpm -r publishes the SDK before evals, stops on the first failure, and skips versions already on npm.
       - name: Publish
-        run: pnpm -r --filter @aether-agent/sdk --filter @aether-agent/evals --filter @aether-agent/browser publish --access public --provenance --no-git-checks
+        run: pnpm -r --filter @aether-agent/sdk --filter @aether-agent/evals publish --access public --provenance --no-git-checks

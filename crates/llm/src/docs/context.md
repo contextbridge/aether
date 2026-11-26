@@ -33,6 +33,10 @@ let context = Context::new(
 - [`add_message`](Context::add_message) -- Append a single message.
 - [`clear_conversation`](Context::clear_conversation) -- Remove all non-system messages.
 
+# Responses API instructions
+
+The Responses mapper sends the conversation's system prompt as the first `developer` message in `input`, so stable instructions remain eligible for prefix caching.
+
 # Conversation compaction
 
 Long conversations can be compacted to stay within context limits:

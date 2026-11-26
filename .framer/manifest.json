@@ -1,0 +1,29 @@
+{
+  "files": {
+    ".github/workflows/ci.yml": {
+      "kind": "managed"
+    },
+    ".gitignore": {
+      "kind": "blocks",
+      "ids": [
+        "framer"
+      ]
+    },
+    "Cargo.toml": {
+      "kind": "toml",
+      "keys": [
+        "workspace.resolver",
+        "workspace.members",
+        "workspace.lints",
+        "profile.dev",
+        "profile.dist"
+      ]
+    },
+    "rust-toolchain.toml": {
+      "kind": "managed"
+    },
+    "rustfmt.toml": {
+      "kind": "managed"
+    }
+  }
+}

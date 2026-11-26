@@ -199,9 +199,9 @@ mod tests {
     use aws_smithy_eventstream::frame::write_message_to;
     use aws_smithy_types::base64;
     use aws_smithy_types::event_stream::{Header, HeaderValue, Message};
+    use foxfire_acp::ReasoningEffort;
     use futures::StreamExt;
     use serde_json::json;
-    use utils::ReasoningEffort;
 
     #[test]
     fn test_display_name() {
@@ -282,10 +282,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn bedrock_gpt_6_2_responses_put_reusable_instructions_first() {
+        for model in ["us.openai.gpt-6.2-sol", "us.openai.gpt-6.2-astra", "openai.gpt-6.2-sol", "openai.gpt-6.2-astra"]
+        {
+            let mut server = CaptureServer::start_responses().await;
+            let provider = create_provider(&server.base_url, model).await;
+            let mut context = hello_context();
+            context.set_system_content("Stable policy".into());
+            context.set_prompt_cache_key(Some("shared".into()));
+
+            let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
+            let captured = server.captured().await;
+            assert_eq!(captured.path, "/responses", "{model}");
+            assert!(responses.iter().all(Result::is_ok), "{model}: {responses:?}");
+            assert!(captured.body.get("instructions").is_none());
+            assert_eq!(
+                captured.body["input"],
+                json!([
+                    {"type":"message", "role":"developer", "content":"Stable policy"},
+                    {"type":"message", "role":"user", "content":[{"type":"input_text", "text":"Hello"}]}
+                ])
+            );
+            assert_eq!(captured.body["prompt_cache_key"], "shared");
+        }
+    }
+
+    #[tokio::test]
     async fn responses_shape_models_are_sent_to_the_responses_endpoint() {
         let mut server = CaptureServer::start_responses().await;
         let provider = mantle_provider(&server).await;
         let mut context = hello_context();
+        context.set_system_content("You are helpful.".into());
         context.set_reasoning_effort(crate::ReasoningEffort::Xhigh);
 
         let responses = provider.stream_response(&context).collect::<Vec<_>>().await;
@@ -297,9 +324,14 @@ mod tests {
         assert_eq!(captured.body["stream"], true);
         assert_eq!(captured.body["store"], false);
         assert_eq!(captured.body["reasoning"]["effort"], "xhigh");
-        assert_eq!(captured.body["input"][0]["role"], "user");
-        assert_eq!(captured.body["input"][0]["content"][0]["type"], "input_text");
-        assert_eq!(captured.body["input"][0]["content"][0]["text"], "Hello");
+        assert!(captured.body.get("instructions").is_none());
+        assert_eq!(
+            captured.body["input"],
+            json!([
+                {"type":"message", "role":"developer", "content":"You are helpful."},
+                {"type":"message", "role":"user", "content":[{"type":"input_text", "text":"Hello"}]}
+            ])
+        );
         assert!(captured.headers.get("authorization").is_none(), "{:?}", captured.headers);
     }
 
