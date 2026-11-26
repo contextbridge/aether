@@ -9,6 +9,7 @@ use mcp_utils::client::{ClientOptions, ToolCall, ToolCallOptions};
 use mcp_utils::gateway::{ConnectedServer, GatewayError, McpGateway, ServerPrompt};
 use mcp_utils::model::{GetPromptResult, Tool};
 use mcp_utils::server::{ServerHandle, UnixSocket};
+use mcp_utils::tool_kind::{ToolKind, declared_tool_kind};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::path::Path;
@@ -50,6 +51,13 @@ impl McpCatalog {
 
     pub fn call_tool(&self, name: &str, args: Map<String, Value>, options: ToolCallOptions) -> Option<ToolCall> {
         self.core.call(Tier::Direct, name, args, options)
+    }
+
+    pub(crate) fn tool_kind(&self, name: &str) -> Option<ToolKind> {
+        self.core.with_resolved_tool(name, |_, tool, tier| match tier {
+            Tier::Direct => declared_tool_kind(tool),
+            Tier::Deferred => None,
+        })
     }
 
     pub async fn list_prompts(&self) -> Vec<ServerPrompt> {
@@ -143,7 +151,7 @@ impl CatalogCore {
     }
 
     pub(super) fn tier_of(&self, name: &str) -> Option<Tier> {
-        self.resolve(name).map(|(_, _, tier)| tier)
+        self.with_resolved_tool(name, |_, _, tier| Some(tier))
     }
 
     pub(super) fn call(
@@ -153,15 +161,21 @@ impl CatalogCore {
         args: Map<String, Value>,
         options: ToolCallOptions,
     ) -> Option<ToolCall> {
-        let (server, tool, offered_in) = self.resolve(name)?;
-        (offered_in == tier).then(|| server.call_tool(tool, args, options))
+        self.with_resolved_tool(name, |server, tool, offered_in| {
+            (offered_in == tier).then(|| server.call_tool(&tool.name, args, options))
+        })
     }
 
-    fn resolve<'n>(&self, name: &'n str) -> Option<(ConnectedServer, &'n str, Tier)> {
-        let (server, tool) = self.split(name)?;
+    fn with_resolved_tool<T>(
+        &self,
+        name: &str,
+        with_tool: impl FnOnce(&ConnectedServer, &Tool, Tier) -> Option<T>,
+    ) -> Option<T> {
+        let (server, tool_name) = self.split(name)?;
         let server = self.gateway.server(server)?;
-        let tier = self.policy.tier(server.name(), server.tools().iter().find(|offered| offered.name == tool)?)?;
-        Some((server, tool, tier))
+        let tool = server.tools().iter().find(|offered| offered.name == tool_name)?;
+        let tier = self.policy.tier(server.name(), tool)?;
+        with_tool(&server, tool, tier)
     }
 
     fn split<'n>(&self, name: &'n str) -> Option<(&str, &'n str)> {

@@ -140,6 +140,11 @@ impl TestSessionBuilder<'_> {
         self
     }
 
+    pub fn mcp_server(mut self, server: ServerSpec) -> Self {
+        self.servers.push(server);
+        self
+    }
+
     /// Serve `task` and a `/plan` prompt, and let the agent end its turn
     /// without auto-continuing so the task outcome arrives as its own turn.
     pub fn background_task(mut self, task: &FakeBackgroundTask) -> Self {

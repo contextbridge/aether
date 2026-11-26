@@ -30,7 +30,10 @@ pub(super) fn decode_converse_event(event: ConverseStreamOutput, turn: &mut Stre
             None
         }
         ConverseStreamOutput::Metadata(event) => {
-            event.usage.as_ref().map(|usage| LlmResponse::Usage { tokens: usage.into() })
+            if let Some(usage) = event.usage.as_ref() {
+                turn.record_usage(usage.into());
+            }
+            None
         }
         ConverseStreamOutput::MessageStart(_) => None,
         other => {

@@ -76,10 +76,11 @@ impl MessagesDecoder {
                 if let Some(stop_reason) = data.delta.stop_reason.as_deref() {
                     turn.stop(map_anthropic_stop_reason(stop_reason));
                 }
-                data.usage.map(|usage| {
+                if let Some(usage) = data.usage {
                     self.usage = self.usage.merge(&usage);
-                    LlmResponse::Usage { tokens: (&self.usage).into() }
-                })
+                    turn.record_usage((&self.usage).into());
+                }
+                None
             }
             StreamEvent::MessageStop => {
                 turn.allow_eof();

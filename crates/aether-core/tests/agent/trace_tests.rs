@@ -60,7 +60,7 @@ async fn tool_call_turn_emits_full_trace() -> Result<(), Box<dyn Error>> {
     }
 
     let tool_call = trace.position(
-        |e| matches!(e, AgentEvent::Tool(ToolEvent::Call { request }) if request.id == "call_1" && request.name == "test__add_numbers" && request.arguments == arguments),
+        |e| matches!(e, AgentEvent::Tool(ToolEvent::Call { request, .. }) if request.id == "call_1" && request.name == "test__add_numbers" && request.arguments == arguments),
     );
     let tool_result = trace.position(|e| matches!(e, AgentEvent::Tool(ToolEvent::Result { .. })));
     let turn_ended = trace.position(|e| matches!(e, AgentEvent::Turn(TurnEvent::Ended { .. })));

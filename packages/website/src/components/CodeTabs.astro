@@ -16,29 +16,25 @@ const hasFooter = Astro.slots.has("footer");
   data-code-tabs
 >
   <div class="flex gap-6 bg-transparent px-3" role="tablist">
-    {
-      labels.map((label, i) => (
-        <button
-          class="cursor-pointer border-0 border-b-2 border-transparent bg-transparent py-3 pb-2 font-mono text-xs tracking-[0.08em] text-gray-400 uppercase transition-colors duration-150 hover:text-gray-200 aria-selected:border-accent-500 aria-selected:text-accent-500"
-          role="tab"
-          aria-selected={i === 0 ? "true" : "false"}
-          data-tab-index={i}
-        >
-          {label}
-        </button>
-      ))
-    }
+    {labels.map((label, i) => (
+      <button
+        class="cursor-pointer border-0 border-b-2 border-transparent bg-transparent py-3 pb-2 font-mono text-xs tracking-[0.08em] text-gray-400 uppercase transition-colors duration-150 hover:text-gray-200 aria-selected:border-accent-500 aria-selected:text-accent-500"
+        role="tab"
+        aria-selected={i === 0 ? "true" : "false"}
+        data-tab-index={i}
+      >
+        {label}
+      </button>
+    ))}
   </div>
   <div class="code-tabs-panels relative">
     <slot />
   </div>
-  {
-    hasFooter && (
-      <div class="flex items-center gap-3 border-t border-gray-700 bg-transparent px-3 py-2 font-mono text-xs leading-none font-medium tracking-[0.08em] text-gray-400 uppercase">
-        <slot name="footer" />
-      </div>
-    )
-  }
+  {hasFooter && (
+    <div class="flex items-center gap-3 border-t border-gray-700 bg-transparent px-3 py-2 font-mono text-xs leading-none font-medium tracking-[0.08em] text-gray-400 uppercase">
+      <slot name="footer" />
+    </div>
+  )}
 </div>
 
 <style>

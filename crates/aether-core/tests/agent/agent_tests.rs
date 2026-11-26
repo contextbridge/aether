@@ -217,7 +217,7 @@ async fn streamed_tool_input_is_followed_by_the_complete_call() -> Result<(), Bo
     assert_eq!(
         tool_input,
         [
-            &ToolEvent::InputStarted { id: "call_1".into(), name: "test__add_numbers".into() },
+            &ToolEvent::InputStarted { id: "call_1".into(), name: "test__add_numbers".into(), kind: None },
             &ToolEvent::InputDelta { id: "call_1".into(), chunk: arg_chunk_1.into() },
             &ToolEvent::InputDelta { id: "call_1".into(), chunk: arg_chunk_2.into() },
             &ToolEvent::Call {
@@ -226,6 +226,7 @@ async fn streamed_tool_input_is_followed_by_the_complete_call() -> Result<(), Bo
                     name: "test__add_numbers".into(),
                     arguments: request_json.clone(),
                 },
+                kind: None,
             },
         ]
     );
