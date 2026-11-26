@@ -257,6 +257,7 @@ The top-level `providers` object (or per-agent `providers`) overrides how Aether
 | `requestModel`        | Overrides the model id sent in requests without changing the catalog identity used for capabilities, context window, and display. |
 | `inferenceProfileArn` | Bedrock application inference profile ARN to route requests through.       |
 | `idleTimeoutSecs`     | Seconds the provider may stay silent, before responding or between stream events, before the request fails with a retryable timeout. Defaults to 300; raise it for slow local models. |
+| `transport`           | How Responses API requests travel: `websocket` or `http`. OpenAI and Codex default to `websocket`, where a turn that continues the previous one sends only what is new; a provider with a custom `url` defaults to `http`. An endpoint that refuses the WebSocket upgrade falls back to HTTP automatically. |
 
 ```json title=".aether/settings.json"
 {
@@ -272,7 +273,7 @@ The top-level `providers` object (or per-agent `providers`) overrides how Aether
 }
 ```
 
-The CLI equivalents are `--provider PROVIDER.url=...`, `--provider PROVIDER.auth=...`, `--provider PROVIDER.request-model=...`, `--provider PROVIDER.idle-timeout-secs=...`, and `--provider bedrock.inference-profile-arn=...`.
+The CLI equivalents are `--provider PROVIDER.url=...`, `--provider PROVIDER.auth=...`, `--provider PROVIDER.request-model=...`, `--provider PROVIDER.idle-timeout-secs=...`, `--provider PROVIDER.transport=...`, and `--provider bedrock.inference-profile-arn=...`.
 
 ## Reasoning effort
 
