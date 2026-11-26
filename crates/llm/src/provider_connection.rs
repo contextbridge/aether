@@ -14,6 +14,13 @@ pub enum ProviderAuthMode {
     None,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ResponsesTransport {
+    Http,
+    WebSocket,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ProviderConnectionConfig {
     pub base_url: Option<String>,
@@ -21,6 +28,7 @@ pub struct ProviderConnectionConfig {
     pub request_model: Option<String>,
     pub inference_profile_arn: Option<String>,
     pub idle_timeout: Duration,
+    pub transport: Option<ResponsesTransport>,
 }
 
 #[doc = include_str!("docs/provider_connection_override.md")]
@@ -42,6 +50,8 @@ pub struct ProviderConnectionOverride {
     pub inference_profile_arn: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idle_timeout_secs: Option<NonZeroU64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transport: Option<ResponsesTransport>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize, schemars::JsonSchema)]
@@ -60,6 +70,7 @@ impl ProviderConnectionConfig {
             idle_timeout: value
                 .idle_timeout_secs
                 .map_or(DEFAULT_STREAM_IDLE_TIMEOUT, |secs| Duration::from_secs(secs.get())),
+            transport: value.transport,
         }
     }
 }
@@ -72,7 +83,17 @@ impl Default for ProviderConnectionConfig {
             request_model: None,
             inference_profile_arn: None,
             idle_timeout: DEFAULT_STREAM_IDLE_TIMEOUT,
+            transport: None,
         }
+    }
+}
+
+impl ProviderConnectionConfig {
+    pub(crate) fn responses_transport(&self, preferred: ResponsesTransport) -> ResponsesTransport {
+        self.transport.unwrap_or(match self.base_url {
+            Some(_) => ResponsesTransport::Http,
+            None => preferred,
+        })
     }
 }
 
@@ -91,6 +112,10 @@ impl ProviderConnectionOverride {
 
     pub fn inference_profile_arn(arn: impl Into<String>) -> Self {
         Self { inference_profile_arn: Some(arn.into()), ..Self::default() }
+    }
+
+    pub fn transport(transport: ResponsesTransport) -> Self {
+        Self { transport: Some(transport), ..Self::default() }
     }
 
     pub fn idle_timeout_secs(secs: NonZeroU64) -> Self {
@@ -112,6 +137,9 @@ impl ProviderConnectionOverride {
         }
         if override_value.idle_timeout_secs.is_some() {
             self.idle_timeout_secs = override_value.idle_timeout_secs;
+        }
+        if override_value.transport.is_some() {
+            self.transport = override_value.transport;
         }
     }
 }

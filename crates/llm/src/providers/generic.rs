@@ -3,7 +3,7 @@
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
 use serde::Serialize;
 use std::borrow::Cow;
-use std::future::Future;
+use std::future::{Future, ready};
 use std::time::Duration;
 use utils::variables::Vars;
 
@@ -17,14 +17,14 @@ pub use crate::providers::openai::chat::ChatRequestPolicy;
 use crate::providers::openai::chat::build_chat_request;
 use crate::providers::openai::chat::streaming::decode_sse_chunk;
 use crate::providers::openai::chat::types::{CompatibleChatMessage, CompatibleChatRequest, ToolCall};
+use crate::providers::openai::responses::client::{ResponsesCall, ResponsesClient};
 use crate::providers::openai::responses::mappers::build_request as build_responses_request;
-use crate::providers::openai::responses::streaming::decode_responses;
 use crate::providers::openai::wire::PromptCacheKeySource;
 use crate::providers::response_stream::{OpenedStream, error_stream, response_stream};
 use crate::tool_schema::normalize_for_moonshot;
 use crate::{
     AssistantContent, ChatMessage, Context, LlmError, LlmModel, LlmResponseStream, ProviderAuthMode,
-    ProviderConnectionConfig, Result, StreamingModelProvider,
+    ProviderConnectionConfig, ResponsesTransport, Result, StreamingModelProvider,
 };
 
 pub use crate::providers::openai::responses::mappers::ResponsesRequestPolicy;
@@ -39,7 +39,7 @@ pub struct ProviderConfig {
 
 pub enum Api {
     ChatCompletions(ChatRequestPolicy),
-    Responses(ResponsesRequestPolicy),
+    Responses(ResponsesRequestPolicy, ResponsesTransport),
     Messages,
 }
 
@@ -56,7 +56,7 @@ pub const OPENAI: ProviderConfig = ProviderConfig {
     api_base: Some("https://api.openai.com/v1"),
     api_base_env: None,
     default_model: "gpt-4.1",
-    api: Api::Responses(ResponsesRequestPolicy::OPENAI),
+    api: Api::Responses(ResponsesRequestPolicy::OPENAI, ResponsesTransport::WebSocket),
 };
 
 pub const XIAOMI: ProviderConfig = ProviderConfig {
@@ -64,7 +64,7 @@ pub const XIAOMI: ProviderConfig = ProviderConfig {
     api_base: Some("https://api.xiaomimimo.com/v1"),
     api_base_env: None,
     default_model: "mimo-v2.6-pro",
-    api: Api::Responses(ResponsesRequestPolicy::XIAOMI),
+    api: Api::Responses(ResponsesRequestPolicy::XIAOMI, ResponsesTransport::Http),
 };
 
 pub const DEEPSEEK: ProviderConfig = ProviderConfig {
@@ -175,6 +175,7 @@ pub(crate) const BUILT_INS: &[&ProviderConfig] = &[
 pub struct GenericProvider {
     config: &'static ProviderConfig,
     http: reqwest::Client,
+    responses: ResponsesClient,
     api_base: String,
     headers: HeaderMap,
     model: String,
@@ -220,6 +221,10 @@ impl GenericProvider {
         config: &'static ProviderConfig,
         connection: ProviderConnectionConfig,
     ) -> Result<Self> {
+        let transport = match &config.api {
+            Api::Responses(_, preferred) => connection.responses_transport(*preferred),
+            Api::ChatCompletions(_) | Api::Messages => ResponsesTransport::Http,
+        };
         let api_base = connection
             .base_url
             .or_else(|| config.api_base.map(str::to_string))
@@ -228,9 +233,11 @@ impl GenericProvider {
         if config.provider.is_local() && !api_base.ends_with("/v1") {
             api_base.push_str("/v1");
         }
+        let http = http_client();
         Ok(Self {
             config,
-            http: http_client(),
+            responses: ResponsesClient::new(http.clone(), &api_base, transport, connection.idle_timeout),
+            http,
             api_base,
             headers: api_headers(&config.api, api_key, connection.auth_mode)?,
             model: config.default_model.to_string(),
@@ -240,6 +247,7 @@ impl GenericProvider {
     }
 
     pub fn with_model(mut self, model: &str) -> Self {
+        self.responses = self.responses.for_another_owner();
         self.model = model.to_string();
         self
     }
@@ -251,7 +259,7 @@ impl StreamingModelProvider for GenericProvider {
         let wire_model = self.request_model.as_deref().unwrap_or(&self.model);
         let stream = validate_reasoning(context, identity.as_ref()).and_then(|()| match &self.config.api {
             Api::ChatCompletions(policy) => self.stream_chat_completions(wire_model, context, policy),
-            Api::Responses(policy) => self.stream_responses(identity.as_ref(), wire_model, context, policy),
+            Api::Responses(policy, _) => self.stream_responses(identity.as_ref(), wire_model, context, policy),
             Api::Messages => self.stream_messages(identity.as_ref(), wire_model, context),
         });
         stream.unwrap_or_else(error_stream)
@@ -286,7 +294,7 @@ impl GenericProvider {
         policy: &ResponsesRequestPolicy,
     ) -> Result<LlmResponseStream> {
         let request = build_responses_request(identity, wire_model, context, policy)?;
-        Ok(response_stream(self.post("responses", &request, responses_code), decode_responses(), self.idle_timeout))
+        Ok(self.responses.stream(ready(Ok(ResponsesCall { request, headers: self.headers.clone() }))))
     }
 
     fn stream_messages(
@@ -317,7 +325,7 @@ fn api_headers(api: &Api, api_key: &str, auth_mode: ProviderAuthMode) -> Result<
     }
     if auth_mode == ProviderAuthMode::Default && !api_key.is_empty() {
         let (name, value) = match api {
-            Api::ChatCompletions(_) | Api::Responses(_) => (AUTHORIZATION, format!("Bearer {api_key}")),
+            Api::ChatCompletions(_) | Api::Responses(..) => (AUTHORIZATION, format!("Bearer {api_key}")),
             Api::Messages => (HeaderName::from_static("x-api-key"), api_key.to_string()),
         };
         let mut value = HeaderValue::from_str(&value)?;
@@ -721,7 +729,7 @@ mod tests {
                     assert_eq!(captured.path, "/chat/completions");
                     assert_eq!(captured.body["stream_options"]["include_usage"], true);
                 }
-                Api::Responses(_) => assert_eq!(captured.path, "/responses"),
+                Api::Responses(..) => assert_eq!(captured.path, "/responses"),
                 Api::Messages => {
                     assert_eq!(captured.path, "/v1/messages");
                     assert_eq!(captured.headers["anthropic-version"], "2023-06-01");
