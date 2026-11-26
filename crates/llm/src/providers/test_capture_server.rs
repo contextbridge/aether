@@ -5,22 +5,25 @@ use crate::{
 };
 use axum::body::Body;
 use axum::extract::State;
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::http::header::CONTENT_TYPE;
 use axum::http::{HeaderMap, StatusCode};
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
 use futures::{StreamExt, stream};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 
 pub(crate) struct CaptureServer {
     pub(crate) base_url: String,
+    pub(crate) upgrades: Arc<AtomicUsize>,
     receiver: mpsc::UnboundedReceiver<CapturedRequest>,
 }
 
@@ -35,13 +38,28 @@ pub(crate) struct ProviderFixtureBuilder {
     api_key: String,
     connection: ProviderConnectionConfig,
     response: ResponseSpec,
+    sockets: SocketBehavior,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum SocketBehavior {
+    #[default]
+    Remembers,
+    CallsTool,
+    SplitsReply,
+    UnknownOutput,
+    Forgets,
+    Expires,
+    ClosesWhenIdle,
+    DropsMidResponse,
+    RejectsUpgrade(StatusCode),
 }
 
 impl ProviderFixture {
     pub(crate) fn builder(config: &'static ProviderConfig) -> ProviderFixtureBuilder {
         let body = match config.api {
             Api::ChatCompletions(_) => CHAT_COMPLETIONS_FIXTURE,
-            Api::Responses(_) => RESPONSES_FIXTURE,
+            Api::Responses(..) => RESPONSES_FIXTURE,
             Api::Messages => MESSAGES_FIXTURE,
         };
         ProviderFixtureBuilder {
@@ -50,6 +68,7 @@ impl ProviderFixture {
             api_key: "key".into(),
             connection: ProviderConnectionConfig { auth_mode: ProviderAuthMode::None, ..Default::default() },
             response: ResponseSpec::sse(body),
+            sockets: SocketBehavior::default(),
         }
     }
 
@@ -85,8 +104,13 @@ impl ProviderFixtureBuilder {
         self
     }
 
+    pub(crate) fn sockets(mut self, sockets: SocketBehavior) -> Self {
+        self.sockets = sockets;
+        self
+    }
+
     pub(crate) async fn build(mut self) -> ProviderFixture {
-        let server = CaptureServer::start_with_spec(self.response).await;
+        let server = CaptureServer::start(self.response, self.sockets).await;
         self.connection.base_url.get_or_insert_with(|| format!("{}/", server.base_url));
         let provider = GenericProvider::new_with_connection(&self.api_key, self.config, self.connection).unwrap();
         let provider = match self.model {
@@ -162,13 +186,16 @@ pub(crate) fn hello_context() -> Context {
     Context::new(vec![ChatMessage::user("Hello")], vec![])
 }
 
+#[derive(Debug)]
 pub(crate) struct CapturedRequest {
+    pub(crate) socket: Option<usize>,
     pub(crate) path: String,
     pub(crate) headers: HeaderMap,
     pub(crate) body: Value,
 }
 
 impl CaptureServer {
+    #[cfg(any(feature = "bedrock", feature = "codex"))]
     pub(crate) async fn start_responses() -> Self {
         Self::start_with_response(RESPONSES_FIXTURE).await
     }
@@ -182,23 +209,37 @@ impl CaptureServer {
     }
 
     pub(crate) async fn start_with_spec(spec: ResponseSpec) -> Self {
+        Self::start(spec, SocketBehavior::default()).await
+    }
+
+    #[cfg(feature = "codex")]
+    pub(crate) async fn start_responses_with_sockets(sockets: SocketBehavior) -> Self {
+        Self::start(ResponseSpec::sse(RESPONSES_FIXTURE), sockets).await
+    }
+
+    async fn start(spec: ResponseSpec, sockets: SocketBehavior) -> Self {
         let (sender, receiver) = mpsc::unbounded_channel();
+        let upgrades = Arc::new(AtomicUsize::new(0));
         let app = Router::new()
-            .route("/responses", post(capture))
+            .route("/responses", post(capture).get(upgrade))
             .route("/v1/messages", post(capture))
             .route("/chat/completions", post(capture))
             .route("/v1/chat/completions", post(capture))
             .route("/model/{model}/converse-stream", post(capture))
             .route("/model/{model}/invoke-with-response-stream", post(capture))
-            .with_state(Arc::new(CaptureState { sender, response: spec }));
+            .with_state(Arc::new(CaptureState { sender, response: spec, sockets, opened: Arc::clone(&upgrades) }));
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base_url = format!("http://{}", listener.local_addr().unwrap());
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        Self { base_url, receiver }
+        Self { base_url, upgrades, receiver }
     }
 
     pub(crate) async fn captured(&mut self) -> CapturedRequest {
         self.receiver.recv().await.expect("no request captured")
+    }
+
+    pub(crate) fn drain(&mut self) -> Vec<CapturedRequest> {
+        std::iter::from_fn(|| self.receiver.try_recv().ok()).collect()
     }
 
     pub(crate) async fn collect_on_paused_clock(&mut self, responses: LlmResponseStream) -> Vec<Result<LlmResponse>> {
@@ -218,6 +259,8 @@ const MESSAGES_FIXTURE: &str = include_str!("../../tests/fixtures/anthropic/01_m
 struct CaptureState {
     sender: mpsc::UnboundedSender<CapturedRequest>,
     response: ResponseSpec,
+    sockets: SocketBehavior,
+    opened: Arc<AtomicUsize>,
 }
 
 async fn capture(
@@ -226,7 +269,7 @@ async fn capture(
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> impl IntoResponse {
-    state.sender.send(CapturedRequest { path: uri.path().to_string(), headers, body }).ok();
+    state.sender.send(CapturedRequest { socket: None, path: uri.path().to_string(), headers, body }).ok();
     let status = StatusCode::from_u16(state.response.status).unwrap_or(StatusCode::OK);
     let mut response_headers = HeaderMap::new();
     response_headers.insert(CONTENT_TYPE, "text/event-stream".parse().unwrap());
@@ -236,4 +279,72 @@ async fn capture(
         }
     }
     (status, response_headers, state.response.response_body())
+}
+
+async fn upgrade(State(state): State<Arc<CaptureState>>, headers: HeaderMap, upgrade: WebSocketUpgrade) -> Response {
+    let socket = state.opened.fetch_add(1, Ordering::Relaxed);
+    if let SocketBehavior::RejectsUpgrade(status) = state.sockets {
+        return status.into_response();
+    }
+    upgrade.on_upgrade(move |connection| serve_socket(connection, state, headers, socket))
+}
+
+async fn serve_socket(mut connection: WebSocket, state: Arc<CaptureState>, headers: HeaderMap, socket: usize) {
+    let mut cached = None;
+    for turn in 0.. {
+        let Some(Ok(Message::Text(frame))) = connection.recv().await else { return };
+        let body: Value = serde_json::from_str(&frame).expect("frames are JSON");
+        let previous = body["previous_response_id"].as_str().map(str::to_owned);
+        let captured =
+            CapturedRequest { socket: Some(socket), path: "/responses".into(), headers: headers.clone(), body };
+        state.sender.send(captured).ok();
+
+        let id = format!("resp_{socket}_{turn}");
+        let refusal = match state.sockets {
+            SocketBehavior::Expires if turn > 0 => Some("websocket_connection_limit_reached"),
+            _ if previous.is_some() && previous != cached => Some("previous_response_not_found"),
+            _ => None,
+        };
+        let mut frames = match refusal {
+            Some(code) => vec![json!({ "type": "error", "status": 400, "error": { "code": code, "message": code } })],
+            None => response_frames(&id, &output_items(state.sockets, turn)),
+        };
+        if state.sockets == SocketBehavior::DropsMidResponse {
+            frames.truncate(2);
+        }
+
+        for frame in std::iter::once(json!({ "type": "codex.rate_limits" })).chain(frames) {
+            if connection.send(Message::text(frame.to_string())).await.is_err() {
+                return;
+            }
+        }
+        if matches!(state.sockets, SocketBehavior::ClosesWhenIdle | SocketBehavior::DropsMidResponse) {
+            return;
+        }
+        cached = (refusal.is_none() && state.sockets != SocketBehavior::Forgets).then_some(id);
+    }
+}
+
+fn output_items(sockets: SocketBehavior, turn: usize) -> Vec<Value> {
+    let message = |text: &str| json!({ "type": "message", "role": "assistant", "content": [{ "type": "output_text", "text": text }] });
+    match sockets {
+        SocketBehavior::CallsTool if turn == 0 => {
+            vec![json!({ "type": "function_call", "name": "read", "call_id": "call_1", "arguments": "{}" })]
+        }
+        SocketBehavior::SplitsReply => vec![message("Working on it. "), message("Done.")],
+        SocketBehavior::UnknownOutput => vec![message("hi"), json!({ "type": "web_search_call", "id": "ws_1" })],
+        _ => vec![message("hi")],
+    }
+}
+
+fn response_frames(id: &str, output: &[Value]) -> Vec<Value> {
+    let mut frames = vec![json!({ "type": "response.created", "response": { "id": id } })];
+    for (output_index, item) in output.iter().enumerate() {
+        if let Some(text) = item["content"][0]["text"].as_str() {
+            frames.push(json!({ "type": "response.output_text.delta", "delta": text }));
+        }
+        frames.push(json!({ "type": "response.output_item.done", "output_index": output_index, "item": item }));
+    }
+    frames.push(json!({ "type": "response.completed", "response": { "id": id, "status": "completed" } }));
+    frames
 }

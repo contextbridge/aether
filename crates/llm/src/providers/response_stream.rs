@@ -49,6 +49,10 @@ impl<T> OpenedStream<T> {
         Self { events, http: None }
     }
 
+    pub(crate) fn map_events<U>(self, map: impl FnOnce(T) -> U) -> OpenedStream<U> {
+        OpenedStream { events: map(self.events), http: self.http }
+    }
+
     pub(crate) fn with_http(mut self, http: HttpResponseMetadata) -> Self {
         self.http = Some(http);
         self

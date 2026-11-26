@@ -294,6 +294,7 @@ mod tests {
                 request_model: Some("production-coding".to_string()),
                 inference_profile_arn: None,
                 idle_timeout_secs: None,
+                transport: None,
             },
         )]));
 
