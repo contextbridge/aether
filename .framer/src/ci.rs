@@ -75,7 +75,7 @@ fn checkout() -> Step {
 }
 
 fn mise() -> Step {
-    Step::uses("jdx/mise-action@236a21c3b91f5db6d4e174b348674a0f0caac06d")
+    Step::uses("jdx/mise-action@90f833d396d0cc3674b631d2d225e306476c303a")
 }
 
 fn run(name: &str, command: &str) -> Step {
