@@ -17,6 +17,6 @@
   },
   "dependencies": {
     "json-schema-to-typescript": "^16.0.0",
-    "prettier": "^3.9.10"
+    "prettier": "^3.10.1"
   }
 }
