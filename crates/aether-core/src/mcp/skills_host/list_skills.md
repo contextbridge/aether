@@ -1,0 +1,1 @@
+Lists available skills.

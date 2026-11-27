@@ -34,7 +34,8 @@ sha2 = { workspace = true }
 base16ct = { workspace = true }
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
 tokio-stream = { workspace = true }
-rmcp = { workspace = true, features = ["client", "server", "elicitation"] }
+rmcp = { workspace = true, features = ["client", "server", "elicitation", "macros"] }
+base64 = { workspace = true }
 schemars = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }

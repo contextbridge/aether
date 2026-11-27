@@ -1,12 +1,13 @@
 use super::deferred_tools;
+use super::skills_host::SkillsHost;
 use super::tool_bridge::tool_definition;
 use super::{ToolExposure, ToolFilter};
 use crate::core::McpInstructions;
 use foxfire_acp::mcp_status::McpServerStatusEntry;
-use futures::Stream;
+use futures::{Stream, stream};
 use llm::ToolDefinition;
 use mcp_utils::client::{ClientOptions, ToolCall, ToolCallOptions};
-use mcp_utils::gateway::{ConnectedServer, GatewayError, McpGateway, ServerPrompt};
+use mcp_utils::gateway::{ConnectedServer, GatewayError, McpGateway, ServerPrompt, ServerSpec};
 use mcp_utils::model::{GetPromptResult, Tool};
 use mcp_utils::server::{ServerHandle, UnixSocket};
 use mcp_utils::tool_kind::{ToolKind, declared_tool_kind};
@@ -24,10 +25,11 @@ pub struct McpCatalog {
 impl McpCatalog {
     pub async fn ready(&self) {
         self.core.gateway.ready().await;
+        self.core.skills_host.ready().await;
     }
 
     pub fn changes(&self) -> impl Stream<Item = ()> + Send + Sync + Unpin + use<> {
-        self.core.gateway.changes()
+        stream::select(self.core.gateway.changes(), self.core.skills_host.changes())
     }
 
     pub fn statuses(&self) -> Vec<McpServerStatusEntry> {
@@ -85,16 +87,22 @@ impl McpCatalog {
         if let Some(server) = &self.deferred_tools_server {
             server.stop();
         }
+        self.core.skills_host.shutdown().await;
         self.core.gateway.shutdown().await;
     }
 
     pub(crate) fn new(
         gateway: McpGateway,
         filter: ToolFilter,
-        exposures: HashMap<String, ToolExposure>,
+        mut exposures: HashMap<String, ToolExposure>,
         socket: Option<UnixSocket>,
     ) -> Self {
-        let core = CatalogCore { gateway, policy: Arc::new(ToolPolicy { filter, exposures }) };
+        let skills_host = SkillsHost::new("aether", gateway.clone());
+        exposures.entry(skills_host.name().to_string()).or_default();
+        let skills_host = ServerSpec::in_process(skills_host.name().to_string(), skills_host);
+        let skills_host = if gateway.statuses().is_empty() { Vec::new() } else { vec![skills_host] };
+        let skills_host = McpGateway::new(skills_host, &ClientOptions::default());
+        let core = CatalogCore { gateway, skills_host, policy: Arc::new(ToolPolicy { filter, exposures }) };
         let deferred_tools_server = socket.map(|socket| Arc::new(deferred_tools::serve(core.clone(), socket)));
         Self { core, deferred_tools_server }
     }
@@ -122,12 +130,13 @@ pub(super) enum Tier {
 #[derive(Clone)]
 pub(super) struct CatalogCore {
     gateway: McpGateway,
+    skills_host: McpGateway,
     policy: Arc<ToolPolicy>,
 }
 
 impl CatalogCore {
     pub(super) fn servers(&self, tier: Tier) -> Vec<(ConnectedServer, Vec<Tool>)> {
-        let servers = self.gateway.servers().into_iter();
+        let servers = self.connected().into_iter();
         servers
             .filter_map(|server| {
                 let offered = server.tools().iter().filter(|tool| self.policy.tier(server.name(), tool) == Some(tier));
@@ -172,10 +181,18 @@ impl CatalogCore {
         with_tool: impl FnOnce(&ConnectedServer, &Tool, Tier) -> Option<T>,
     ) -> Option<T> {
         let (server, tool_name) = self.split(name)?;
-        let server = self.gateway.server(server)?;
+        let server = self.connected().into_iter().find(|connected| connected.name() == server)?;
         let tool = server.tools().iter().find(|offered| offered.name == tool_name)?;
         let tier = self.policy.tier(server.name(), tool)?;
         with_tool(&server, tool, tier)
+    }
+
+    fn connected(&self) -> Vec<ConnectedServer> {
+        let mut servers = self.gateway.servers();
+        if servers.iter().any(|server| server.client().capabilities().supports_skills()) {
+            servers.extend(self.skills_host.servers());
+        }
+        servers
     }
 
     fn split<'n>(&self, name: &'n str) -> Option<(&str, &'n str)> {
