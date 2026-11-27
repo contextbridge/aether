@@ -91,13 +91,13 @@ fn deny_wins_over_allow() {
 
 #[test]
 fn mixed_allow_entries_are_ored() {
-    let filter = ToolFilter { allow: vec![ToolMatcher::read_only(), ToolMatcher::name("review__*")], deny: vec![] };
+    let filter = ToolFilter { allow: vec![ToolMatcher::read_only(), ToolMatcher::name("tasks__*")], deny: vec![] };
     let tools = [
         annotated("coding__grep", ToolAnnotations::new().read_only(true)),
-        tool("review__review_artifact"),
+        tool("tasks__task_create"),
         tool("coding__bash"),
     ];
-    assert_eq!(allowed(&filter, tools), ["coding__grep", "review__review_artifact"]);
+    assert_eq!(allowed(&filter, tools), ["coding__grep", "tasks__task_create"]);
 }
 
 #[test]

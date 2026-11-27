@@ -11,13 +11,12 @@ async fn builtin_servers_list_their_tools_over_stdio() {
     let dir = dir.path().to_str().unwrap();
     let coding =
         &["bash", "edit_file", "lsp_check_errors", "lsp_rename", "lsp_symbol", "read_file", "web_fetch", "write_file"];
-    let cases: [(&str, &[&str], &[&str]); 6] = [
+    let cases: [(&str, &[&str], &[&str]); 5] = [
         ("tasks", &["--dir", dir], &["task_create", "task_get", "task_list", "task_update"]),
         ("coding", &[], coding),
         ("coding", &["--rules-dir", dir], coding),
         ("skills", &["--dir", dir], &[]),
         ("subagents", &["--dir", dir], &["spawn_subagent"]),
-        ("review", &[], &["review_artifact"]),
     ];
 
     for (server, args, expected) in cases {

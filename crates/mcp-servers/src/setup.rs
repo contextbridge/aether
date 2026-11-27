@@ -1,5 +1,5 @@
 use crate::coding::tools::bash::BashEnvironment;
-use crate::{CodingMcp, ReviewMcp, SkillsMcp, SubAgentsMcp, TasksMcp};
+use crate::{CodingMcp, SkillsMcp, SubAgentsMcp, TasksMcp};
 use aether_core::core::AgentDeps;
 use aether_core::mcp::{AETHER_MCP_IPC_SOCKET, McpBuilder, RuntimeServices, ToolFilter, mcp};
 use clap::{Parser, ValueEnum};
@@ -17,7 +17,6 @@ pub enum Builtin {
     Skills,
     Tasks,
     Subagents,
-    Review,
 }
 
 pub fn agent_mcp(root: impl AsRef<Path>, deps: AgentDeps, tools: ToolFilter) -> McpBuilder {
@@ -39,7 +38,6 @@ impl Builtin {
             Self::Skills => "skills",
             Self::Tasks => "tasks",
             Self::Subagents => "subagents",
-            Self::Review => "review",
         }
     }
 
@@ -51,7 +49,6 @@ impl Builtin {
             }
             Self::Skills => SkillsMcp::from_args(parse(args)?, root).into(),
             Self::Tasks => TasksMcp::from_args(parse(args)?, root).into(),
-            Self::Review => ReviewMcp::from_args(parse(args)?, root).into(),
             Self::Subagents => SubAgentsMcp::from_args(parse(args)?, root, services.agent_deps.clone()).into(),
         })
     }

@@ -22,4 +22,3 @@ let builder = mcp("/my/project")
 - [`SkillsMcp`](crate::SkillsMcp) -- Skills and slash commands
 - [`TasksMcp`](crate::TasksMcp) -- Task management
 - [`SubAgentsMcp`](crate::SubAgentsMcp) -- Sub-agent orchestration
-- [`ReviewMcp`](crate::ReviewMcp) -- Markdown artifact review workflow

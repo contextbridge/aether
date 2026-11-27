@@ -24,7 +24,7 @@ dist = false
 workspace = true
 
 [features]
-default = ["coding", "skills", "tasks", "subagents", "review"]
+default = ["coding", "skills", "tasks", "subagents"]
 test-helpers = ["utils/testing"]
 file-ops = []
 coding = [
@@ -46,12 +46,10 @@ tasks = [
     "dep:tempfile",
     "dep:uuid",
 ]
-review = ["dep:axum", "dep:uuid", "dep:reqwest", "dep:tokio-util", "dep:tower-http", "tokio/net"]
 subagents = [
     "coding",
     "skills",
     "tasks",
-    "review",
     "dep:aether-auth",
     "dep:aether-core",
     "dep:aether-project",
@@ -81,10 +79,7 @@ chrono = { workspace = true, optional = true }
 htmd = { workspace = true, optional = true }
 dom_smoothie = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
-axum = { workspace = true, optional = true }
 uuid = { workspace = true, optional = true }
-tokio-util = { workspace = true, optional = true }
-tower-http = { workspace = true, optional = true, features = ["fs"] }
 
 # skills feature
 regex = { workspace = true, optional = true }
@@ -100,8 +95,6 @@ llm = { package = "aether-llm", path = "../llm", optional = true, version = "0.1
 
 [dev-dependencies]
 tempfile = { workspace = true }
-axum = { workspace = true }
-reqwest = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 clankerdiff-lspd = { workspace = true, features = ["test-support"] }
 mcp-servers = { package = "aether-mcp-servers", path = ".", features = ["test-helpers"] }

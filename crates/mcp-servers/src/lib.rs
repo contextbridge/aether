@@ -3,7 +3,7 @@
 #[cfg(any(feature = "coding", feature = "subagents"))]
 mod background_tasks;
 
-#[cfg(any(feature = "coding", feature = "review"))]
+#[cfg(feature = "coding")]
 mod request_context;
 
 #[cfg(any(feature = "coding", feature = "skills", feature = "tasks", feature = "subagents"))]
@@ -38,9 +38,6 @@ pub mod tasks;
 #[cfg(feature = "subagents")]
 pub mod subagents;
 
-#[cfg(feature = "review")]
-pub mod review;
-
 #[cfg(feature = "coding")]
 pub use coding::{CodingMcp, CodingMcpArgs, PermissionMode};
 
@@ -56,12 +53,7 @@ pub use tasks::{TasksMcp, TasksMcpArgs};
 #[cfg(feature = "subagents")]
 pub use subagents::{SubAgentsMcp, SubAgentsMcpArgs};
 
-#[cfg(feature = "review")]
-pub use review::{
-    ArtifactFormat, ArtifactSource, HtmlAnnotation, ReviewArtifactInput, ReviewArtifactOutput, ReviewMcp, ReviewMcpArgs,
-};
-
-#[cfg(any(feature = "coding", feature = "skills", feature = "tasks", feature = "review"))]
+#[cfg(any(feature = "coding", feature = "skills", feature = "tasks"))]
 pub(crate) fn server_config(
     name: &str,
     capabilities: rmcp::model::ServerCapabilities,
