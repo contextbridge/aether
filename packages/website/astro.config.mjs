@@ -108,7 +108,6 @@ export default defineConfig({
               label: "Sub-Agents",
               slug: "aether/built-in-servers/subagents",
             },
-            { label: "Review", slug: "aether/built-in-servers/review" },
           ],
         },
         {

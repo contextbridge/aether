@@ -26,7 +26,7 @@ First you must:
 
 ### Step 3: Generate Implementation Plan
 
-Generate an implementation plan and save it with the `coding__write_file` tool in `docs/aether/plans`. Choose a short stable name such as `auth-refactor-plan.md`. Then present your plan to the user via the `review__review_artifact` tool using the plan path. It must include the following sections:
+Generate an implementation plan and save it with the `coding__write_file` tool in `docs/aether/plans`. Choose a short stable name such as `auth-refactor-plan.md`. It must include the following sections:
 
 **Overview**
 - Clear problem statement

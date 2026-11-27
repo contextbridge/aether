@@ -4,10 +4,10 @@ description: Configure the MCP servers that give agents their tools.
 ---
 
 import {
-    Tabs,
-    TabItem,
-    CardGrid,
-    LinkCard,
+  Tabs,
+  TabItem,
+  CardGrid,
+  LinkCard,
 } from "@astrojs/starlight/components";
 
 Agents get tools from MCP (Model Context Protocol) servers. MCP sources are declared via the `mcps` field in either user settings (`$HOME/.aether/settings.json`) or project settings (`.aether/settings.json`). A common convention is to keep server definitions in a dedicated `mcp.json` file and reference it from `mcps`.
@@ -58,8 +58,7 @@ If a server entry has a `command` and no `type`, it is treated as `"type": "stdi
           "args": ["--dir", ".aether/skills"]
         },
         "tasks": { "type": "in-memory" },
-        "subagents": { "type": "in-memory" },
-        "review": { "type": "in-memory" }
+        "subagents": { "type": "in-memory" }
       }
     }
     ```
@@ -152,11 +151,11 @@ Set `oauth.clientMetadataUrl` to use a custom CIMD, or `oauth.clientId` for a pu
 }
 ```
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `oauth.clientId` | `string` | Public OAuth client ID registered with the provider. Takes priority over CIMD. Supports `$VAR` / `${VAR}` expansion. |
-| `oauth.clientMetadataUrl` | `string` | HTTPS URL of a custom Client ID Metadata Document. Supports variable expansion. |
-| `oauth.callbackPort` | `number` | Loopback callback port; defaults to `3118`. The advertised URI is `http://localhost:<callbackPort>/` and must exactly match the client metadata or registration. |
+| Field                     | Type     | Description                                                                                                                                                      |
+| ------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `oauth.clientId`          | `string` | Public OAuth client ID registered with the provider. Takes priority over CIMD. Supports `$VAR` / `${VAR}` expansion.                                             |
+| `oauth.clientMetadataUrl` | `string` | HTTPS URL of a custom Client ID Metadata Document. Supports variable expansion.                                                                                  |
+| `oauth.callbackPort`      | `number` | Loopback callback port; defaults to `3118`. The advertised URI is `http://localhost:<callbackPort>/` and must exactly match the client metadata or registration. |
 
 When the authorization server does not advertise CIMD support, Aether falls back to deprecated Dynamic Client Registration for compatibility. OAuth discovery, PKCE, scopes, `offline_access`, resource indicators, refresh, and issuer validation are handled by `rmcp`. An `Authorization` header on its own turns off the default OAuth sign-in. A server can set at most one of `oauth`, `sigv4` or an `Authorization` header.
 
@@ -180,23 +179,22 @@ Set `sigv4` to sign every request with AWS Signature Version 4, for example to r
 }
 ```
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `sigv4.service` | `string` | Required. Signing name of the AWS service in front of the server, e.g. `execute-api` (API Gateway) or `lambda` (function URLs). |
-| `sigv4.region` | `string` | Required. Region to sign for. `$AWS_REGION` takes it from the environment, but the config fails to load when that variable is unset. |
+| Field           | Type     | Description                                                                                                                                                          |
+| --------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sigv4.service` | `string` | Required. Signing name of the AWS service in front of the server, e.g. `execute-api` (API Gateway) or `lambda` (function URLs).                                      |
+| `sigv4.region`  | `string` | Required. Region to sign for. `$AWS_REGION` takes it from the environment, but the config fails to load when that variable is unset.                                 |
 | `sigv4.profile` | `string` | Optional named profile. Omit to use the default AWS credential chain (environment, shared config, SSO, web identity, ECS, IMDS), which already honors `AWS_PROFILE`. |
 
 All fields support variable expansion. A server can set at most one of `oauth`, `sigv4` or an `Authorization` header; `sigv4` sends its signature in the `Authorization` header.
 
 ## Built-in servers
 
-| Server      | Purpose                                                                  | Args                                                                                                                  |
-| ----------- | ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| Server      | Purpose                                                       | Args                                                                                                                  |
+| ----------- | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | `coding`    | File I/O, bash, web fetch/search, and LSP-backed coding tools | `--root-dir <path>`, repeat `--rules-dir <path>`, `--permission-mode always-allow\|auto\|always-ask`, `--disable-lsp` |
-| `skills`    | Skill discovery, slash-command prompts, and rules                        | Required: repeat `--dir <path>`                                                                                         |
-| `tasks`     | Hierarchical task management                                             | Optional `--dir <base>` for persistent storage                                                                        |
-| `subagents` | Spawn child agents from loaded settings                                  | `--project-root <path>` (alias: `--dir`; defaults to the workspace root)                                              |
-| `review`    | Markdown and HTML artifact review through elicitation                    | Optional `--root-dir <path>`                                                                                          |
+| `skills`    | Skill discovery, slash-command prompts, and rules             | Required: repeat `--dir <path>`                                                                                       |
+| `tasks`     | Hierarchical task management                                  | Optional `--dir <base>` for persistent storage                                                                        |
+| `subagents` | Spawn child agents from loaded settings                       | `--project-root <path>` (alias: `--dir`; defaults to the workspace root)                                              |
 
 <CardGrid>
   <LinkCard
@@ -218,11 +216,6 @@ All fields support variable expansion. A server can set at most one of `oauth`, 
     title="Sub-Agents"
     description="Spawn child agents in parallel"
     href="/aether/built-in-servers/subagents/"
-  />
-  <LinkCard
-    title="Review"
-    description="Markdown & HTML artifact review and contextual feedback"
-    href="/aether/built-in-servers/review/"
   />
 </CardGrid>
 
@@ -395,7 +388,6 @@ Tool names use `server__tool` with a double underscore. Patterns support exact n
 | `coding__read_file` | Only the `read_file` tool            |
 | `coding__web_*`     | `web_fetch` and `web_search`         |
 | `tasks__*`          | All task management tools            |
-| `review__review_artifact` | Only the artifact review tool       |
 | `coding__bash`      | Only the coding server's `bash` tool |
 
 Wildcards are only valid at the end of a pattern.
@@ -404,12 +396,12 @@ Wildcards are only valid at the end of a pattern.
 
 MCP servers can attach tool annotations and you can filter tools based on those:
 
-| Matcher field  | MCP annotation       | Meaning |
-| -------------- | -------------------- | ------- |
-| `readOnly`     | `readOnlyHint`       | The tool should not modify its environment. |
-| `destructive`  | `destructiveHint`    | The tool may perform destructive updates. |
-| `idempotent`   | `idempotentHint`     | Repeated calls with the same arguments should not add effects. |
-| `openWorld`    | `openWorldHint`      | The tool may interact with external systems or the network. |
+| Matcher field | MCP annotation    | Meaning                                                        |
+| ------------- | ----------------- | -------------------------------------------------------------- |
+| `readOnly`    | `readOnlyHint`    | The tool should not modify its environment.                    |
+| `destructive` | `destructiveHint` | The tool may perform destructive updates.                      |
+| `idempotent`  | `idempotentHint`  | Repeated calls with the same arguments should not add effects. |
+| `openWorld`   | `openWorldHint`   | The tool may interact with external systems or the network.    |
 
 **Annotation-first read-only agent:**
 
@@ -431,7 +423,7 @@ MCP servers can attach tool annotations and you can filter tools based on those:
 }
 ```
 
-**Planner tools with explicit artifact writes and review:**
+**Planner tools with explicit artifact writes:**
 
 ```json title=".aether/settings.json"
 {
@@ -443,7 +435,12 @@ MCP servers can attach tool annotations and you can filter tools based on those:
       "userInvocable": true,
       "mcps": [".aether/mcp.json"],
       "tools": {
-        "allow": [{ "readOnly": true }, "coding__write_file", "coding__edit_file", "review__review_artifact", "aether__*"],
+        "allow": [
+          { "readOnly": true },
+          "coding__write_file",
+          "coding__edit_file",
+          "aether__*"
+        ],
         "deny": ["coding__web_*"]
       }
     }

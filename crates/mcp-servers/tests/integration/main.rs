@@ -7,7 +7,6 @@ mod lsp_check_errors_contract;
 mod lsp_smoke_real;
 mod plugins_mcp_agents;
 mod plugins_mcp_skills;
-mod review_mcp;
 mod stdio_transport;
 mod test_bash;
 mod test_read_before_edit_safety;

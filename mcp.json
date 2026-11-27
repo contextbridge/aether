@@ -14,9 +14,6 @@
     "subagents": {
       "type": "in-memory"
     },
-    "review": {
-      "type": "in-memory"
-    },
     "chrome-devtools": {
       "command": "npx",
       "args": ["chrome-devtools-mcp@latest"],
