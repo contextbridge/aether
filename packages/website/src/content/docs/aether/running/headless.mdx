@@ -27,10 +27,10 @@ git diff --staged | aether headless "Review these changes"
 
 Headless mode has two ways to choose what runs:
 
-| Option                     | Behavior                                             |
-| -------------------------- | ---------------------------------------------------- |
-| `--agent <name>`           | Resolve a named agent from settings.                 |
-| `--model <provider:model>` | Create an ad-hoc default agent using that model.     |
+| Option                     | Behavior                                         |
+| -------------------------- | ------------------------------------------------ |
+| `--agent <name>`           | Resolve a named agent from settings.             |
+| `--model <provider:model>` | Create an ad-hoc default agent using that model. |
 
 `--agent` and `--model` are mutually exclusive. If neither is provided, Aether launches the agent named by the top-level `agent` setting (when set), otherwise the first user-invocable agent from settings. If there are no configured agents, it falls back to Aether's built-in default agent spec.
 
@@ -62,20 +62,20 @@ aether headless --model bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0 \
 
 ## Flags
 
-| Flag                | Type                     | Description                                                                                       |
-| ------------------- | ------------------------ | ------------------------------------------------------------------------------------------------- |
-| `[PROMPT]...`       | positional               | Prompt text. Reads stdin if omitted and stdin is not a TTY.                                       |
-| `-a, --agent`       | `string`                 | Named agent from settings. Defaults to the top-level `agent` setting if set, else the first user-invocable agent. |
-| `-m, --model`       | `string`                 | Ad-hoc model spec. Mutually exclusive with `--agent`.                                             |
-| `-C, --cwd`         | `path`                   | Working directory. Defaults to `.`.                                                               |
-| `--settings-json`   | `string`                 | Inline settings JSON.                                                                             |
-| `--settings-file`   | `path`                   | Settings JSON file.                                                                               |
-| `--mcp-config`      | `path`                   | MCP config file. Repeatable. Replaces the agent's MCP source list for the run.                     |
-| `--mcp-config-json` | `string`                 | Inline MCP config JSON. Repeatable. Replaces the agent's MCP source list for the run.             |
-| `--system-prompt`   | `string`                 | Additional system prompt text.                                                                    |
-| `--output`          | `text \| pretty \| json` | Output format. Defaults to `text`.                                                                |
-| `-v, --verbose`     | flag                     | Verbose diagnostic logging to stderr.                                                             |
-| `--events`          | comma-separated list     | Event kinds to emit. Omit to emit all.                                                            |
+| Flag                | Type                     | Description                                                                                                                 |
+| ------------------- | ------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
+| `[PROMPT]...`       | positional               | Prompt text. Reads stdin if omitted and stdin is not a TTY.                                                                 |
+| `-a, --agent`       | `string`                 | Named agent from settings. Defaults to the top-level `agent` setting if set, else the first user-invocable agent.           |
+| `-m, --model`       | `string`                 | Ad-hoc model spec. Mutually exclusive with `--agent`.                                                                       |
+| `-C, --cwd`         | `path`                   | Working directory. Defaults to `.`.                                                                                         |
+| `--settings-json`   | `string`                 | Inline settings JSON.                                                                                                       |
+| `--settings-file`   | `path`                   | Settings JSON file.                                                                                                         |
+| `--mcp-config`      | `path`                   | MCP config file. Repeatable. Replaces the agent's MCP source list for the run.                                              |
+| `--mcp-config-json` | `string`                 | Inline MCP config JSON. Repeatable. Replaces the agent's MCP source list for the run.                                       |
+| `--system-prompt`   | `string`                 | Additional system prompt text.                                                                                              |
+| `--output`          | `text \| pretty \| json` | Output format. Defaults to `text`.                                                                                          |
+| `-v, --verbose`     | flag                     | Verbose diagnostic logging to stderr.                                                                                       |
+| `--events`          | comma-separated list     | Event kinds to emit. Omit to emit all.                                                                                      |
 | `--provider`        | `provider.field=value`   | Provider override. Supports `PROVIDER.url`, `PROVIDER.auth`, `PROVIDER.request-model`, and `bedrock.inference-profile-arn`. |
 
 ## Output formats
@@ -151,7 +151,7 @@ Available event kinds:
 | `context_compaction_ended`   | Context compaction finished (completed, failed, or cancelled). |
 | `context_compaction_result`  | Context compaction completed.                                  |
 | `context_usage`              | Current context-window usage.                                  |
-| `session_usage`              | Per-call tokens and estimated cost, plus cumulative totals.     |
+| `session_usage`              | Per-call tokens and estimated cost, plus cumulative totals.    |
 | `context_cleared`            | Context was cleared.                                           |
 | `turn_started`               | Turn processing began.                                         |
 | `turn_ended`                 | Turn completed, failed, or was cancelled.                      |
@@ -203,16 +203,16 @@ Read the prompt from a file or stdin with `--prompt-file -`:
 cat schema.json | aether generate --model zai:glm-5.1 --prompt-file -
 ```
 
-| Flag                 | Type                                          | Description                                                              |
-| -------------------- | --------------------------------------------- | ------------------------------------------------------------------------ |
-| `--model`            | `string`                                      | Model spec (`provider:model`). Required.                                 |
-| `--prompt`           | `string`                                      | Prompt text. Mutually exclusive with `--prompt-file`.                    |
-| `--prompt-file`      | `path` or `-`                                 | Read the prompt from a file, or `-` for stdin. Mutually exclusive with `--prompt`. |
-| `--system`           | `string`                                      | Optional system prompt.                                                  |
-| `--temperature`      | `number`                                      | Sampling temperature.                                                    |
-| `--top-p`            | `number`                                      | Nucleus sampling probability mass.                                       |
-| `--max-tokens`       | `number`                                      | Upper bound on generated tokens.                                         |
+| Flag                 | Type                                                                      | Description                                                                                                                                   |
+| -------------------- | ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--model`            | `string`                                                                  | Model spec (`provider:model`). Required.                                                                                                      |
+| `--prompt`           | `string`                                                                  | Prompt text. Mutually exclusive with `--prompt-file`.                                                                                         |
+| `--prompt-file`      | `path` or `-`                                                             | Read the prompt from a file, or `-` for stdin. Mutually exclusive with `--prompt`.                                                            |
+| `--system`           | `string`                                                                  | Optional system prompt.                                                                                                                       |
+| `--temperature`      | `number`                                                                  | Sampling temperature.                                                                                                                         |
+| `--top-p`            | `number`                                                                  | Nucleus sampling probability mass.                                                                                                            |
+| `--max-tokens`       | `number`                                                                  | Upper bound on generated tokens.                                                                                                              |
 | `--reasoning-effort` | `default \| disabled \| minimal \| low \| medium \| high \| xhigh \| max` | Reasoning effort for models that support extended thinking. `disabled` requires model and adapter support; unsupported disabling is rejected. |
-| `--output`           | `text \| pretty \| json`                      | Output format. `text` prints the raw response; `json`/`pretty` wrap it as `{ "text": "<response>", "model": "<model>" }`. Defaults to `text`. |
+| `--output`           | `text \| pretty \| json`                                                  | Output format. `text` prints the raw response; `json`/`pretty` wrap it as `{ "text": "<response>", "model": "<model>" }`. Defaults to `text`. |
 
 See [Getting Started](/getting-started/overview/) and [Settings](/aether/settings/overview/#agents) for project scaffolding details.
