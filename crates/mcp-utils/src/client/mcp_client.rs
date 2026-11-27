@@ -5,8 +5,12 @@ use futures::future::{BoxFuture, FutureExt, Shared};
 use futures::stream::{self, Stream};
 use rmcp::{
     RoleClient,
-    model::{CallToolRequestParams, GetPromptRequestParams, GetPromptResult, Prompt, Tool},
-    service::{Peer, QuitReason},
+    model::{
+        CallToolRequestParams, DEFAULT_MRTR_MAX_ROUNDS, GetPromptRequestParams, GetPromptResponse, GetPromptResult,
+        GetSkillRequestParams, InputRequests, InputResponses, Prompt, ReadResourceDirectoryRequestParams,
+        ReadResourceDirectoryResult, ReadResourceRequestParams, ResourceContents, ServerCapabilities, Skill, Tool,
+    },
+    service::{Peer, QuitReason, ServiceError},
 };
 use serde_json::{Map, Value};
 use std::fmt;
@@ -55,15 +59,22 @@ impl McpClient {
         non_empty(self.peer.peer_info()?.instructions.as_ref())
     }
 
+    pub fn capabilities(&self) -> ServerCapabilities {
+        self.peer.peer_info().map_or_default(|info| info.capabilities.clone())
+    }
+
     pub async fn list_tools(&self) -> Result<Vec<Tool>, ClientError> {
-        self.peer.list_all_tools().await.map_err(|source| ClientError::request(self.name(), source))
+        if self.capabilities().tools.is_none() {
+            return Ok(Vec::new());
+        }
+        self.peer.list_all_tools().await.map_err(|source| self.failed(source))
     }
 
     pub async fn list_prompts(&self) -> Result<Vec<Prompt>, ClientError> {
-        if !self.supports_prompts() {
+        if self.capabilities().prompts.is_none() {
             return Ok(Vec::new());
         }
-        self.peer.list_all_prompts().await.map_err(|source| ClientError::request(self.name(), source))
+        self.peer.list_all_prompts().await.map_err(|source| self.failed(source))
     }
 
     pub async fn get_prompt(&self, name: &str, args: Map<String, Value>) -> Result<GetPromptResult, ClientError> {
@@ -71,7 +82,38 @@ impl McpClient {
         if !args.is_empty() {
             request = request.with_arguments(args);
         }
-        self.peer.get_prompt(request).await.map_err(|source| ClientError::request(self.name(), source))
+        for _ in 0..DEFAULT_MRTR_MAX_ROUNDS {
+            let response = self.peer.get_prompt_once(request.clone()).await;
+            let required = match response.map_err(|source| self.failed(source))? {
+                GetPromptResponse::Complete(result) => return Ok(result),
+                GetPromptResponse::InputRequired(required) => required,
+                _ => return Err(self.failed(ServiceError::UnexpectedResponse)),
+            };
+            request.input_responses = Some(self.answer_inputs(required.input_requests).await?);
+            request.request_state = required.request_state;
+        }
+        Err(self.failed(ServiceError::InputRequiredRoundsExceeded { max_rounds: DEFAULT_MRTR_MAX_ROUNDS }))
+    }
+
+    pub async fn list_skills(&self) -> Result<Vec<Skill>, ClientError> {
+        self.peer.list_all_skills().await.map_err(|source| self.failed(source))
+    }
+
+    pub async fn get_skill(&self, uri: &str) -> Result<Skill, ClientError> {
+        let got = self.peer.get_skill(GetSkillRequestParams::new(uri)).await;
+        got.map(|result| result.skill).map_err(|source| self.failed(source))
+    }
+
+    pub async fn read_resource(&self, uri: &str) -> Result<Vec<ResourceContents>, ClientError> {
+        let read = self.peer.read_resource(ReadResourceRequestParams::new(uri)).await;
+        read.map(|result| result.contents).map_err(|source| self.failed(source))
+    }
+
+    pub async fn read_directory(
+        &self,
+        request: ReadResourceDirectoryRequestParams,
+    ) -> Result<ReadResourceDirectoryResult, ClientError> {
+        self.peer.read_resource_directory(request).await.map_err(|source| self.failed(source))
     }
 
     pub fn tool_lists(&self) -> impl Stream<Item = Result<Vec<Tool>, ClientError>> + Send + use<> {
@@ -107,8 +149,15 @@ impl McpClient {
         &self.peer
     }
 
-    fn supports_prompts(&self) -> bool {
-        self.peer.peer_info().is_some_and(|info| info.capabilities.prompts.is_some())
+    async fn answer_inputs(&self, requests: Option<InputRequests>) -> Result<InputResponses, ClientError> {
+        let answered = self.handler.elicit_inputs(requests.unwrap_or_default()).await;
+        answered
+            .map(|(responses, _)| responses)
+            .map_err(|_| ClientError::UnsupportedInput { server: self.name().into() })
+    }
+
+    fn failed(&self, source: ServiceError) -> ClientError {
+        ClientError::request(self.name(), source)
     }
 
     fn from_service(service: ClientService) -> Self {
