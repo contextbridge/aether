@@ -89,8 +89,7 @@ fn writes_project_batteries_preset_for_anthropic() {
 
     let plan_servers = inline_servers(&plan.mcps[0]);
     let plan_server_names: Vec<&str> = plan_servers.keys().map(String::as_str).collect();
-    assert_eq!(plan_server_names, vec!["coding", "review", "skills", "subagents", "tasks"]);
-    assert!(plan.tools.allow.contains(&ToolMatcher::name("review__review_artifact")));
+    assert_eq!(plan_server_names, vec!["coding", "skills", "subagents", "tasks"]);
 
     let explore = &settings.agents[2];
     assert!(explore.agent_invocable);
@@ -291,7 +290,6 @@ fn assert_plan_tools(agent: &aether_project::AgentConfig) {
             ToolMatcher::name("tasks__*"),
             ToolMatcher::name("coding__write_file"),
             ToolMatcher::name("coding__edit_file"),
-            ToolMatcher::name("review__review_artifact"),
         ]
     );
     assert_eq!(agent.tools.deny.len(), 0);

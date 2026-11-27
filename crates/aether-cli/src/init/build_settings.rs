@@ -57,7 +57,7 @@ fn batteries_settings(
     scope: InitScope,
     harnesses: &[HarnessIntegration],
 ) -> AetherSettings {
-    let plan_description = format!("{display} planner (may write plan artifacts and request review)");
+    let plan_description = format!("{display} planner (may write plan artifacts)");
     AetherSettings {
         prompts: batteries_prompts(scope, harnesses),
         agents: vec![
@@ -89,7 +89,6 @@ fn primary_agent(
             ("skills", skills_args(harnesses)),
             ("subagents", vec![]),
             ("tasks", vec![]),
-            ("review", vec![]),
         ])],
         tools,
         ..AgentConfig::default()
@@ -228,11 +227,7 @@ fn mcps(servers: Vec<(&str, Vec<String>)>) -> McpSourceSpec {
 
 fn plan_tools() -> ToolFilter {
     let mut tools = read_only_coding_tools();
-    tools.allow.extend([
-        ToolMatcher::name("coding__write_file"),
-        ToolMatcher::name("coding__edit_file"),
-        ToolMatcher::name("review__review_artifact"),
-    ]);
+    tools.allow.extend([ToolMatcher::name("coding__write_file"), ToolMatcher::name("coding__edit_file")]);
     tools
 }
 
