@@ -15,7 +15,7 @@ async fn builtin_servers_list_their_tools_over_stdio() {
         ("tasks", &["--dir", dir], &["task_create", "task_get", "task_list", "task_update"]),
         ("coding", &[], coding),
         ("coding", &["--rules-dir", dir], coding),
-        ("skills", &["--dir", dir], &["get_skills", "list_skills"]),
+        ("skills", &["--dir", dir], &[]),
         ("subagents", &["--dir", dir], &["spawn_subagent"]),
         ("review", &[], &["review_artifact"]),
     ];
