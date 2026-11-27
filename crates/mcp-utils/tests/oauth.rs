@@ -8,7 +8,7 @@ use mcp_utils::gateway::{GatewayError, McpGateway};
 use mcp_utils::model::{ElicitResult, ElicitationAction, ElicitationCapability, FormElicitationCapability};
 use mcp_utils::testing::{
     ACCESS_TOKEN, CHALLENGED_SCOPE, CLIENT_METADATA_URL, FakeAuthServer, FakeMcpServer, OAuthPrompt,
-    REGISTERED_CLIENT_ID, client_metadata, elicitation_host, wait_until,
+    REGISTERED_CLIENT_ID, call, client_metadata, elicitation_host, wait_until,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -242,6 +242,38 @@ async fn gateway_authentication_reconnects_the_server_once_authorized() {
 }
 
 #[tokio::test]
+async fn a_grant_revoked_after_connecting_needs_oauth_again() {
+    let server = math_auth_server().await;
+    let (gateway, mut host) = oauth_gateway(&server);
+    gateway.ready().await;
+    sign_in(&gateway, &mut host).await;
+
+    server.revoke_tokens();
+    let rejected = call(gateway.servers()[0].client(), "add_numbers", json!({"a": 1, "b": 2})).await;
+    wait_until(&gateway, |gateway| gateway.statuses()[0].status == McpServerStatus::NeedsOAuth).await;
+
+    assert!(rejected.is_err());
+    assert!(gateway.statuses()[0].can_authenticate());
+    assert!(gateway.servers().is_empty());
+}
+
+#[tokio::test]
+async fn signing_in_again_after_a_revoked_grant_reconnects_the_server() {
+    let server = math_auth_server().await;
+    let (gateway, mut host) = oauth_gateway(&server);
+    gateway.ready().await;
+    sign_in(&gateway, &mut host).await;
+    server.revoke_tokens();
+    let _rejected = call(gateway.servers()[0].client(), "add_numbers", json!({"a": 1, "b": 2})).await;
+    wait_until(&gateway, |gateway| gateway.statuses()[0].status == McpServerStatus::NeedsOAuth).await;
+
+    sign_in(&gateway, &mut host).await;
+    let result = call(gateway.servers()[0].client(), "add_numbers", json!({"a": 1, "b": 2})).await;
+
+    assert_eq!(result.unwrap().structured_content, Some(json!({"sum": 3})));
+}
+
+#[tokio::test]
 async fn gateway_authentication_requests_only_the_challenged_scope() {
     let server = math_auth_server().await;
     let (gateway, mut host) = oauth_gateway(&server);
@@ -357,6 +389,13 @@ async fn authorize_into(server: &FakeAuthServer, oauth: OAuthSettings, store: &A
 fn oauth_gateway(server: &FakeAuthServer) -> (McpGateway, mpsc::Receiver<Elicitation>) {
     let (options, host) = elicitation_host();
     (McpGateway::new(vec![server.spec("linear")], &options), host)
+}
+
+async fn sign_in(gateway: &McpGateway, host: &mut mpsc::Receiver<Elicitation>) {
+    let authentication = authenticate(gateway, "linear");
+    next_prompt(host).await.approve().await;
+    authentication.await.unwrap().expect("authentication succeeds");
+    assert!(matches!(host.recv().await, Some(Elicitation::Complete { .. })));
 }
 
 fn authenticate(gateway: &McpGateway, server: &str) -> JoinHandle<Result<(), GatewayError>> {

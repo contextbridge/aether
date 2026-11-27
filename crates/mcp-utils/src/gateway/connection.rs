@@ -158,7 +158,17 @@ impl ConnectionTask {
             let _close = client.close_on_drop();
             let mut tool_lists = pin!(client.tool_lists());
             let mut current: Option<ConnectedServer> = None;
-            while let Some(tools) = tool_lists.next().await {
+            loop {
+                let tools = tokio::select! {
+                    refused = client.unauthorized(), if self.supports_oauth => {
+                        yield Err(ClientError::AuthRequired { server: name.clone(), challenge: refused.challenge }.into());
+                        return;
+                    }
+                    tools = tool_lists.next() => match tools {
+                        Some(tools) => tools,
+                        None => break,
+                    },
+                };
                 match (tools, &current) {
                     (Ok(tools), Some(server)) if server.tools() == tools.as_slice() => {}
                     (Ok(tools), _) => {

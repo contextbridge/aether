@@ -85,6 +85,20 @@ async fn tool_lists_start_with_the_current_tools_then_follow_each_change() {
 }
 
 #[tokio::test]
+async fn tool_lists_follow_the_unscoped_notifications_of_a_legacy_server() {
+    let server = FakeMcpServer::math().with_legacy_protocol();
+    let state = server.state();
+    let client = connect("fake", server, &ClientOptions::default()).await;
+    let mut tool_lists = Box::pin(client.tool_lists());
+
+    let _current = tool_lists.next().await;
+    state.add_tool_and_notify(FakeTool::new("added_later")).await;
+    let changed = tool_names(tool_lists.next().await);
+
+    assert_eq!(changed, ["add_numbers", "added_later", "divide_numbers"]);
+}
+
+#[tokio::test]
 async fn closing_any_clone_ends_the_session_for_all() {
     let client = connect("fake", FakeMcpServer::new(), &ClientOptions::default()).await;
 

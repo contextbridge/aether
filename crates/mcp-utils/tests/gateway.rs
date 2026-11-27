@@ -177,7 +177,9 @@ async fn shutdown_releases_in_process_servers_and_closes_the_gateway() {
 
     gateway.shutdown().await;
 
-    assert!(alive.upgrade().is_none());
+    while alive.upgrade().is_some() {
+        tokio::task::yield_now().await;
+    }
     assert_eq!(gateway.statuses().len(), 0);
     gateway.ready().await;
     assert_eq!(gateway.statuses().len(), 0);

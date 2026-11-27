@@ -1,22 +1,25 @@
 use super::error::ClientError;
 use super::transport::ClientService;
 use super::{ClientOptions, ToolCall, ToolCallOptions, Transport, handler::Handler};
-use futures::future::{BoxFuture, FutureExt, Shared};
-use futures::stream::{self, Stream};
+use async_stream::stream;
+use futures::future::{self, BoxFuture, FutureExt, Shared};
+use futures::stream::Stream;
 use rmcp::{
     RoleClient,
     model::{
         CallToolRequestParams, DEFAULT_MRTR_MAX_ROUNDS, GetPromptRequestParams, GetPromptResponse, GetPromptResult,
-        GetSkillRequestParams, InputRequests, InputResponses, Prompt, ReadResourceDirectoryRequestParams,
-        ReadResourceDirectoryResult, ReadResourceRequestParams, ResourceContents, ServerCapabilities, Skill, Tool,
+        GetSkillRequestParams, InputRequests, InputResponses, Prompt, ProtocolVersion,
+        ReadResourceDirectoryRequestParams, ReadResourceDirectoryResult, ReadResourceRequestParams, ResourceContents,
+        ServerCapabilities, Skill, SubscriptionFilter, Tool,
     },
-    service::{Peer, QuitReason, ServiceError},
+    service::{Peer, QuitReason, ServiceError, Subscription},
 };
 use serde_json::{Map, Value};
 use std::fmt;
 use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::watch;
 use tokio::task::JoinError;
 use tokio::time::timeout;
 use tokio_util::sync::{CancellationToken, DropGuard};
@@ -26,6 +29,12 @@ pub struct McpClient {
     pub(super) peer: Peer<RoleClient>,
     pub(super) handler: Arc<Handler>,
     shutdown: Arc<Shutdown>,
+    unauthorized: Arc<watch::Sender<Option<Unauthorized>>>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct Unauthorized {
+    pub(crate) challenge: Option<String>,
 }
 
 impl McpClient {
@@ -117,17 +126,30 @@ impl McpClient {
     }
 
     pub fn tool_lists(&self) -> impl Stream<Item = Result<Vec<Tool>, ClientError>> + Send + use<> {
+        let client = self.clone();
         let mut changes = self.handler.tool_list_changes();
-        changes.mark_changed();
-        stream::unfold((self.clone(), changes), |(client, mut changes)| async move {
-            tokio::select! {
-                biased;
-                () = client.shutdown.closed.clone() => return None,
-                notified = changes.changed() => notified.ok()?,
+        stream! {
+            let mut subscription = client.tool_list_subscription().await;
+            loop {
+                yield client.list_tools().await;
+                loop {
+                    tokio::select! {
+                        biased;
+                        () = client.shutdown.closed.clone() => return,
+                        notified = changes.changed() => match notified {
+                            Ok(()) => break,
+                            Err(_) => return,
+                        },
+                        reported = next_change(&mut subscription) => {
+                            if reported {
+                                break;
+                            }
+                            subscription = None;
+                        }
+                    }
+                }
             }
-            let tools = client.list_tools().await;
-            Some((tools, (client, changes)))
-        })
+        }
     }
 
     pub fn call_tool(&self, name: &str, args: Map<String, Value>, options: ToolCallOptions) -> ToolCall {
@@ -140,6 +162,19 @@ impl McpClient {
         self.shutdown.closed.clone().await;
     }
 
+    pub(crate) async fn unauthorized(&self) -> Unauthorized {
+        let mut unauthorized = self.unauthorized.subscribe();
+        let refused = unauthorized.wait_for(Option::is_some).await.expect("this client holds the sender");
+        refused.clone().expect("waited for a refusal")
+    }
+
+    pub(super) fn observe(&self, error: &ServiceError) {
+        if error.is_authorization_required() || error.auth_challenge().is_some() {
+            let challenge = error.auth_challenge().map(str::to_string);
+            self.unauthorized.send_replace(Some(Unauthorized { challenge }));
+        }
+    }
+
     pub(crate) fn close_on_drop(&self) -> DropGuard {
         self.shutdown.cancel.clone().drop_guard()
     }
@@ -147,6 +182,21 @@ impl McpClient {
     #[cfg(any(test, feature = "testing"))]
     pub fn peer(&self) -> &Peer<RoleClient> {
         &self.peer
+    }
+
+    async fn tool_list_subscription(&self) -> Option<Subscription> {
+        let info = self.peer.peer_info()?;
+        let announces_changes = info.capabilities.tools.as_ref().is_some_and(|tools| tools.list_changed == Some(true));
+        if !announces_changes || info.protocol_version < ProtocolVersion::V_2026_07_28 {
+            return None;
+        }
+        let filter = SubscriptionFilter::builder().tools_list_changed().build();
+        let listening = self.peer.listen(filter).await;
+        listening
+            .inspect_err(
+                |error| tracing::warn!(server = self.name(), %error, "Failed to subscribe to MCP tool list changes"),
+            )
+            .ok()
     }
 
     async fn answer_inputs(&self, requests: Option<InputRequests>) -> Result<InputResponses, ClientError> {
@@ -157,6 +207,7 @@ impl McpClient {
     }
 
     fn failed(&self, source: ServiceError) -> ClientError {
+        self.observe(&source);
         ClientError::request(self.name(), source)
     }
 
@@ -166,7 +217,7 @@ impl McpClient {
         let cancel = CancellationToken::new();
         let closed = tokio::spawn(run_until_closed(service, cancel.clone())).map(|_| ()).boxed().shared();
         let shutdown = Shutdown { _cancel_on_drop: cancel.clone().drop_guard(), cancel, closed };
-        Self { peer, handler, shutdown: Arc::new(shutdown) }
+        Self { peer, handler, shutdown: Arc::new(shutdown), unauthorized: Arc::new(watch::Sender::new(None)) }
     }
 }
 
@@ -199,6 +250,13 @@ async fn run_until_closed(service: ClientService, cancel: CancellationToken) {
         }
     };
     log_close(&server, closed);
+}
+
+async fn next_change(subscription: &mut Option<Subscription>) -> bool {
+    match subscription {
+        Some(subscription) => matches!(subscription.next().await, Ok(Some(_))),
+        None => future::pending().await,
+    }
 }
 
 fn non_empty(text: Option<&String>) -> Option<String> {

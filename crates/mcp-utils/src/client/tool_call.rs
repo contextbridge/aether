@@ -193,6 +193,7 @@ fn stream_events(
             let handle = match client.peer.send_cancellable_request(request, peer_request_options(meta.clone())).await {
                 Ok(handle) => handle,
                 Err(error) => {
+                    client.observe(&error);
                     yield ToolCallError::Send(error).into();
                     return;
                 }
@@ -252,6 +253,7 @@ fn stream_events(
                     return;
                 }
                 Err(error) => {
+                    client.observe(&error);
                     yield ToolCallError::Call(error).into();
                     return;
                 }

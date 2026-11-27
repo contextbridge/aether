@@ -10,9 +10,9 @@ use rmcp::{
         ProtocolVersion, ReadResourceDirectoryRequestParams, ReadResourceDirectoryResult, ReadResourceRequestParams,
         ReadResourceResponse, ReadResourceResult, Resource, ResourceContents, ResourcesCapability, ResultType, Role,
         SKILLS_EXTENSION_ID, ServerCapabilities, ServerConfig, Skill, SkillFrontmatter, SkillResource, SkillResources,
-        TaskPayload, Tool, ToolAnnotations, UpdateTaskParams,
+        SubscriptionFilter, TaskPayload, Tool, ToolAnnotations, UpdateTaskParams,
     },
-    service::RequestContext,
+    service::{RequestContext, SubscriptionContext, SubscriptionSink},
 };
 use serde_json::{Value, json};
 use std::borrow::Cow;
@@ -239,14 +239,23 @@ impl FakeMcpState {
     }
 
     async fn mutate_tools_and_notify(&self, mutate: impl FnOnce(&mut BTreeMap<String, FakeTool>)) {
-        let client = {
+        let (client, subscriptions) = {
             let mut inner = self.lock();
             mutate(&mut inner.tools);
-            inner.client.clone()
+            let subscribes =
+                inner.protocol_version.as_ref().is_some_and(|version| *version >= ProtocolVersion::V_2026_07_28);
+            if subscribes { (None, inner.subscriptions.clone()) } else { (inner.client.clone(), Vec::new()) }
         };
         if let Some(client) = client {
             let _ = client.notify_tool_list_changed().await;
         }
+        for subscription in subscriptions {
+            let _ = subscription.notify_tool_list_changed().await;
+        }
+    }
+
+    fn subscribe(&self, subscription: SubscriptionSink) {
+        self.record(|inner| inner.subscriptions.push(subscription));
     }
 
     fn list_tools(&self, context: &RequestContext<RoleServer>) -> Result<Vec<Tool>, McpError> {
@@ -452,7 +461,8 @@ impl ServerHandler for FakeMcpServer {
 
     fn get_info(&self) -> ServerConfig {
         let inner = self.state.lock();
-        let mut capabilities = ServerCapabilities::builder().enable_tools().enable_tasks().build();
+        let mut capabilities =
+            ServerCapabilities::builder().enable_tools().enable_tool_list_changed().enable_tasks().build();
         if !inner.prompts.is_empty() {
             capabilities.prompts = Some(PromptsCapability::default());
         }
@@ -471,6 +481,16 @@ impl ServerHandler for FakeMcpServer {
             Some(instructions) => config.with_instructions(instructions.clone()),
             None => config,
         }
+    }
+
+    fn accepted_subscription_filter(&self, _requested: &SubscriptionFilter) -> Option<SubscriptionFilter> {
+        Some(SubscriptionFilter::builder().tools_list_changed().build())
+    }
+
+    async fn listen(&self, context: SubscriptionContext) -> Result<(), McpError> {
+        self.state.subscribe(context.sink().clone());
+        context.cancelled().await;
+        Ok(())
     }
 
     fn get_task(
@@ -697,6 +717,7 @@ struct FakeMcpStateInner {
     protocol_versions: Option<Vec<ProtocolVersion>>,
     protocol_version: Option<ProtocolVersion>,
     client: Option<Peer<RoleServer>>,
+    subscriptions: Vec<SubscriptionSink>,
 }
 
 fn progress_notification(progress: f64) -> ProgressNotificationParam {
