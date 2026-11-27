@@ -2,6 +2,7 @@
 
 #[cfg(feature = "client")]
 pub mod client;
+mod displayed;
 #[cfg(feature = "client")]
 pub mod gateway;
 pub mod server;
@@ -9,4 +10,5 @@ pub mod server;
 pub mod testing;
 pub mod tool_kind;
 
+pub use displayed::Displayed;
 pub use rmcp::model;

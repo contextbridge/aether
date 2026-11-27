@@ -33,10 +33,8 @@ client = [
     "dep:async-trait",
     "dep:chrono",
     "dep:reqwest",
-    "dep:serde",
     "dep:sse-stream",
     "dep:tokio-stream",
-    "dep:foxfire-acp",
     "rmcp/auth",
     "rmcp/transport-streamable-http-client-reqwest",
     "rmcp/transport-child-process",
@@ -44,7 +42,9 @@ client = [
 
 [dependencies]
 agent-client-protocol = { workspace = true, features = ["schemars"] }
+serde = { workspace = true }
 serde_json = { workspace = true }
+foxfire-acp = { workspace = true, default-features = false }
 futures = { workspace = true }
 rmcp = { workspace = true, features = ["client", "elicitation", "server", "transport-async-rw", "transport-io"] }
 thiserror = { workspace = true }
@@ -60,11 +60,9 @@ async-stream = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
 reqwest = { workspace = true, optional = true }
-serde = { workspace = true, optional = true }
 # Must match the sse-stream version in the signature of rmcp's StreamableHttpClient.
 sse-stream = { version = "0.2.6", optional = true }
 tokio-stream = { workspace = true, features = ["sync"], optional = true }
-foxfire-acp = { workspace = true, default-features = false, optional = true }
 
 [[test]]
 name = "client"
