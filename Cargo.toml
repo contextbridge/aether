@@ -117,3 +117,8 @@ debug = 1
 [profile.dist]
 inherits = "release"
 lto = "thin"
+
+# Foxfire TUI 0.1.3 still depends on Rouge 0.5, but ClankerDiff 0.10.5 uses Rouge 0.6.
+# Keep its highlighting spans on the same Rouge version as ClankerDiff.
+[patch.crates-io]
+foxfire-tui = { path = "vendor/foxfire-tui" }

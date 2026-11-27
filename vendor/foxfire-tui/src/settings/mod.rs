@@ -1,0 +1,478 @@
+#[cfg(feature = "testing")]
+pub mod overlay;
+#[cfg(not(feature = "testing"))]
+pub(crate) mod overlay;
+mod settings_model;
+mod themes;
+
+use clankerdiff_ratatui::theme::ReviewTheme;
+pub(crate) use settings_model::SettingsModel;
+pub(crate) use themes::{builtin_review_theme_choices, review_theme_choices};
+pub use themes::{list_theme_files, load_theme_file};
+
+use foxfire_core::fs::{JsonFileError, read_json, write_json_atomic};
+use foxfire_core::path::app_home;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use tracing::warn;
+
+use crate::theme::ThemeLoadError;
+
+pub const DEFAULT_CONTENT_PADDING: usize = 2;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct UiSettings {
+    pub theme: ThemeSettings,
+    pub content_padding: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_line: Option<StatusLineSettings>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub keybindings: BTreeMap<KeyAction, String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum KeyAction {
+    Exit,
+    Cancel,
+    Submit,
+    OpenCommandPicker,
+    OpenFilePicker,
+    ToggleGitDiff,
+    CycleReasoning,
+    CycleMode,
+    OpenPromptSearch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "source", rename_all = "lowercase", deny_unknown_fields)]
+pub enum ThemeSettings {
+    Builtin {
+        #[serde(deserialize_with = "deserialize_builtin_theme")]
+        id: String,
+    },
+    File {
+        #[serde(deserialize_with = "deserialize_theme_file")]
+        file: String,
+    },
+}
+
+impl Default for ThemeSettings {
+    fn default() -> Self {
+        Self::Builtin { id: "sage".into() }
+    }
+}
+
+impl ThemeSettings {
+    pub fn selection_id(&self) -> String {
+        match self {
+            Self::Builtin { id } => format!("builtin:{id}"),
+            Self::File { file } => format!("file:{file}"),
+        }
+    }
+
+    pub fn from_selection_id(value: &str) -> Result<Self, ThemeLoadError> {
+        if let Some(id) = value.strip_prefix("builtin:") {
+            clankerdiff_ratatui::theme::ReviewTheme::builtin(id)?;
+            Ok(Self::Builtin { id: id.into() })
+        } else if let Some(file) = value.strip_prefix("file:") {
+            themes::validate_file_name(file)?;
+            Ok(Self::File { file: file.into() })
+        } else {
+            Err(ThemeLoadError::InvalidFile(value.into()))
+        }
+    }
+}
+
+fn deserialize_theme_file<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    let file = String::deserialize(deserializer)?;
+    themes::validate_file_name(&file).map_err(serde::de::Error::custom)?;
+    Ok(file)
+}
+
+fn deserialize_builtin_theme<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    let id = String::deserialize(deserializer)?;
+    ReviewTheme::builtin(&id).map_err(serde::de::Error::custom)?;
+    Ok(id)
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StatusLineSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub separator: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_segments", skip_serializing_if = "Option::is_none")]
+    pub left: Option<Vec<StatusLineSegmentConfig>>,
+    #[serde(default, deserialize_with = "deserialize_segments", skip_serializing_if = "Option::is_none")]
+    pub right: Option<Vec<StatusLineSegmentConfig>>,
+}
+
+/// A configured status-line segment, as a tagged object
+/// (`{"type":"model","maxWidth":40}`).
+///
+/// A segment carrying no options may also be written as its bare name
+/// (`"model"`). Both clients read the same `~/.foxfire/settings.json`, and a file
+/// serde rejects is discarded whole, so refusing the shorthand would silently
+/// reset every unrelated setting alongside it. Writing always uses the object
+/// form.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+pub enum StatusLineSegmentConfig {
+    Cwd {
+        #[serde(default, rename = "maxWidth", skip_serializing_if = "Option::is_none")]
+        max_width: Option<u16>,
+    },
+    GitRef,
+    Agent,
+    Mode,
+    Model {
+        #[serde(default, rename = "maxWidth", skip_serializing_if = "Option::is_none")]
+        max_width: Option<u16>,
+    },
+    Reasoning,
+    Context,
+    ServerHealth,
+    Text {
+        value: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        style: Option<StatusLineStyle>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedStatusLineSettings {
+    pub separator: String,
+    pub left: Vec<StatusLineSegmentConfig>,
+    pub right: Vec<StatusLineSegmentConfig>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum StatusLineStyle {
+    Primary,
+    Secondary,
+    Muted,
+    Info,
+    Success,
+    Warning,
+    Error,
+}
+
+impl UiSettings {
+    /// Fill missing status-line fields while preserving explicit user settings.
+    pub fn with_default_status_line(mut self, default: StatusLineSettings) -> Self {
+        let current = self.status_line.unwrap_or_default();
+        self.status_line = Some(StatusLineSettings {
+            separator: current.separator.or(default.separator),
+            left: current.left.or(default.left),
+            right: current.right.or(default.right),
+        });
+        self
+    }
+}
+
+impl StatusLineSettings {
+    pub fn resolve(self) -> ResolvedStatusLineSettings {
+        ResolvedStatusLineSettings {
+            separator: self.separator.unwrap_or_else(default_separator),
+            left: self.left.unwrap_or_else(default_left_segments),
+            right: self.right.unwrap_or_else(default_right_segments),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum SegmentWire {
+    Name(String),
+    Config(StatusLineSegmentConfig),
+}
+
+fn deserialize_segments<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Vec<StatusLineSegmentConfig>>, D::Error> {
+    let segments = Option::<Vec<SegmentWire>>::deserialize(deserializer)?;
+    let parse = |segment| match segment {
+        SegmentWire::Name(name) => {
+            serde_json::from_value(serde_json::json!({ "type": name })).map_err(serde::de::Error::custom)
+        }
+        SegmentWire::Config(config) => Ok(config),
+    };
+    segments.map(|segments| segments.into_iter().map(parse).collect()).transpose()
+}
+
+fn default_separator() -> String {
+    " · ".to_string()
+}
+
+fn default_left_segments() -> Vec<StatusLineSegmentConfig> {
+    vec![StatusLineSegmentConfig::Cwd { max_width: None }, StatusLineSegmentConfig::GitRef]
+}
+
+fn default_right_segments() -> Vec<StatusLineSegmentConfig> {
+    vec![
+        StatusLineSegmentConfig::Agent,
+        StatusLineSegmentConfig::Mode,
+        StatusLineSegmentConfig::Model { max_width: None },
+        StatusLineSegmentConfig::Reasoning,
+        StatusLineSegmentConfig::Context,
+        StatusLineSegmentConfig::ServerHealth,
+    ]
+}
+
+pub fn resolve_status_line_settings(settings: &UiSettings) -> ResolvedStatusLineSettings {
+    settings.status_line.clone().unwrap_or_default().resolve()
+}
+
+pub fn resolve_content_padding(settings: &UiSettings) -> usize {
+    settings.content_padding.map_or(DEFAULT_CONTENT_PADDING, |value| value.max(2) as usize)
+}
+
+pub fn load_or_create_settings() -> UiSettings {
+    settings_path().map_or_else(
+        || {
+            warn!("Unable to resolve Foxfire settings path; using defaults");
+            UiSettings::default()
+        },
+        |path| load_or_create_at(&path),
+    )
+}
+
+pub fn save_settings(settings: &UiSettings) -> std::io::Result<()> {
+    let path = settings_path()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "Unable to resolve Foxfire settings path"))?;
+    save_to_path(&path, settings)
+}
+
+fn foxfire_home() -> Option<PathBuf> {
+    app_home("FOXFIRE_HOME", ".foxfire")
+}
+
+fn settings_path() -> Option<PathBuf> {
+    foxfire_home().map(|home| home.join("settings.json"))
+}
+
+fn load_or_create_at(path: &Path) -> UiSettings {
+    match read_json(path) {
+        Ok(Some(settings)) => settings,
+        Ok(None) => {
+            let defaults = UiSettings::default();
+            if let Err(error) = save_to_path(path, &defaults) {
+                warn!("Failed to write default settings to {}: {error}", path.display());
+            }
+            defaults
+        }
+        Err(error) => {
+            warn!("Failed to load settings: {error}");
+            UiSettings::default()
+        }
+    }
+}
+
+fn save_to_path(path: &Path, settings: &UiSettings) -> std::io::Result<()> {
+    write_json_atomic(path, settings).map_err(|error| match error {
+        JsonFileError::Io { source, .. } => source,
+        error @ JsonFileError::Json { .. } => std::io::Error::other(error),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn launcher_defaults_fill_only_missing_status_line_fields() {
+        let settings = UiSettings {
+            status_line: Some(StatusLineSettings {
+                separator: Some(" | ".to_string()),
+                left: None,
+                right: Some(Vec::new()),
+            }),
+            ..UiSettings::default()
+        };
+        let defaults = StatusLineSettings {
+            separator: Some(" · ".to_string()),
+            left: Some(vec![StatusLineSegmentConfig::GitRef]),
+            right: Some(vec![StatusLineSegmentConfig::Agent]),
+        };
+
+        let status_line = settings.with_default_status_line(defaults).status_line.unwrap();
+
+        assert_eq!(status_line.separator.as_deref(), Some(" | "));
+        assert_eq!(status_line.left, Some(vec![StatusLineSegmentConfig::GitRef]));
+        assert_eq!(status_line.right, Some(Vec::new()));
+    }
+
+    #[test]
+    fn status_line_segments_support_tagged_objects() {
+        let settings: UiSettings = serde_json::from_str(
+            r#"{
+                "statusLine": {
+                    "left": [{"type": "cwd"}, {"type": "gitRef"}],
+                    "right": [{"type": "agent"}, {"type": "model", "maxWidth": 32}]
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let status_line = settings.status_line.unwrap();
+        assert_eq!(
+            status_line.left,
+            Some(vec![StatusLineSegmentConfig::Cwd { max_width: None }, StatusLineSegmentConfig::GitRef])
+        );
+        assert_eq!(
+            status_line.right,
+            Some(vec![StatusLineSegmentConfig::Agent, StatusLineSegmentConfig::Model { max_width: Some(32) }])
+        );
+    }
+
+    #[test]
+    fn shorthand_segment_names_are_read_as_optionless_segments() {
+        let settings: UiSettings = serde_json::from_str(
+            r#"{
+                "statusLine": {
+                    "left": ["cwd", "gitRef"],
+                    "right": ["agent", {"type": "model", "maxWidth": 32}]
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let status_line = settings.status_line.unwrap();
+        assert_eq!(
+            status_line.left,
+            Some(vec![StatusLineSegmentConfig::Cwd { max_width: None }, StatusLineSegmentConfig::GitRef])
+        );
+        assert_eq!(
+            status_line.right,
+            Some(vec![StatusLineSegmentConfig::Agent, StatusLineSegmentConfig::Model { max_width: Some(32) }])
+        );
+    }
+
+    /// A settings file serde rejects is discarded whole, taking every unrelated
+    /// setting with it, so the shorthand must not cost the reader its theme.
+    #[test]
+    fn a_shorthand_status_line_does_not_discard_the_rest_of_the_file() {
+        let settings: UiSettings = serde_json::from_str(
+            r#"{
+                "contentPadding": 4,
+                "theme": {"source": "file", "file": "nord.json"},
+                "statusLine": {"left": ["cwd"]}
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(settings.content_padding, Some(4));
+        assert_eq!(settings.theme, ThemeSettings::File { file: "nord.json".into() });
+    }
+
+    #[test]
+    fn segments_always_serialize_as_objects() {
+        let settings = StatusLineSettings {
+            separator: None,
+            left: Some(vec![StatusLineSegmentConfig::Cwd { max_width: None }, StatusLineSegmentConfig::GitRef]),
+            right: None,
+        };
+
+        assert_eq!(
+            serde_json::to_value(&settings).unwrap(),
+            serde_json::json!({"left": [{"type": "cwd"}, {"type": "gitRef"}]})
+        );
+    }
+
+    #[test]
+    fn text_segment_with_style_deserializes() {
+        let settings: UiSettings = serde_json::from_str(
+            r#"{
+                "statusLine": {
+                    "left": [{"type": "text", "value": "hello", "style": "warning"}]
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let status_line = settings.status_line.unwrap();
+        assert_eq!(
+            status_line.left,
+            Some(vec![StatusLineSegmentConfig::Text {
+                value: "hello".to_string(),
+                style: Some(StatusLineStyle::Warning)
+            }])
+        );
+    }
+
+    #[test]
+    fn status_line_settings_present_are_no_longer_ignored() {
+        let settings: UiSettings = serde_json::from_str(
+            r#"{"contentPadding":4,"theme":{"source":"file","file":"nord.json"},"statusLine":{"left":[{"type":"cwd"}],"right":[{"type":"agent"}]}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(settings.content_padding, Some(4));
+        assert_eq!(settings.theme, ThemeSettings::File { file: "nord.json".into() });
+        assert!(settings.status_line.is_some());
+        let sl = settings.status_line.unwrap();
+        assert_eq!(sl.left, Some(vec![StatusLineSegmentConfig::Cwd { max_width: None }]));
+        assert_eq!(sl.right, Some(vec![StatusLineSegmentConfig::Agent]));
+    }
+
+    #[test]
+    fn cwd_max_width_deserializes() {
+        let settings: UiSettings = serde_json::from_str(
+            r#"{
+                "statusLine": {
+                    "right": [{"type": "cwd", "maxWidth": 30}]
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let sl = settings.status_line.unwrap();
+        assert_eq!(sl.right, Some(vec![StatusLineSegmentConfig::Cwd { max_width: Some(30) }]));
+    }
+
+    #[test]
+    fn cwd_max_width_serializes_as_object() {
+        let seg = StatusLineSegmentConfig::Cwd { max_width: Some(30) };
+        let json = serde_json::to_value(&seg).unwrap();
+        assert_eq!(json, serde_json::json!({"type": "cwd", "maxWidth": 30}));
+    }
+
+    #[test]
+    fn status_line_settings_rejects_unknown_fields() {
+        let err =
+            serde_json::from_str::<UiSettings>(r#"{"statusLine": {"left": [{"type":"cwd"}], "unknownField": true}}"#)
+                .unwrap_err();
+        assert!(
+            err.to_string().contains("unknown field"),
+            "should reject unknown fields in StatusLineSettings, got: {err}"
+        );
+    }
+
+    #[test]
+    fn status_line_segment_object_rejects_unknown_fields() {
+        let err = serde_json::from_str::<UiSettings>(
+            r#"{"statusLine": {"left": [{"type": "cwd", "maxWidth": 30, "foo": 42}]}}"#,
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unknown field") || msg.contains("did not match"),
+            "should reject unknown fields in segment objects, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn invalid_status_line_style_is_rejected() {
+        let err = serde_json::from_str::<UiSettings>(
+            r#"{"statusLine": {"left": [{"type": "text", "value": "hi", "style": "notARealStyle"}]}}"#,
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unknown variant") || msg.contains("did not match"),
+            "should reject invalid style names, got: {msg}"
+        );
+    }
+}

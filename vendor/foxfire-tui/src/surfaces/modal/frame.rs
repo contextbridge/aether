@@ -1,0 +1,94 @@
+use ratatui::buffer::Buffer;
+use ratatui::layout::{Constraint, Rect};
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Clear, Padding, Widget};
+
+use crate::theme::Theme;
+
+pub(crate) const MODAL_HORIZONTAL_PADDING: u16 = 2;
+pub(crate) const MODAL_VERTICAL_PADDING: u16 = 1;
+
+const HEADER_FOOTER_VERTICAL_PADDING: u16 = MODAL_VERTICAL_PADDING;
+
+pub(crate) const MODAL_VERTICAL_CHROME: u16 = 2 + 2 * HEADER_FOOTER_VERTICAL_PADDING + 2 * MODAL_VERTICAL_PADDING;
+
+pub(crate) struct ModalFrame<'a> {
+    title: &'a str,
+    title_right: Option<&'a str>,
+    footer: Option<Line<'a>>,
+    width: Constraint,
+    height: Constraint,
+    theme: &'a Theme,
+}
+
+impl<'a> ModalFrame<'a> {
+    pub(crate) fn new(
+        title: &'a str,
+        footer: Option<Line<'a>>,
+        width: Constraint,
+        height: Constraint,
+        theme: &'a Theme,
+    ) -> Self {
+        Self { title, title_right: None, footer, width, height, theme }
+    }
+
+    /// A small right-aligned chip naming who is asking, so the request reads
+    /// `Request ─ server` instead of protocol vocabulary.
+    pub(crate) fn title_right(mut self, name: &'a str) -> Self {
+        self.title_right = Some(name);
+        self
+    }
+
+    pub(crate) fn area(&self, outer: Rect) -> Rect {
+        outer.centered(self.width, self.height)
+    }
+
+    pub(crate) fn inner(&self, outer: Rect) -> Rect {
+        self.block().inner(chrome_area(self.area(outer)))
+    }
+
+    fn block(&self) -> Block<'_> {
+        let horizontal_padding = " ".repeat(usize::from(MODAL_HORIZONTAL_PADDING));
+        let mut block = Block::default()
+            .title_top(Span::styled(
+                format!("{horizontal_padding}{}{horizontal_padding}", self.title),
+                (self.theme.accent, Modifier::BOLD),
+            ))
+            .padding(Padding::symmetric(MODAL_HORIZONTAL_PADDING, MODAL_VERTICAL_PADDING));
+
+        if let Some(name) = self.title_right {
+            block = block.title_top(
+                Line::from(Span::styled(format!("{horizontal_padding}{name}{horizontal_padding}"), self.theme.muted))
+                    .right_aligned(),
+            );
+        }
+
+        if let Some(mut footer) = self.footer.clone() {
+            footer.spans.insert(0, Span::raw(horizontal_padding.clone()));
+            footer.spans.push(Span::raw(horizontal_padding));
+            block = block.title_bottom(footer);
+        }
+        block
+    }
+}
+
+impl Widget for &ModalFrame<'_> {
+    fn render(self, outer: Rect, buf: &mut Buffer) {
+        let area = self.area(outer);
+        Clear.render(area, buf);
+        buf.set_style(area, Style::new().bg(self.theme.background));
+        self.block().render(chrome_area(area), buf);
+    }
+}
+
+fn chrome_area(area: Rect) -> Rect {
+    if area.height <= MODAL_VERTICAL_CHROME {
+        return area;
+    }
+    Rect {
+        y: area.y.saturating_add(HEADER_FOOTER_VERTICAL_PADDING),
+        height: area.height - 2 * HEADER_FOOTER_VERTICAL_PADDING,
+        ..area
+    }
+}
