@@ -12,8 +12,8 @@ const SYSTEM_MD: &str = include_str!("templates/SYSTEM.md");
 const EXPLORER_AGENTS_MD: &str = include_str!("templates/agents/codebase-explorer/AGENTS.md");
 const EXPLORER_AGENTS_PATH: &str = "agents/codebase-explorer/AGENTS.md";
 
-const AETHER_SKILL_MD: &str = include_str!("templates/skills/aether/SKILL.md");
-const AETHER_SKILL_PATH: &str = "skills/aether/SKILL.md";
+const AETHER_SKILL_MD: &str = include_str!("templates/skills/aether-docs/SKILL.md");
+const AETHER_SKILL_PATH: &str = "skills/aether-docs/SKILL.md";
 const PLAN_SKILL_MD: &str = include_str!("templates/skills/plan.md");
 const PLAN_SKILL_PATH: &str = "skills/plan.md";
 
@@ -138,7 +138,7 @@ fn minimal_preset(provider: Provider, recs: &ProviderRecommendations, scope: Ini
         user_invocable: true,
         mcps: vec![mcps(vec![("coding", vec![]), ("skills", skills_args(&[]))])],
         tools: ToolFilter {
-            allow: vec![ToolMatcher::name("coding__bash"), ToolMatcher::name("skills__*")],
+            allow: vec![ToolMatcher::name("coding__bash"), ToolMatcher::name("aether__*")],
             deny: vec![],
         },
         ..AgentConfig::default()
@@ -240,7 +240,7 @@ fn read_only_coding_tools() -> ToolFilter {
     ToolFilter {
         allow: vec![
             ToolMatcher::read_only(),
-            ToolMatcher::name("skills__*"),
+            ToolMatcher::name("aether__*"),
             ToolMatcher::name("subagents__*"),
             ToolMatcher::name("tasks__*"),
         ],

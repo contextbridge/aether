@@ -3,6 +3,7 @@ mod deferred_tools;
 mod exposure;
 mod mcp_builder;
 mod mcp_catalog;
+mod skills_host;
 pub(crate) mod tool_bridge;
 mod tool_filter;
 

@@ -5,6 +5,7 @@ mod mcp {
     mod ipc_tests;
     mod mrtr_tests;
     mod server_round_trip_tests;
+    mod skills_tests;
     mod support;
     mod task_tests;
     mod tool_catalog_tests;

@@ -84,7 +84,7 @@
           {
             "readOnly": true
           },
-          "skills__*",
+          "aether__*",
           "tasks__*"
         ],
         "deny": ["subagents__*"]

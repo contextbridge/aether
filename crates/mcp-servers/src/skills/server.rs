@@ -1,44 +1,33 @@
 use crate::server_config;
 use clap::Parser;
-use mcp_utils::tool_kind::{ToolKind, tool_kind_meta};
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
-    handler::server::{
-        router::tool::ToolRouter,
-        tool::schema_for_output,
-        wrapper::{Json, Parameters},
-    },
+    handler::server::skill_catalog::SkillCatalog,
     model::{
-        GetPromptRequestParams, GetPromptResponse, ListPromptsResult, PaginatedRequestParams, Prompt, PromptArgument,
-        PromptMessage, Role, ServerCapabilities, ServerConfig,
+        GetPromptRequestParams, GetPromptResponse, GetSkillRequestParams, GetSkillResult, ListPromptsResult,
+        ListSkillsResult, PaginatedRequestParams, Prompt, PromptArgument, PromptMessage, ReadResourceRequestParams,
+        ReadResourceResponse, Role, ServerCapabilities, ServerConfig, Skill,
     },
     service::RequestContext,
-    tool, tool_handler, tool_router,
 };
-use std::collections::HashMap;
-use std::io;
-use std::path::PathBuf;
+use serde_json::Value;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::{fs, path::Path};
+use tokio::task::spawn_blocking;
 use utils::shell_expander::expand_shell;
 
 use super::substitution::substitute_parameters;
-use super::tools::{
-    ListSkillsInput, ListSkillsOutput, LoadSkillsInput, LoadSkillsOutput, SkillFile, SkillListItem, SkillRequest,
-};
-use crate::Displayed;
 use crate::workspace_paths::resolve_path;
-use aether_project::{PromptCatalog, PromptFile, SKILL_FILENAME};
-use foxfire_acp::display_meta::ToolDisplayMeta;
-use walkdir::WalkDir;
+use aether_project::PromptCatalog;
 
 /// CLI arguments for `SkillsMcp` server
 #[derive(Debug, Clone, Parser)]
 #[command(name = "skills", no_binary_name = true)]
 pub struct SkillsMcpArgs {
-    /// Prompt directories to scan directly.
-    /// Can be specified multiple times: --dir .aether/skills --dir .claude/rules
-    /// On skill name collision, the last directory wins.
+    /// Skill directories to serve.
+    /// Can be specified multiple times: --dir .aether/skills --dir .claude/skills
+    /// On name collision, the last directory wins.
     #[arg(long = "dir", required = true)]
     pub dirs: Vec<PathBuf>,
 }
@@ -46,33 +35,89 @@ pub struct SkillsMcpArgs {
 #[doc = include_str!("../docs/skills_mcp.md")]
 #[derive(Clone)]
 pub struct SkillsMcp {
-    catalog: Arc<PromptCatalog>,
-    tool_router: ToolRouter<Self>,
+    prompts: Arc<PromptCatalog>,
+    catalogs: Arc<[SkillCatalog]>,
     root_dir: PathBuf,
 }
 
 impl SkillsMcp {
-    pub fn new(root_dir: impl Into<PathBuf>, prompt_dirs: &[PathBuf]) -> Self {
-        let catalog = PromptCatalog::from_dirs(prompt_dirs);
+    pub fn new(root_dir: impl Into<PathBuf>, skill_dirs: &[PathBuf]) -> Self {
+        let catalogs = skill_dirs.iter().rev().filter_map(|dir| {
+            SkillCatalog::from_dir(dir).inspect_err(|error| tracing::warn!(%error, "Skipping skill directory")).ok()
+        });
 
-        Self { catalog: Arc::new(catalog), tool_router: Self::tool_router(), root_dir: root_dir.into() }
+        Self {
+            prompts: Arc::new(PromptCatalog::from_dirs(skill_dirs)),
+            catalogs: catalogs.collect(),
+            root_dir: root_dir.into(),
+        }
     }
 
     pub fn from_args(args: SkillsMcpArgs, base_dir: &Path) -> Self {
         let dirs = args.dirs.into_iter().map(|path| resolve_path(base_dir, path)).collect::<Vec<_>>();
         Self::new(base_dir, &dirs)
     }
+
+    fn skills(&self) -> Vec<Skill> {
+        let mut served = HashSet::new();
+        let skills = self.catalogs.iter().flat_map(SkillCatalog::skills);
+        let mut skills: Vec<Skill> = skills.filter(|skill| served.insert(skill.uri.clone())).collect();
+        skills.retain(is_agent_invocable);
+        skills.sort_by(|a, b| a.uri.cmp(&b.uri));
+        skills
+    }
 }
 
 #[allow(clippy::unused_async_trait_impl)]
-#[tool_handler(router = self.tool_router)]
 impl ServerHandler for SkillsMcp {
     fn get_info(&self) -> ServerConfig {
         server_config(
             "skills-mcp",
-            ServerCapabilities::builder().enable_prompts().enable_tools().build(),
+            ServerCapabilities::builder().enable_prompts().enable_resources().enable_skills().build(),
             include_str!("./instructions.md"),
         )
+    }
+
+    async fn list_skills(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListSkillsResult, McpError> {
+        let catalogs = Arc::clone(&self.catalogs);
+        let reload = spawn_blocking(move || {
+            for catalog in catalogs.iter() {
+                if let Err(error) = catalog.reload() {
+                    tracing::warn!(%error, "Failed to reload skill directory");
+                }
+            }
+        });
+        reload.await.map_err(|error| McpError::internal_error(format!("Reloading skills failed: {error}"), None))?;
+
+        Ok(ListSkillsResult::with_all_items(self.skills()))
+    }
+
+    async fn get_skill(
+        &self,
+        request: GetSkillRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<GetSkillResult, McpError> {
+        self.catalogs
+            .iter()
+            .find_map(|catalog| catalog.get_skill(&request.uri).ok())
+            .filter(|found| is_agent_invocable(&found.skill))
+            .ok_or_else(|| McpError::invalid_params(format!("unknown skill {}", request.uri), None))
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResponse, McpError> {
+        self.catalogs
+            .iter()
+            .find_map(|catalog| catalog.read_resource(&request.uri))
+            .map(Into::into)
+            .ok_or_else(|| McpError::resource_not_found(format!("unknown resource {}", request.uri), None))
     }
 
     async fn list_prompts(
@@ -81,7 +126,7 @@ impl ServerHandler for SkillsMcp {
         _context: RequestContext<RoleServer>,
     ) -> Result<ListPromptsResult, McpError> {
         let prompts = self
-            .catalog
+            .prompts
             .slash_commands()
             .map(|s| {
                 let arguments = s.argument_hint.as_ref().map(|hint| {
@@ -101,7 +146,7 @@ impl ServerHandler for SkillsMcp {
         _context: RequestContext<RoleServer>,
     ) -> Result<GetPromptResponse, McpError> {
         let spec = self
-            .catalog
+            .prompts
             .slash_commands()
             .find(|s| s.name == request.name.as_str())
             .ok_or_else(|| McpError::invalid_params(format!("Prompt '{}' not found", request.name), None))?;
@@ -120,191 +165,6 @@ impl ServerHandler for SkillsMcp {
     }
 }
 
-#[tool_router]
-impl SkillsMcp {
-    #[doc = include_str!("tools/list_skills/description.md")]
-    #[tool(
-        meta = tool_kind_meta(ToolKind::Read),
-        annotations(read_only_hint = true, open_world_hint = false),
-        output_schema = schema_for_output::<ListSkillsOutput>()
-    )]
-    pub async fn list_skills(&self, Parameters(_): Parameters<ListSkillsInput>) -> Displayed<ListSkillsOutput> {
-        let mut skills: Vec<_> = self
-            .catalog
-            .skills()
-            .map(|skill| SkillListItem {
-                name: skill.name.clone(),
-                description: skill.description.clone(),
-                tags: skill.tags.clone(),
-            })
-            .collect();
-        skills.sort_by(|a, b| a.name.cmp(&b.name));
-        let meta = ToolDisplayMeta::new("Skills", format!("{} skills", skills.len()));
-
-        Displayed::new(ListSkillsOutput { skills }, meta)
-    }
-
-    #[doc = include_str!("tools/get_skills/description.md")]
-    #[tool(meta = tool_kind_meta(ToolKind::Read), annotations(read_only_hint = true, open_world_hint = false))]
-    pub async fn get_skills(&self, Parameters(args): Parameters<LoadSkillsInput>) -> Json<LoadSkillsOutput> {
-        let mut files = Vec::with_capacity(args.requests.len());
-        for request in &args.requests {
-            files.push(self.load_skill_file(request).await);
-        }
-
-        Json(LoadSkillsOutput { files })
-    }
-}
-
-impl SkillsMcp {
-    async fn load_skill_file(&self, request: &SkillRequest) -> SkillFile {
-        self.try_load_skill_file(request).await.unwrap_or_else(|error| SkillFile {
-            name: request.name.clone(),
-            path: request.path.clone().unwrap_or_else(|| SKILL_FILENAME.to_string()),
-            content: None,
-            error: Some(error.to_string()),
-            available_files: Vec::new(),
-        })
-    }
-
-    async fn try_load_skill_file(&self, request: &SkillRequest) -> Result<SkillFile, SkillFileError> {
-        let catalog = Arc::clone(&self.catalog);
-        let blocking_request = request.clone();
-        let read = tokio::task::spawn_blocking(move || read_skill_file(&catalog, &blocking_request)).await??;
-        let content = expand_shell(&read.content, &read.skill_dir).await;
-
-        Ok(SkillFile {
-            name: request.name.clone(),
-            path: read.path,
-            content: Some(content),
-            error: None,
-            available_files: read.available_files,
-        })
-    }
-}
-
-/// A skill file as read from disk, before its shell markers are expanded.
-struct SkillFileRead {
-    path: String,
-    content: String,
-    skill_dir: PathBuf,
-    available_files: Vec<String>,
-}
-
-#[derive(Debug, thiserror::Error)]
-enum SkillFileError {
-    #[error("Skill not found: {0}")]
-    SkillNotFound(String),
-    #[error("Skill '{0}' is not agent-invocable")]
-    NotAgentInvocable(String),
-    #[error("Prompt '{0}' is a flat markdown file and does not support relative paths")]
-    FlatFileDoesNotSupportRelativePaths(String),
-    #[error("Absolute paths are not allowed")]
-    AbsolutePath,
-    #[error("Path traversal (..) is not allowed")]
-    TraversalAttempt,
-    #[error("Resolved path escapes skill directory")]
-    EscapeAttempt,
-    #[error("Path is a directory, not a file")]
-    IsDirectory,
-    #[error("File not found: {0}")]
-    FileNotFound(PathBuf),
-    #[error("IO error: {0}")]
-    IoError(#[from] io::Error),
-    #[error("File content is not valid UTF-8")]
-    InvalidUtf8,
-    #[error("Reading the skill file failed: {0}")]
-    Join(#[from] tokio::task::JoinError),
-}
-
-fn read_skill_file(catalog: &PromptCatalog, request: &SkillRequest) -> Result<SkillFileRead, SkillFileError> {
-    let (prompt, resolved_path, response_path) = resolve_skill_file(catalog, request)?;
-    let content = fs::read_to_string(&resolved_path).map_err(|e| match e.kind() {
-        io::ErrorKind::InvalidData => SkillFileError::InvalidUtf8,
-        _ => SkillFileError::IoError(e),
-    })?;
-
-    let skill_dir = prompt.path.parent().map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-    let available_files = if is_directory_prompt(&prompt) && response_path == SKILL_FILENAME {
-        list_available_files(&skill_dir)
-    } else {
-        Vec::new()
-    };
-
-    Ok(SkillFileRead { path: response_path, content, skill_dir, available_files })
-}
-
-fn resolve_skill_file(
-    catalog: &PromptCatalog,
-    request: &SkillRequest,
-) -> Result<(PromptFile, PathBuf, String), SkillFileError> {
-    let prompt =
-        catalog.find(&request.name).cloned().ok_or_else(|| SkillFileError::SkillNotFound(request.name.clone()))?;
-
-    if !prompt.agent_invocable {
-        return Err(SkillFileError::NotAgentInvocable(request.name.clone()));
-    }
-
-    if is_directory_prompt(&prompt) {
-        let skill_dir = prompt.path.parent().ok_or_else(|| SkillFileError::FileNotFound(prompt.path.clone()))?;
-        let relative_path = request.path.as_deref().unwrap_or(SKILL_FILENAME);
-        let resolved_path = validate_path(skill_dir, relative_path)?;
-        Ok((prompt, resolved_path, relative_path.to_string()))
-    } else {
-        if request.path.is_some() {
-            return Err(SkillFileError::FlatFileDoesNotSupportRelativePaths(prompt.name.clone()));
-        }
-
-        let response_path = prompt
-            .path
-            .file_name()
-            .map_or_else(|| format!("{}.md", prompt.name), |name| name.to_string_lossy().to_string());
-        let resolved_path = prompt.path.clone();
-        Ok((prompt, resolved_path, response_path))
-    }
-}
-
-fn is_directory_prompt(prompt: &PromptFile) -> bool {
-    prompt.path.file_name().is_some_and(|name| name == SKILL_FILENAME)
-}
-
-fn validate_path(skill_dir: &Path, relative_path: &str) -> Result<PathBuf, SkillFileError> {
-    if Path::new(relative_path).is_absolute() {
-        return Err(SkillFileError::AbsolutePath);
-    }
-
-    if relative_path.contains("..") {
-        return Err(SkillFileError::TraversalAttempt);
-    }
-
-    let canonical_skill_dir = skill_dir.canonicalize().map_err(SkillFileError::IoError)?;
-    let file_path = skill_dir.join(relative_path);
-    let canonical_file_path = file_path.canonicalize().map_err(|e| match e.kind() {
-        io::ErrorKind::NotFound => SkillFileError::FileNotFound(file_path),
-        _ => SkillFileError::IoError(e),
-    })?;
-
-    if !canonical_file_path.starts_with(&canonical_skill_dir) {
-        return Err(SkillFileError::EscapeAttempt);
-    }
-
-    if canonical_file_path.is_dir() {
-        return Err(SkillFileError::IsDirectory);
-    }
-
-    Ok(canonical_file_path)
-}
-
-fn list_available_files(skill_dir: &Path) -> Vec<String> {
-    let mut files: Vec<String> = WalkDir::new(skill_dir)
-        .follow_links(true)
-        .min_depth(1)
-        .into_iter()
-        .filter_entry(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
-        .flatten()
-        .filter(|entry| entry.file_type().is_file() && entry.file_name() != SKILL_FILENAME)
-        .filter_map(|entry| Some(entry.path().strip_prefix(skill_dir).ok()?.to_string_lossy().into_owned()))
-        .collect();
-    files.sort();
-    files
+fn is_agent_invocable(skill: &Skill) -> bool {
+    skill.frontmatter.extra.get("agent-invocable") != Some(&Value::Bool(false))
 }

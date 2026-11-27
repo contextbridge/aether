@@ -5,10 +5,7 @@
 use clankerdiff_lspd::testing::{TestDaemon, TestDaemonBuilder};
 use mcp_servers::coding::CodingMcp;
 use mcp_servers::coding::tools::web_fetch::WebFetcher;
-use mcp_servers::skills::{
-    SkillsMcp,
-    tools::{LoadSkillsInput, SkillRequest},
-};
+use mcp_servers::skills::SkillsMcp;
 use mcp_servers::testing::{FakeHttpClient, TestWorkspace};
 use mcp_utils::client::{ClientOptions, McpClient};
 use mcp_utils::testing::{ElicitationScript, args, call, elicitation_host};
@@ -234,13 +231,4 @@ pub(crate) fn has_no_errors(result: &Value) -> bool {
 /// A skills server serving the `skills` directory of `test_dir`.
 pub(crate) fn skills_server(test_dir: &Path) -> SkillsMcp {
     SkillsMcp::new(test_dir, &[test_dir.join("skills")])
-}
-
-pub(crate) fn load_skills_input(requests: &[(&str, Option<&str>)]) -> LoadSkillsInput {
-    LoadSkillsInput {
-        requests: requests
-            .iter()
-            .map(|(name, path)| SkillRequest { name: (*name).to_string(), path: path.map(str::to_string) })
-            .collect(),
-    }
 }

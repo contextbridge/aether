@@ -2,17 +2,21 @@ use rmcp::{
     ErrorData as McpError, Peer, RoleServer, ServerHandler,
     model::{
         CacheScope, CallToolRequestParams, CallToolResponse, CallToolResult, CancelTaskParams, ClientCapabilities,
-        ContentBlock, CreateTaskResult, DetailedTask, DiscoverRequestMethod, DiscoverResult, ElicitResult,
-        GetPromptRequestParams, GetPromptResponse, GetPromptResult, GetTaskParams, GetTaskResult, Implementation,
-        ListPromptsResult, ListToolsResult, MetaObject, NumberOrString, PaginatedRequestParams,
-        ProgressNotificationParam, ProgressToken, Prompt, PromptMessage, PromptsCapability, ProtocolVersion,
-        ResultType, Role, ServerCapabilities, ServerConfig, TaskPayload, Tool, ToolAnnotations, UpdateTaskParams,
+        ContentBlock, CreateTaskResult, DIRECTORY_MIME_TYPE, DetailedTask, DiscoverRequestMethod, DiscoverResult,
+        ElicitRequest, ElicitResult, GetPromptRequestParams, GetPromptResponse, GetPromptResult, GetSkillRequestParams,
+        GetSkillResult, GetTaskParams, GetTaskResult, Implementation, InputRequest, InputRequests, InputRequiredResult,
+        JsonObject, ListPromptsResult, ListSkillsResult, ListToolsResult, MetaObject, NumberOrString,
+        PaginatedRequestParams, ProgressNotificationParam, ProgressToken, Prompt, PromptMessage, PromptsCapability,
+        ProtocolVersion, ReadResourceDirectoryRequestParams, ReadResourceDirectoryResult, ReadResourceRequestParams,
+        ReadResourceResponse, ReadResourceResult, Resource, ResourceContents, ResourcesCapability, ResultType, Role,
+        SKILLS_EXTENSION_ID, ServerCapabilities, ServerConfig, Skill, SkillFrontmatter, SkillResource, SkillResources,
+        TaskPayload, Tool, ToolAnnotations, UpdateTaskParams,
     },
     service::RequestContext,
 };
 use serde_json::{Value, json};
 use std::borrow::Cow;
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::future::Future;
 use std::sync::{Arc, Mutex, Weak};
 use tokio::sync::{mpsc, watch};
@@ -90,6 +94,31 @@ impl FakeMcpServer {
 
     pub fn with_prompt_definition(self, prompt: Prompt, template: impl Into<String>) -> Self {
         self.state.lock().prompts.insert(prompt.name.clone(), (prompt, template.into()));
+        self
+    }
+
+    pub fn with_skill(self, name: &str, body: &str, files: &[(&str, &str)]) -> Self {
+        let uri = |path: &str| format!("skill://{name}/{path}");
+        let skill_md = format!("---\nname: {name}\ndescription: Fake skill\n---\n{body}");
+        let files: Vec<_> = [("SKILL.md", skill_md.as_str())].into_iter().chain(files.iter().copied()).collect();
+        let manifest = files.iter().map(|(path, content)| SkillResource::from_bytes(uri(path), content.as_bytes()));
+        let skill = Skill::new(
+            uri("SKILL.md"),
+            SkillFrontmatter::new(name, "Fake skill"),
+            SkillResources::Files(manifest.collect()),
+        );
+        files
+            .iter()
+            .fold(self.with_skill_entry(skill), |server, (path, content)| server.with_resource(uri(path), *content))
+    }
+
+    pub fn with_skill_entry(self, skill: Skill) -> Self {
+        self.state.lock().skills.push(skill);
+        self
+    }
+
+    pub fn with_resource(self, uri: impl Into<String>, text: impl Into<String>) -> Self {
+        self.state.lock().resources.insert(uri.into(), text.into());
         self
     }
 
@@ -427,6 +456,11 @@ impl ServerHandler for FakeMcpServer {
         if !inner.prompts.is_empty() {
             capabilities.prompts = Some(PromptsCapability::default());
         }
+        if !inner.skills.is_empty() {
+            capabilities.resources = Some(ResourcesCapability::default());
+            let settings = JsonObject::from_iter([("directoryRead".to_string(), json!(true))]);
+            capabilities.extensions.get_or_insert_default().insert(SKILLS_EXTENSION_ID.to_string(), settings);
+        }
         let mut config = ServerConfig::new(capabilities).with_server_info(
             Implementation::new("fake-mcp-server", "0.1.0").with_description("A fake MCP server for testing"),
         );
@@ -495,6 +529,56 @@ impl ServerHandler for FakeMcpServer {
         })
     }
 
+    fn list_skills(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<ListSkillsResult, McpError>> + Send + '_ {
+        std::future::ready(Ok(ListSkillsResult::with_all_items(self.state.lock().skills.clone())))
+    }
+
+    fn get_skill(
+        &self,
+        request: GetSkillRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<GetSkillResult, McpError>> + Send + '_ {
+        let skill = self.state.lock().skills.iter().find(|skill| skill.uri == request.uri).cloned();
+        std::future::ready(
+            skill
+                .map(GetSkillResult::new)
+                .ok_or_else(|| McpError::invalid_params(format!("unknown skill: {}", request.uri), None)),
+        )
+    }
+
+    fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<ReadResourceResponse, McpError>> + Send + '_ {
+        let text = self.state.lock().resources.get(&request.uri).cloned();
+        std::future::ready(
+            text.map(|text| ReadResourceResult::new(vec![ResourceContents::text(text, &request.uri)]).into())
+                .ok_or_else(|| McpError::resource_not_found(format!("unknown resource: {}", request.uri), None)),
+        )
+    }
+
+    fn read_resource_directory(
+        &self,
+        request: ReadResourceDirectoryRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<ReadResourceDirectoryResult, McpError>> + Send + '_ {
+        let directory = format!("{}/", request.uri);
+        let inner = self.state.lock();
+        let below = inner.resources.keys().filter_map(|uri| uri.strip_prefix(&directory));
+        let children: BTreeSet<(&str, bool)> =
+            below.map(|path| path.split_once('/').map_or((path, false), |(child, _)| (child, true))).collect();
+        let children = children.into_iter().map(|(name, is_directory)| {
+            let child = Resource::new(format!("{directory}{name}"), name);
+            if is_directory { child.with_mime_type(DIRECTORY_MIME_TYPE) } else { child }
+        });
+        std::future::ready(Ok(ReadResourceDirectoryResult::with_all_items(children.collect())))
+    }
+
     fn list_prompts(
         &self,
         _request: Option<PaginatedRequestParams>,
@@ -507,7 +591,7 @@ impl ServerHandler for FakeMcpServer {
     async fn get_prompt(
         &self,
         request: GetPromptRequestParams,
-        context: RequestContext<RoleServer>,
+        _context: RequestContext<RoleServer>,
     ) -> Result<GetPromptResponse, McpError> {
         let (template, gate, elicitations) = {
             let inner = self.state.lock();
@@ -518,11 +602,17 @@ impl ServerHandler for FakeMcpServer {
             gate.pass().await;
         }
         if let Some(results) = elicitations {
-            let params = serde_json::from_value(json!({
-                "mode": "form", "message": "Continue?", "requestedSchema": {"type": "object", "properties": {}}
-            }))
-            .expect("valid elicitation request");
-            let response = context.peer.create_elicitation(params).await.expect("elicitation response");
+            let Some(response) = request.input_responses.as_ref().and_then(|responses| responses.get("continue"))
+            else {
+                let params = serde_json::from_value(json!({
+                    "mode": "form", "message": "Continue?", "requestedSchema": {"type": "object", "properties": {}}
+                }))
+                .expect("valid elicitation request");
+                let request = InputRequest::Elicitation(ElicitRequest::new(params));
+                let requests = InputRequests::from([("continue".to_string(), request)]);
+                return Ok(InputRequiredResult::new(Some(requests), None).into());
+            };
+            let response = serde_json::from_value(response.clone()).expect("elicitation response");
             let _ = results.send(response);
         }
         template
@@ -587,6 +677,8 @@ struct FakeMcpStateInner {
     tools: BTreeMap<String, FakeTool>,
     instructions: Option<String>,
     prompts: BTreeMap<String, (Prompt, String)>,
+    skills: Vec<Skill>,
+    resources: BTreeMap<String, String>,
     prompt_gate: Option<Gate>,
     tool_list_gate: Option<Gate>,
     prompt_elicitations: Option<mpsc::UnboundedSender<ElicitResult>>,

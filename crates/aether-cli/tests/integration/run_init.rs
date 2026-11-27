@@ -70,7 +70,7 @@ fn writes_project_batteries_preset_for_anthropic() {
     assert!(matches!(outcome, InitOutcome::Applied { .. }), "{outcome:?}");
     assert!(dir.path().join(".aether/agents/codebase-explorer/AGENTS.md").is_file());
 
-    let skill = dir.path().join(".aether/skills/aether/SKILL.md");
+    let skill = dir.path().join(".aether/skills/aether-docs/SKILL.md");
     assert!(skill.is_file(), "batteries-included should write the aether docs skill into a scanned skills dir");
     assert!(std::fs::read_to_string(&skill).unwrap().contains("name: aether"));
 
@@ -286,7 +286,7 @@ fn assert_plan_tools(agent: &aether_project::AgentConfig) {
         agent.tools.allow,
         vec![
             ToolMatcher::read_only(),
-            ToolMatcher::name("skills__*"),
+            ToolMatcher::name("aether__*"),
             ToolMatcher::name("subagents__*"),
             ToolMatcher::name("tasks__*"),
             ToolMatcher::name("coding__write_file"),
@@ -302,7 +302,7 @@ fn assert_read_only_coding_tools(agent: &aether_project::AgentConfig) {
         agent.tools.allow,
         vec![
             ToolMatcher::read_only(),
-            ToolMatcher::name("skills__*"),
+            ToolMatcher::name("aether__*"),
             ToolMatcher::name("subagents__*"),
             ToolMatcher::name("tasks__*"),
         ]
@@ -314,7 +314,7 @@ fn assert_minimal_mcp_and_tools(agent: &aether_project::AgentConfig) {
     let McpSourceSpec::Inline(config) = &agent.mcps[0] else { panic!("minimal MCPs should be inline") };
     let names: Vec<&str> = config.servers.keys().map(String::as_str).collect();
     assert_eq!(names, vec!["coding", "skills"]);
-    assert_eq!(agent.tools.allow, vec![ToolMatcher::name("coding__bash"), ToolMatcher::name("skills__*")]);
+    assert_eq!(agent.tools.allow, vec![ToolMatcher::name("coding__bash"), ToolMatcher::name("aether__*")]);
     assert_eq!(agent.tools.deny.len(), 0);
 }
 

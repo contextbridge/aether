@@ -147,11 +147,11 @@ impl ConnectedServer {
         self.client.call_tool(name, args, options)
     }
 
-    pub(super) fn new(client: McpClient, tools: Vec<Tool>) -> Self {
-        Self { client, tools: tools.into() }
+    pub fn client(&self) -> &McpClient {
+        &self.client
     }
 
-    pub(super) fn client(&self) -> &McpClient {
-        &self.client
+    pub(super) fn new(client: McpClient, tools: Vec<Tool>) -> Self {
+        Self { client, tools: tools.into() }
     }
 }

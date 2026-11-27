@@ -8,7 +8,7 @@ import { FileTree, Tabs, TabItem } from "@astrojs/starlight/components";
 The `skills` server loads prompt artifacts from configured directories and exposes them in two ways:
 
 - **MCP prompts** for `user-invocable` slash-command style workflows.
-- **MCP tools** for `agent-invocable` skills.
+- **The MCP skills extension** for `agent-invocable` skills.
 
 A single markdown artifact can be a user prompt, an agent skill, a read-triggered rule, or any combination of those surfaces.
 
@@ -27,11 +27,11 @@ Aether's project scaffold wires `skills` to `.aether/skills`:
 }
 ```
 
-`--dir` is repeatable. On name collision, the last directory wins.
+`--dir` is repeatable. On name collision, the last directory wins. A skill is served at `skill://<skill>/SKILL.md`; same-named skills on different MCP servers are all listed and told apart by server and URI.
 
 ## Directory shape
 
-Prompt artifacts can be directory-backed `SKILL.md` files or flat markdown files directly under a configured `--dir`.
+Skills are directories with a `SKILL.md`. Slash commands and rules can also be flat markdown files directly under a configured `--dir`.
 
 <FileTree>
 
@@ -46,7 +46,7 @@ Prompt artifacts can be directory-backed `SKILL.md` files or flat markdown files
 
 </FileTree>
 
-Directory-backed skills can include auxiliary files that agents load on demand with `get_skills`. Flat markdown prompt files are useful for small prompts or rules and do not support auxiliary relative paths.
+Skills can include supporting files that agents load on demand. Flat markdown files are useful for small slash commands or rules; they are not served as skills. Symlinks are not followed: a symlinked skill directory, or a skill containing a symlink, is not served.
 
 ## Prompt artifact frontmatter
 
@@ -69,41 +69,39 @@ See `traits.md` and `error-handling.md` for detailed patterns.
 
 | Field             | Description                                                                                                                |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `name`            | Optional identifier. Defaults to the directory name for `SKILL.md` or filename stem for flat `.md` files.                  |
-| `description`     | Discovery text. Empty descriptions default to the resolved name.                                                           |
+| `name`            | Required for skills, and must equal the directory name. For slash commands and rules it defaults to the directory name or filename stem. |
+| `description`     | Discovery text. Required for skills; for slash commands and rules it defaults to the resolved name.                        |
 | `user-invocable`  | Exposes the artifact as an MCP prompt. Directory-backed `SKILL.md` files default to `true`; flat files default to `false`. |
-| `agent-invocable` | Makes the artifact discoverable through `list_skills` and loadable with `get_skills`. Defaults to `true`.                  |
+| `agent-invocable` | Serves a `SKILL.md` directory as a skill. Defaults to `true`.                                                              |
 | `argument-hint`   | Optional argument hint for user-invocable prompts.                                                                         |
-| `tags`            | Tags returned by `list_skills`.                                                                                            |
 | `triggers.read`   | Project-relative glob patterns used as read-triggered rules by the coding server.                                          |
 | `globs`, `paths`  | Compatibility aliases that also feed `triggers.read`.                                                                      |
 
 Every authored artifact must have at least one activation surface: `user-invocable`, `agent-invocable`, `triggers.read`, `globs`, or `paths`.
 
-## Tools
+## Skills over MCP
 
-| Tool           | Description                                                             |
-| -------------- | ----------------------------------------------------------------------- |
-| `list_skills`  | Return lightweight metadata for all `agent-invocable` skills.           |
-| `get_skills`   | Load skill content by exact name and optional relative auxiliary path.  |
+The `skills` server has no tools. It serves skills through the [MCP skills extension](https://modelcontextprotocol.io/extensions/skills/overview) (`skills/list`, `skills/get`, and `resources/read`), so other hosts that support the extension can use the same server.
+
+Aether offers two tools whenever any connected MCP server serves skills, whether that is the built-in `skills` server or a remote one:
+
+| Tool                  | Description                                                                          |
+| --------------------- | ------------------------------------------------------------------------------------ |
+| `aether__list_skills` | Return `server`, `uri`, and `description` for every served skill.                    |
+| `aether__read_skill`  | Load a skill's `SKILL.md`, or one of its supporting files, by `server` and `uri`.    |
 
 <Tabs>
   <TabItem label="Skill discovery">
     Recommended flow:
 
-    1. Call `list_skills` to discover available skills.
-    2. Call `get_skills` only for the exact skills needed.
+    1. Call `aether__list_skills` to discover available skills.
+    2. Call `aether__read_skill` only for the exact skills needed.
 
-    ```json title="get_skills"
-    {
-      "requests": [
-        { "name": "rust" },
-        { "name": "rust", "path": "traits.md" }
-      ]
-    }
+    ```json title="aether__read_skill"
+    { "server": "skills", "uri": "skill://rust/SKILL.md", "path": "traits.md" }
     ```
 
-    Loading a directory-backed `SKILL.md` returns `availableFiles`, excluding hidden files and `SKILL.md` itself. Auxiliary paths must be relative, must not contain `..`, and must stay inside the skill directory.
+    Loading `SKILL.md` (no `path`) returns its body, followed by the supporting files the skill ships. Each file is checked against the size and SHA-256 digest the server lists for it, and files the skill does not list cannot be read. A skill whose server publishes no manifest (`"resources": "dynamic"`) cannot be digest-checked: its files are found by walking its directory and reads are confined to that directory.
 
   </TabItem>
   <TabItem label="User prompts">
@@ -129,4 +127,4 @@ Every authored artifact must have at least one activation surface: `user-invocab
 
 ## Shell interpolation
 
-Loaded skill files and MCP prompt bodies support Aether prompt shell interpolation such as `` !`git branch --show-current` ``. Commands execute relative to the prompt file directory for `get_skills`, and relative to the workspace root for MCP prompts.
+MCP prompt bodies support Aether prompt shell interpolation such as `` !`git branch --show-current` ``. Commands execute relative to the workspace root. Skill content is served verbatim and never runs commands.

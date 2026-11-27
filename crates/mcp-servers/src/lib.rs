@@ -7,9 +7,8 @@ mod background_tasks;
 mod request_context;
 
 #[cfg(any(feature = "coding", feature = "skills", feature = "tasks", feature = "subagents"))]
-mod displayed;
 #[cfg(any(feature = "coding", feature = "skills", feature = "tasks", feature = "subagents"))]
-pub use displayed::Displayed;
+pub use mcp_utils::Displayed;
 
 pub mod workspace_paths;
 

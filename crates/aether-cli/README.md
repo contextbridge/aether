@@ -151,21 +151,21 @@ The `mcp.json` file configures MCP tool servers:
 ```
 
 - **coding** — Filesystem tools (read, write, bash, etc.) plus optional auto-read rules from configured `--rules-dir` paths
-- **skills** — Slash commands and reusable prompts loaded from the configured `--dir` paths
+- **skills** — Slash commands and Agent Skills loaded from the configured `--dir` paths. Skills are served through the MCP skills extension and loaded with the `aether__list_skills` and `aether__read_skill` tools
 
 Set `"deferTools": true` on a server to keep its schemas out of the model-visible tool definitions. Use `aether mcp --help` to discover deferred servers, then `aether mcp <server> --help` and `aether mcp <server> <tool> --help` to inspect tools and schemas. Invoke a tool with `--json '{...}'` or a JSON object on stdin. To partition tools, use `"deferTools": { "include": [...], "exclude": [...] }`; entries are exact MCP-local names, trailing-`*` prefixes, or annotation matchers such as `{ "readOnly": true }`, and `exclude` wins.
 
 ## Slash Commands
 
-Slash commands are markdown files served by the `skills` MCP server from any directory passed via `--dir`. Each entry is either a single `.md` file or a directory containing `SKILL.md` (plus optional supporting files). To make a prompt appear as a `/slash-command` in the TUI / ACP client, set `userInvocable: true` in its frontmatter.
+Slash commands are markdown files served by the `skills` MCP server from any directory passed via `--dir`. Each entry is either a single `.md` file or a directory containing `SKILL.md` (plus optional supporting files). To make a prompt appear as a `/slash-command` in the TUI / ACP client, set `user-invocable: true` in its frontmatter.
 
 **Example** `.aether/skills/plan.md`:
 
 ```markdown
 ---
 description: Create a detailed implementation spec for a task
-argumentHint: <task description>
-userInvocable: true
+argument-hint: <task description>
+user-invocable: true
 ---
 
 You are an expert software architect. Create a comprehensive technical specification.
@@ -176,10 +176,9 @@ $ARGUMENTS
 
 **Frontmatter fields:**
 - `description` — shown in command pickers
-- `argumentHint` — optional hint string for the argument
-- `userInvocable` — exposes the prompt as a `/slash-command`
-- `agentInvocable` — exposes the prompt as a skill that other agents can `get_skills` against
-- `tags` — used by the `list_skills` discovery surface
+- `argument-hint` — optional hint string for the argument
+- `user-invocable` — exposes the prompt as a `/slash-command`
+- `agent-invocable` — for a directory with a `SKILL.md`, serves it as a skill through the MCP skills extension (default `true`)
 
 **Parameter syntax in the body:**
 - `$ARGUMENTS` — full argument string (e.g. `/plan add user auth` → `add user auth`)

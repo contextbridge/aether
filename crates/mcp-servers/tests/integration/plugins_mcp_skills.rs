@@ -1,179 +1,106 @@
-use crate::common::{McpClientExt, TestResult, connect, load_skills_input, skills_server};
+use crate::common::{TestResult, connect, skills_server};
 use clap::Parser;
-use mcp_servers::skills::tools::ListSkillsInput;
 use mcp_servers::skills::{SkillsMcp, SkillsMcpArgs};
 use mcp_servers::testing::TestWorkspace;
 use mcp_utils::client::{ClientOptions, McpClient};
+use rmcp::model::{ResourceContents, SkillResource, SkillResources};
 use serde_json::{Map, Value, json};
-use std::fs::canonicalize;
-
-const USER_ONLY: &str = "---\ndescription: User only\nuser-invocable: true\nagent-invocable: false\n---\n# User";
-const RULE_ONLY: &str =
-    "---\ndescription: Rule only\nagent-invocable: false\ntriggers:\n  read:\n    - \"**/*.rs\"\n---\n";
+use std::fs::{self, canonicalize};
 
 #[tokio::test]
-async fn list_skills_returns_agent_invocable_skills_sorted_by_name() -> TestResult {
+async fn lists_agent_invocable_directory_skills_with_their_frontmatter() -> TestResult {
     let workspace = TestWorkspace::new()
-        .file("skills/zeta/SKILL.md", "---\ndescription: Zeta\nagent-invocable: true\ntags:\n  - systems\n---\n# Zeta")
-        .file("skills/user-only/SKILL.md", USER_ONLY)
+        .file("skills/zeta/SKILL.md", "---\nname: zeta\ndescription: Zeta\ntags:\n  - systems\n---\n# Zeta")
+        .file("skills/alpha/SKILL.md", skill("alpha", "# Alpha"))
         .file(
-            "skills/flat.md",
-            "---\nname: alpha-flat\ndescription: Flat\nagent-invocable: true\ntags:\n  - flat\n---\n",
+            "skills/user-only/SKILL.md",
+            "---\nname: user-only\ndescription: User only\nuser-invocable: true\nagent-invocable: false\n---\n",
         )
-        .file("skills/rule-only.md", RULE_ONLY);
+        .file("skills/flat.md", skill("flat", "# Flat"));
     let client = serve(&workspace).await;
 
-    let (listed, meta) = client.call_displayed("list_skills", ListSkillsInput::default()).await?;
+    let listed = client.list_skills().await?;
 
+    let listed: Vec<_> = listed.iter().map(|skill| (skill.uri.as_str(), json!(skill.frontmatter))).collect();
     assert_eq!(
-        listed["skills"],
-        json!([
-            { "name": "alpha-flat", "description": "Flat", "tags": ["flat"] },
-            { "name": "zeta", "description": "Zeta", "tags": ["systems"] },
-        ])
-    );
-    assert_eq!(meta["display"], json!({ "title": "Skills", "value": "2 skills" }));
-    Ok(())
-}
-
-#[tokio::test]
-async fn instructions_point_to_list_skills_instead_of_embedding_the_catalog() {
-    let workspace = TestWorkspace::new().file("skills/unique-skill/SKILL.md", skill("Unique", "# Unique"));
-    let client = serve(&workspace).await;
-
-    let instructions = client.instructions().unwrap_or_default();
-
-    assert!(instructions.contains("list_skills") && instructions.contains("get_skills"), "{instructions}");
-    assert!(!instructions.contains("unique-skill"), "{instructions}");
-}
-
-#[tokio::test]
-async fn get_skills_loads_directory_skills_and_their_auxiliary_files() -> TestResult {
-    let skill_md = "---\nname: rust\ndescription: Rust\nagent-invocable: true\n---\n# Rust";
-    let workspace = TestWorkspace::new()
-        .file("skills/dir-name/SKILL.md", skill_md)
-        .file("skills/dir-name/traits.md", "# Traits")
-        .file("skills/dir-name/references/REF.md", "# Ref")
-        .file("skills/dir-name/.hidden", "ignored");
-    let client = serve(&workspace).await;
-
-    assert_eq!(
-        get_skill(&client, "rust", None).await?,
-        json!({
-            "name": "rust",
-            "path": "SKILL.md",
-            "content": skill_md,
-            "availableFiles": ["references/REF.md", "traits.md"],
-        })
-    );
-    assert_eq!(
-        get_skill(&client, "rust", Some("traits.md")).await?,
-        json!({ "name": "rust", "path": "traits.md", "content": "# Traits" })
-    );
-    assert_eq!(
-        get_skill(&client, "rust", Some("references/REF.md")).await?,
-        json!({ "name": "rust", "path": "references/REF.md", "content": "# Ref" })
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn get_skills_loads_flat_prompts_by_frontmatter_name() -> TestResult {
-    let rules = "---\nname: rust-rules\ndescription: Rust rules\nagent-invocable: true\n---\nUse Rust conventions.";
-    let workspace = TestWorkspace::new().file("skills/rule-file.md", rules);
-    let client = serve(&workspace).await;
-
-    assert_eq!(
-        get_skill(&client, "rust-rules", None).await?,
-        json!({ "name": "rust-rules", "path": "rule-file.md", "content": rules })
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn get_skills_answers_every_request_in_order() -> TestResult {
-    let workspace = TestWorkspace::new()
-        .file("skills/rust/SKILL.md", skill("Rust", "# Rust"))
-        .file("skills/rust/traits.md", "# Traits")
-        .file("skills/python/SKILL.md", skill("Python", "# Python"));
-    let client = serve(&workspace).await;
-
-    let requests = [("rust", None), ("missing", None), ("rust", Some("traits.md")), ("python", None)];
-    let output = client.call("get_skills", load_skills_input(&requests)).await?;
-
-    let answered: Vec<_> = output["files"]
-        .as_array()
-        .expect("files array")
-        .iter()
-        .map(|file| (file["name"].as_str().unwrap(), file["path"].as_str().unwrap(), file["error"].is_string()))
-        .collect();
-    assert_eq!(
-        answered,
+        listed,
         [
-            ("rust", "SKILL.md", false),
-            ("missing", "SKILL.md", true),
-            ("rust", "traits.md", false),
-            ("python", "SKILL.md", false)
+            ("skill://alpha/SKILL.md", json!({ "name": "alpha", "description": "alpha skill" })),
+            ("skill://zeta/SKILL.md", json!({ "name": "zeta", "description": "Zeta", "tags": ["systems"] })),
         ]
     );
     Ok(())
 }
 
 #[tokio::test]
-async fn get_skills_reports_requests_it_cannot_load() -> TestResult {
-    let workspace = TestWorkspace::new()
-        .file("skills/dir-skill/SKILL.md", skill("Dir", "# Dir"))
-        .file("skills/flat.md", skill("Flat", "# Flat"))
-        .file("skills/user-only/SKILL.md", USER_ONLY)
-        .file("skills/rule-only.md", RULE_ONLY);
+async fn skills_that_are_not_agent_invocable_cannot_be_fetched_by_uri() -> TestResult {
+    let hidden = "---\nname: hidden\ndescription: Hidden\nagent-invocable: false\n---\n";
+    let workspace = TestWorkspace::new().file("skills/hidden/SKILL.md", hidden);
     let client = serve(&workspace).await;
 
-    let cases = [
-        ("missing", None, "Skill not found: missing"),
-        ("user-only", None, "Skill 'user-only' is not agent-invocable"),
-        ("rule-only", None, "Skill 'rule-only' is not agent-invocable"),
-        ("flat", Some("details.md"), "does not support relative paths"),
-        ("dir-skill", Some("/etc/passwd"), "Absolute paths are not allowed"),
-        ("dir-skill", Some("../flat.md"), "Path traversal (..) is not allowed"),
-        ("dir-skill", Some("."), "Path is a directory, not a file"),
-        ("dir-skill", Some("missing.md"), "File not found"),
-    ];
-    for (name, path, error) in cases {
-        let file = get_skill(&client, name, path).await?;
-        assert!(file["content"].is_null(), "{name} {path:?}: {file}");
-        assert!(file["error"].as_str().is_some_and(|message| message.contains(error)), "{name} {path:?}: {file}");
+    assert!(client.get_skill("skill://hidden/SKILL.md").await.is_err());
+    assert!(client.get_skill("skill://missing/SKILL.md").await.is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_skill_lists_every_file_it_ships_and_serves_them_verbatim() -> TestResult {
+    let skill_md = skill("rust", "value: !`echo not-expanded`");
+    let workspace = TestWorkspace::new()
+        .file("skills/rust/SKILL.md", &skill_md)
+        .file("skills/rust/traits.md", "# Traits")
+        .file("skills/rust/references/REF.md", "# Ref")
+        .file("skills/rust/.hidden", "ignored");
+    let client = serve(&workspace).await;
+
+    let skill = client.get_skill("skill://rust/SKILL.md").await?;
+
+    let SkillResources::Files(files) = &skill.resources else { panic!("expected a file manifest: {skill:?}") };
+    let expected = [("SKILL.md", skill_md.as_str()), ("references/REF.md", "# Ref"), ("traits.md", "# Traits")];
+    assert_eq!(files.len(), expected.len(), "{files:?}");
+    for (file, (path, content)) in files.iter().zip(expected) {
+        let uri = format!("skill://rust/{path}");
+        assert_eq!(file, &SkillResource::from_bytes(&uri, content.as_bytes()));
+        assert_eq!(read_text(&client, &uri).await?, (uri, content.to_string()));
     }
+    assert!(client.read_resource("skill://rust/.hidden").await.is_err());
     Ok(())
 }
 
 #[tokio::test]
 async fn later_skill_dirs_extend_and_override_earlier_ones() -> TestResult {
     let workspace = TestWorkspace::new()
-        .file("a/rust/SKILL.md", skill("Rust A", "From A"))
-        .file("a/go/SKILL.md", skill("Go", "Go"))
-        .file("b/rust/SKILL.md", skill("Rust B", "From B"));
+        .file("a/rust/SKILL.md", skill("rust", "From A"))
+        .file("a/go/SKILL.md", skill("go", "Go"))
+        .file("b/rust/SKILL.md", skill("rust", "From B"));
     let dirs = ["missing", "a", "b"].map(|dir| workspace.path(dir));
     let client = connect(SkillsMcp::new(workspace.root(), &dirs), ClientOptions::default()).await;
 
-    let listed = client.call("list_skills", ListSkillsInput::default()).await?;
+    let listed = client.list_skills().await?;
 
+    let uris: Vec<_> = listed.iter().map(|skill| skill.uri.as_str()).collect();
+    assert_eq!(uris, ["skill://go/SKILL.md", "skill://rust/SKILL.md"]);
+    let rust_md = skill("rust", "From B");
     assert_eq!(
-        listed["skills"],
-        json!([{ "name": "go", "description": "Go" }, { "name": "rust", "description": "Rust B" }])
+        listed[1].resources,
+        SkillResources::Files(vec![SkillResource::from_bytes(uris[1], rust_md.as_bytes())])
     );
-    assert_eq!(get_skill(&client, "rust", None).await?["content"], skill("Rust B", "From B"));
+    assert_eq!(read_text(&client, "skill://rust/SKILL.md").await?.1, rust_md);
     Ok(())
 }
 
 #[tokio::test]
-async fn skill_files_expand_shell_interpolations() -> TestResult {
-    let workspace = TestWorkspace::new()
-        .file("skills/expands/SKILL.md", skill("Expands", "value: !`echo ok`"))
-        .file("skills/fails/SKILL.md", skill("Fails", "value: !`exit 1`"));
+async fn listing_picks_up_skills_edited_since_the_server_started() -> TestResult {
+    let workspace = TestWorkspace::new().file("skills/rust/SKILL.md", skill("rust", "Old"));
     let client = serve(&workspace).await;
+    assert_eq!(client.list_skills().await?.len(), 1);
 
-    assert_eq!(get_skill(&client, "expands", None).await?["content"], skill("Expands", "value: ok"));
-    assert_eq!(get_skill(&client, "fails", None).await?["content"], skill("Fails", "value: "));
+    fs::write(workspace.path("skills/rust/SKILL.md"), skill("rust", "New"))?;
+    fs::create_dir(workspace.path("skills/go"))?;
+    fs::write(workspace.path("skills/go/SKILL.md"), skill("go", "Go"))?;
+
+    assert_eq!(client.list_skills().await?.len(), 2);
+    assert_eq!(read_text(&client, "skill://rust/SKILL.md").await?.1, skill("rust", "New"));
     Ok(())
 }
 
@@ -225,20 +152,6 @@ async fn prompt_substitutes_provided_arguments_and_keeps_the_rest() -> TestResul
     Ok(())
 }
 
-#[tokio::test]
-async fn list_skills_input_schema_has_properties_object() -> TestResult {
-    let workspace = TestWorkspace::new();
-    let client = serve(&workspace).await;
-
-    let tools = client.list_tools().await?;
-    let tool = tools.into_iter().find(|tool| tool.name.as_ref() == "list_skills").expect("list_skills tool present");
-
-    let schema = Value::Object((*tool.input_schema).clone());
-    assert_eq!(schema["type"], "object");
-    assert!(schema["properties"].is_object(), "properties must be an object: {schema}");
-    Ok(())
-}
-
 async fn serve(workspace: &TestWorkspace) -> McpClient {
     connect(skills_server(workspace.root()), ClientOptions::default()).await
 }
@@ -249,11 +162,13 @@ async fn prompt_text(client: &McpClient, name: &str, arguments: Value) -> TestRe
     Ok(prompt.messages[0].content.as_text().map_or_default(|content| content.text.clone()))
 }
 
-async fn get_skill(client: &McpClient, name: &str, path: Option<&str>) -> TestResult<Value> {
-    let output = client.call("get_skills", load_skills_input(&[(name, path)])).await?;
-    Ok(output["files"][0].clone())
+async fn read_text(client: &McpClient, uri: &str) -> TestResult<(String, String)> {
+    match client.read_resource(uri).await?.as_slice() {
+        [ResourceContents::TextResourceContents { uri, text, .. }] => Ok((uri.clone(), text.clone())),
+        contents => panic!("expected one text resource: {contents:?}"),
+    }
 }
 
-fn skill(description: &str, body: &str) -> String {
-    format!("---\ndescription: {description}\nagent-invocable: true\n---\n{body}")
+fn skill(name: &str, body: &str) -> String {
+    format!("---\nname: {name}\ndescription: {name} skill\n---\n{body}")
 }
