@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.4](https://github.com/contextbridge/aether/compare/aether-evals-v0.6.3...aether-evals-v0.6.4) - 2026-11-28
+
+### Other
+
+- update Cargo.toml dependencies
+
 ## [0.6.3](https://github.com/contextbridge/aether/compare/aether-evals-v0.6.2...aether-evals-v0.6.3) - 2026-11-23
 
 ### Other

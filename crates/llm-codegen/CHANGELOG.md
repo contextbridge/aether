@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.2](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.3.1...aether-llm-codegen-v0.3.2) - 2026-11-28
+
+### Fixed
+
+- *(llm)* raise Codex GPT-6 context defaults to 500k ([#701](https://github.com/contextbridge/aether/pull/701))
+
 ## [0.3.1](https://github.com/contextbridge/aether/compare/aether-llm-codegen-v0.3.0...aether-llm-codegen-v0.3.1) - 2026-11-23
 
 ### Fixed

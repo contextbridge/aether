@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.3](https://github.com/contextbridge/aether/compare/aether-llm-v0.10.2...aether-llm-v0.10.3) - 2026-11-28
+
+### Added
+
+- *(llm)* send Responses turns over WebSocket for OpenAI and Codex ([#702](https://github.com/contextbridge/aether/pull/702))
+
+### Fixed
+
+- *(llm)* raise Codex GPT-6 context defaults to 500k ([#701](https://github.com/contextbridge/aether/pull/701))
+- *(llm)* emit stream usage at most once per call ([#698](https://github.com/contextbridge/aether/pull/698))
+- *(llm)* support Gemini tool calls over chat completions ([#696](https://github.com/contextbridge/aether/pull/696))
+
 ## [0.10.2](https://github.com/contextbridge/aether/compare/aether-llm-v0.10.1...aether-llm-v0.10.2) - 2026-11-23
 
 ### Other

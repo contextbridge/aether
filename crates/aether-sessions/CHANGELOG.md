@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.4](https://github.com/contextbridge/aether/compare/aether-sessions-v0.4.3...aether-sessions-v0.4.4) - 2026-11-28
+
+### Added
+
+- *(acp)* report MCP tool kinds live and on replay ([#699](https://github.com/contextbridge/aether/pull/699))
+
 ## [0.4.3](https://github.com/contextbridge/aether/compare/aether-sessions-v0.4.2...aether-sessions-v0.4.3) - 2026-11-23
 
 ### Other

@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.10.4](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.10.3...aether-agent-core-v0.10.4) - 2026-11-28
+
+### Added
+
+- mcp over acp, live tool list updates and auth challenges ([#708](https://github.com/contextbridge/aether/pull/708))
+- serve and load skills through the MCP skills extension ([#705](https://github.com/contextbridge/aether/pull/705))
+- *(acp)* report MCP tool kinds live and on replay ([#699](https://github.com/contextbridge/aether/pull/699))
+
+### Other
+
+- remove the artifact review mcp server ([#707](https://github.com/contextbridge/aether/pull/707))
+
 ## [0.10.3](https://github.com/contextbridge/aether/compare/aether-agent-core-v0.10.2...aether-agent-core-v0.10.3) - 2026-11-23
 
 ### Added

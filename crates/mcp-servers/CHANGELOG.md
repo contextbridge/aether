@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.4](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.9.3...aether-mcp-servers-v0.9.4) - 2026-11-28
+
+### Added
+
+- serve and load skills through the MCP skills extension ([#705](https://github.com/contextbridge/aether/pull/705))
+- *(acp)* report MCP tool kinds live and on replay ([#699](https://github.com/contextbridge/aether/pull/699))
+
+### Other
+
+- remove the artifact review mcp server ([#707](https://github.com/contextbridge/aether/pull/707))
+
 ## [0.9.3](https://github.com/contextbridge/aether/compare/aether-mcp-servers-v0.9.2...aether-mcp-servers-v0.9.3) - 2026-11-23
 
 ### Added
