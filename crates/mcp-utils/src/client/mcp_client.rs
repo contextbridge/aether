@@ -130,22 +130,29 @@ impl McpClient {
         let mut changes = self.handler.tool_list_changes();
         stream! {
             let mut subscription = client.tool_list_subscription().await;
+            let mut reopened = false;
             loop {
                 yield client.list_tools().await;
-                loop {
-                    tokio::select! {
-                        biased;
-                        () = client.shutdown.closed.clone() => return,
-                        notified = changes.changed() => match notified {
-                            Ok(()) => break,
-                            Err(_) => return,
-                        },
-                        reported = next_change(&mut subscription) => {
-                            if reported {
-                                break;
-                            }
-                            subscription = None;
+                tokio::select! {
+                    biased;
+                    () = client.shutdown.closed.clone() => return,
+                    notified = changes.changed() => if notified.is_err() {
+                        return;
+                    },
+                    reported = next_change(&mut subscription) => {
+                        if reported {
+                            reopened = false;
+                            continue;
                         }
+                        if reopened {
+                            tracing::warn!(server = client.name(), "MCP tool list subscription ended again without a change");
+                            return;
+                        }
+                        subscription = client.tool_list_subscription().await;
+                        if subscription.is_none() {
+                            return;
+                        }
+                        reopened = true;
                     }
                 }
             }

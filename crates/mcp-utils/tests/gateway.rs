@@ -111,6 +111,16 @@ async fn tool_list_changes_refresh_the_tools() {
 }
 
 #[tokio::test]
+async fn servers_that_will_not_keep_a_subscription_open_are_reported_as_failed() {
+    let server = FakeMcpServer::math().with_short_lived_subscriptions();
+    let gateway = ready(gateway(vec![ServerSpec::in_process("math", server)])).await;
+
+    wait_until(&gateway, |gateway| matches!(gateway.statuses()[0].status, McpServerStatus::Failed { .. })).await;
+
+    assert!(gateway.servers().is_empty());
+}
+
+#[tokio::test]
 async fn failed_tool_refreshes_keep_the_previous_tools() {
     let server = FakeMcpServer::math();
     let state = server.state();

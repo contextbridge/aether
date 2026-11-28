@@ -39,6 +39,7 @@ pub struct FakeMcpServer {
 pub struct FakeMcpState {
     inner: Arc<Mutex<FakeMcpStateInner>>,
     changes: Arc<watch::Sender<()>>,
+    subscription_ends: Arc<watch::Sender<()>>,
 }
 
 #[derive(Clone)]
@@ -152,6 +153,11 @@ impl FakeMcpServer {
         self
     }
 
+    pub fn with_short_lived_subscriptions(self) -> Self {
+        self.state.lock().short_lived_subscriptions = true;
+        self
+    }
+
     pub fn with_legacy_protocol(self) -> Self {
         self.state.lock().legacy_protocol = true;
         self
@@ -225,6 +231,15 @@ impl FakeMcpState {
 
     pub async fn notify_tools_changed(&self) {
         self.mutate_tools_and_notify(|_| {}).await;
+    }
+
+    pub fn end_subscriptions(&self) {
+        self.record(|inner| inner.subscriptions.clear());
+        self.subscription_ends.send_replace(());
+    }
+
+    pub fn subscriptions(&self) -> usize {
+        self.lock().subscriptions.len()
     }
 
     pub fn fail_next_tool_list(&self) {
@@ -488,8 +503,15 @@ impl ServerHandler for FakeMcpServer {
     }
 
     async fn listen(&self, context: SubscriptionContext) -> Result<(), McpError> {
+        if self.state.lock().short_lived_subscriptions {
+            return Ok(());
+        }
+        let mut ends = self.state.subscription_ends.subscribe();
         self.state.subscribe(context.sink().clone());
-        context.cancelled().await;
+        tokio::select! {
+            () = context.cancelled() => {}
+            _ = ends.changed() => {}
+        }
         Ok(())
     }
 
@@ -718,6 +740,7 @@ struct FakeMcpStateInner {
     protocol_version: Option<ProtocolVersion>,
     client: Option<Peer<RoleServer>>,
     subscriptions: Vec<SubscriptionSink>,
+    short_lived_subscriptions: bool,
 }
 
 fn progress_notification(progress: f64) -> ProgressNotificationParam {
