@@ -1,0 +1,61 @@
+[package]
+name = "foxfire-tui"
+version = "0.1.3"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Embeddable terminal UI for AI coding agents via the Agent Client Protocol (ACP)"
+keywords = ["tui", "ai", "agent", "acp", "terminal"]
+categories = ["command-line-interface"]
+
+[features]
+testing = ["foxfire-acp/testing", "foxfire-core/testing", "dep:tempfile", "tokio/test-util"]
+
+[lib]
+name = "foxfire_tui"
+path = "src/lib.rs"
+
+[[test]]
+name = "tui"
+path = "tests/tui/main.rs"
+required-features = ["testing"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints]
+workspace = true
+
+[dependencies]
+clankerdiff-core = { workspace = true }
+clankerdiff-ui-core = { workspace = true }
+clankerdiff-ratatui = { workspace = true }
+rouge-syntax = { workspace = true }
+clankerdiff-client = { workspace = true }
+foxfire-acp = { workspace = true, features = ["client"] }
+foxfire-core = { workspace = true }
+agent-client-protocol = { workspace = true }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+futures = { workspace = true }
+tempfile = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "sync", "process", "time"] }
+clap = { workspace = true }
+log = { workspace = true, features = ["release_max_level_info"] }
+tracing = { workspace = true, features = ["release_max_level_info"] }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+url = { workspace = true }
+unicode-width = { workspace = true }
+
+[dev-dependencies]
+foxfire-acp = { workspace = true, features = ["client", "testing"] }
+foxfire-core = { workspace = true, features = ["testing"] }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }

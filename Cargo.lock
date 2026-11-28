@@ -2533,7 +2533,7 @@ dependencies = [
  "crossterm",
  "imbl",
  "ratatui",
- "rouge-syntax 0.6.0",
+ "rouge-syntax",
  "similar",
  "thiserror 2.0.21",
  "unicode-segmentation",
@@ -2579,7 +2579,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f896d45a12fe018efb770ad40d8036431c87bf70c7eb93fc4acf9daed92b29f6"
 dependencies = [
  "clankerdiff-core",
- "rouge-syntax 0.6.0",
+ "rouge-syntax",
 ]
 
 [[package]]
@@ -2591,8 +2591,8 @@ dependencies = [
  "arborium-theme",
  "clankerdiff-fingerprint",
  "nucleo-matcher",
- "rouge-syntax 0.6.0",
- "rouge-theme 0.6.0",
+ "rouge-syntax",
+ "rouge-theme",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -3605,8 +3605,6 @@ dependencies = [
 [[package]]
 name = "foxfire-tui"
 version = "0.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "84fb450db6a3c6b229541c9abc585195645ec8aa95874d8f386fbd325637b314"
 dependencies = [
  "agent-client-protocol",
  "clankerdiff-client",
@@ -3620,7 +3618,7 @@ dependencies = [
  "futures",
  "log",
  "ratatui",
- "rouge-syntax 0.5.0",
+ "rouge-syntax",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -6584,84 +6582,9 @@ checksum = "9760fac3cf1e37edeac3e71fd5752490626b8644de94b408c58a4caf5e939f42"
 dependencies = [
  "linkify",
  "pulldown-cmark",
- "rouge-syntax 0.6.0",
+ "rouge-syntax",
  "serde",
  "unicase",
-]
-
-[[package]]
-name = "rouge-syntax"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "946543d26b5b768e95f6d616f20f75bc475c034c93f4d615676301e762d2b380"
-dependencies = [
- "arborium-asm",
- "arborium-bash",
- "arborium-batch",
- "arborium-c",
- "arborium-c-sharp",
- "arborium-clojure",
- "arborium-cmake",
- "arborium-commonlisp",
- "arborium-cpp",
- "arborium-css",
- "arborium-dart",
- "arborium-diff",
- "arborium-dockerfile",
- "arborium-elixir",
- "arborium-erlang",
- "arborium-fish",
- "arborium-go",
- "arborium-graphql",
- "arborium-haskell",
- "arborium-hcl",
- "arborium-html",
- "arborium-ini",
- "arborium-java",
- "arborium-javascript",
- "arborium-json",
- "arborium-just",
- "arborium-kotlin",
- "arborium-lua",
- "arborium-make",
- "arborium-markdown",
- "arborium-meson",
- "arborium-ninja",
- "arborium-nix",
- "arborium-objc",
- "arborium-ocaml",
- "arborium-perl",
- "arborium-php",
- "arborium-powershell",
- "arborium-proto",
- "arborium-python",
- "arborium-r",
- "arborium-rego",
- "arborium-ruby",
- "arborium-rust",
- "arborium-scala",
- "arborium-scheme",
- "arborium-scss",
- "arborium-solidity",
- "arborium-sql",
- "arborium-starlark",
- "arborium-svelte",
- "arborium-swift",
- "arborium-theme",
- "arborium-toml",
- "arborium-tsx",
- "arborium-typescript",
- "arborium-vue",
- "arborium-x86asm",
- "arborium-xml",
- "arborium-yaml",
- "arborium-zig",
- "arborium-zsh",
- "cc",
- "rouge-theme 0.5.0",
- "serde",
- "thiserror 2.0.21",
- "tree-sitter",
 ]
 
 [[package]]
@@ -6733,19 +6656,10 @@ dependencies = [
  "arborium-zig",
  "arborium-zsh",
  "cc",
- "rouge-theme 0.6.0",
+ "rouge-theme",
  "serde",
  "thiserror 2.0.21",
  "tree-sitter",
-]
-
-[[package]]
-name = "rouge-theme"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6d608e449bc61db31670509ebe7a3884692883d32be01cb310ad7e3a4744177"
-dependencies = [
- "serde",
 ]
 
 [[package]]
