@@ -2,6 +2,7 @@ use super::fake_http_server::origin;
 use super::{FakeHttpServer, FakeMcpServer, RecordedRequest};
 use crate::client::{Elicitation, ElicitationRequest, HttpAuth, OAuthClientRegistration, OAuthSettings, Transport};
 use crate::gateway::ServerSpec;
+use axum::extract::State;
 use axum::http::{StatusCode, Uri, header::WWW_AUTHENTICATE};
 use axum::response::IntoResponse;
 use axum::routing::post;
@@ -10,10 +11,13 @@ use reqwest::Url;
 use reqwest::header::{AUTHORIZATION, HeaderMap};
 use rmcp::model::{ElicitRequestParams, ElicitResult, ElicitationAction};
 use serde_json::{Value, json};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::mpsc;
 
 pub struct FakeAuthServer {
     http: FakeHttpServer,
+    grants: Grants,
 }
 
 pub struct OAuthPrompt {
@@ -25,8 +29,18 @@ pub const CLIENT_METADATA_URL: &str = "https://client.example/oauth/client-metad
 
 impl FakeAuthServer {
     pub async fn start(server: FakeMcpServer) -> Self {
-        let routes = Router::new().route("/token", post(token)).route("/register", post(register)).fallback(metadata);
-        Self { http: FakeHttpServer::serve(server, routes, require_token).await }
+        let grants = Grants::default();
+        let routes = Router::new()
+            .route("/token", post(token))
+            .with_state(grants.clone())
+            .route("/register", post(register))
+            .fallback(metadata);
+        let guard = grants.clone();
+        Self { http: FakeHttpServer::serve(server, routes, move |request| guard.require_token(request)).await, grants }
+    }
+
+    pub fn revoke_tokens(&self) {
+        self.grants.revoked.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn transport(&self) -> Transport {
@@ -106,20 +120,34 @@ pub const REGISTERED_CLIENT_ID: &str = "registered-client";
 pub const CHALLENGED_SCOPE: &str = "mcp.read";
 const SUPPORTED_SCOPES: [&str; 2] = [CHALLENGED_SCOPE, "mcp.write"];
 
-fn require_token(request: &RecordedRequest) -> Result<(), impl IntoResponse + use<>> {
-    let bearer = format!("Bearer {ACCESS_TOKEN}");
-    if request.headers.get(AUTHORIZATION).is_some_and(|value| *value == bearer) {
-        return Ok(());
-    }
-    let challenge = format!(
-        "Bearer resource_metadata=\"{}/.well-known/oauth-protected-resource/mcp\", scope=\"{CHALLENGED_SCOPE}\"",
-        origin(&request.headers)
-    );
-    Err((StatusCode::UNAUTHORIZED, [(WWW_AUTHENTICATE, challenge)]))
+#[derive(Clone, Default)]
+struct Grants {
+    revoked: Arc<AtomicUsize>,
 }
 
-async fn token() -> Json<Value> {
-    Json(json!({ "access_token": ACCESS_TOKEN, "token_type": "Bearer", "expires_in": 3600 }))
+impl Grants {
+    fn token(&self) -> String {
+        match self.revoked.load(Ordering::Relaxed) {
+            0 => ACCESS_TOKEN.to_string(),
+            revoked => format!("{ACCESS_TOKEN}-{revoked}"),
+        }
+    }
+
+    fn require_token(&self, request: &RecordedRequest) -> Result<(), impl IntoResponse + use<>> {
+        let bearer = format!("Bearer {}", self.token());
+        if request.headers.get(AUTHORIZATION).is_some_and(|value| *value == bearer) {
+            return Ok(());
+        }
+        let challenge = format!(
+            "Bearer resource_metadata=\"{}/.well-known/oauth-protected-resource/mcp\", scope=\"{CHALLENGED_SCOPE}\"",
+            origin(&request.headers)
+        );
+        Err((StatusCode::UNAUTHORIZED, [(WWW_AUTHENTICATE, challenge)]))
+    }
+}
+
+async fn token(State(grants): State<Grants>) -> Json<Value> {
+    Json(json!({ "access_token": grants.token(), "token_type": "Bearer", "expires_in": 3600 }))
 }
 
 async fn register(Json(request): Json<Value>) -> Json<Value> {

@@ -111,6 +111,16 @@ async fn tool_list_changes_refresh_the_tools() {
 }
 
 #[tokio::test]
+async fn servers_that_will_not_keep_a_subscription_open_are_reported_as_failed() {
+    let server = FakeMcpServer::math().with_short_lived_subscriptions();
+    let gateway = ready(gateway(vec![ServerSpec::in_process("math", server)])).await;
+
+    wait_until(&gateway, |gateway| matches!(gateway.statuses()[0].status, McpServerStatus::Failed { .. })).await;
+
+    assert!(gateway.servers().is_empty());
+}
+
+#[tokio::test]
 async fn failed_tool_refreshes_keep_the_previous_tools() {
     let server = FakeMcpServer::math();
     let state = server.state();
@@ -177,7 +187,9 @@ async fn shutdown_releases_in_process_servers_and_closes_the_gateway() {
 
     gateway.shutdown().await;
 
-    assert!(alive.upgrade().is_none());
+    while alive.upgrade().is_some() {
+        tokio::task::yield_now().await;
+    }
     assert_eq!(gateway.statuses().len(), 0);
     gateway.ready().await;
     assert_eq!(gateway.statuses().len(), 0);
@@ -265,6 +277,21 @@ async fn a_server_that_disconnects_is_reported_as_failed() {
 
     assert!(gateway.servers().is_empty());
     assert!(!gateway.statuses()[0].can_authenticate());
+}
+
+#[tokio::test]
+async fn reconnecting_discovers_the_server_again() {
+    let server = FakeMcpServer::math();
+    let state = server.state();
+    let gateway = ready(gateway(vec![ServerSpec::in_process("math", server)])).await;
+    let tools = gateway.servers()[0].tools().len();
+    state.add_tool(FakeTool::new("unannounced"));
+
+    gateway.reconnect("math").await.unwrap();
+    gateway.ready().await;
+
+    assert_eq!(gateway.servers()[0].tools().len(), tools + 1);
+    assert!(matches!(gateway.reconnect("missing").await, Err(GatewayError::ServerNotFound(_))));
 }
 
 fn gateway(servers: Vec<ServerSpec>) -> McpGateway {

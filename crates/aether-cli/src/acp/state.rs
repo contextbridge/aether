@@ -188,7 +188,12 @@ impl AcpState {
         };
         let session_capabilities = acp::SessionCapabilities::new()
             .prompt(prompt_capabilities)
-            .mcp(McpCapabilities::new().stdio(acp::McpStdioCapabilities::new()).http(acp::McpHttpCapabilities::new()))
+            .mcp(
+                McpCapabilities::new()
+                    .stdio(acp::McpStdioCapabilities::new())
+                    .http(acp::McpHttpCapabilities::new())
+                    .acp(acp::McpAcpCapabilities::new()),
+            )
             .title(acp::SessionTitleCapabilities::new())
             .meta(Some(aether_capabilities.to_meta()));
 
@@ -278,7 +283,7 @@ impl AcpState {
         let session_id = init.session_id.clone();
         let commands = active.replace(session_id, SessionActor::spawn(init)).await.map_err(|e| {
             error!("Failed to start session actor: {e}");
-            Error::internal_error()
+            Error::internal_error().data(e.to_string())
         })?;
         Ok((config_options, commands))
     }

@@ -26,6 +26,7 @@ async fn initialize_exposes_only_v2_nested_capabilities() {
         assert!(session.prompt.as_ref().unwrap().embedded_context.is_some());
         assert!(session.mcp.as_ref().unwrap().stdio.is_some());
         assert!(session.mcp.as_ref().unwrap().http.is_some());
+        assert!(session.mcp.as_ref().unwrap().acp.is_some());
         assert_eq!(AetherCapabilities::from_meta(session.prompt.unwrap().meta.as_ref()), AetherCapabilities::default());
         for key in ["loadSession", "list", "resume", "close", "sse"] {
             assert!(!wire.to_string().contains(&format!("\"{key}\":")));

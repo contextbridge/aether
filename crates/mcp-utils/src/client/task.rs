@@ -69,6 +69,7 @@ fn poll_task(client: &McpClient, mut task: Task) -> impl Stream<Item = ToolCallE
             let detailed_task = match client.peer.get_task(GetTaskParams::new(task.task_id.clone())).await {
                 Ok(result) => result.task,
                 Err(error) => {
+                    client.observe(&error);
                     yield abandoned(client, &task.task_id, TaskErrorReason::Get(error)).await;
                     return;
                 }

@@ -52,6 +52,7 @@ dependencies = [
  "aether-telemetry",
  "aether-utils",
  "agent-client-protocol",
+ "agent-client-protocol-rmcp",
  "async-trait",
  "base64 0.23.1",
  "clankerdiff-core",
@@ -467,6 +468,23 @@ checksum = "a12951a4e9a163a9384dec4e5681bd774c0fdb3871c5ed1deb7b44bc630df17a"
 dependencies = [
  "quote",
  "syn 3.0.9",
+]
+
+[[package]]
+name = "agent-client-protocol-rmcp"
+version = "5.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a77e8a7e0924d7f3c3a2d0c718db17170aeed6282975e52279fa2967734d002e"
+dependencies = [
+ "agent-client-protocol",
+ "futures",
+ "futures-concurrency",
+ "rmcp",
+ "schemars 1.2.3",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

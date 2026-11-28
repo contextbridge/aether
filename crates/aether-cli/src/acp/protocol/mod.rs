@@ -9,6 +9,7 @@ pub(crate) mod diff;
 pub(crate) mod elicitation;
 pub(crate) mod events;
 pub(crate) mod mcp;
+pub(crate) mod mcp_transport;
 pub(crate) mod replay;
 
 pub(crate) fn notify(

@@ -79,6 +79,10 @@ impl McpCatalog {
         self.core.gateway.authenticate(server).await
     }
 
+    pub async fn reconnect(&self, server: &str) -> Result<(), GatewayError> {
+        self.core.gateway.reconnect(server).await
+    }
+
     pub fn deferred_tools_socket(&self) -> Option<&Path> {
         self.deferred_tools_server.as_deref().map(ServerHandle::path)
     }

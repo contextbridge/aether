@@ -391,7 +391,7 @@ mod tests {
                 );
                 let pair = foxfire_acp::testing::connect_pair(agent, client).await;
                 pair.client.send_request(foxfire_acp::testing::initialize_request()).block_task().await.unwrap();
-                let io = SessionIo::new(Some(pair.agent), "session".into());
+                let io = SessionIo::new(Some(pair.agent), &[], "session".into()).0;
                 for event in events {
                     project_agent_event(event, NotificationMode::Live, &io);
                 }

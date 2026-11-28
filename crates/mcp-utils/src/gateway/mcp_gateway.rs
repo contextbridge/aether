@@ -102,6 +102,10 @@ impl McpGateway {
         self.connection(server).ok_or_else(|| GatewayError::ServerNotFound(server.to_string()))?.sign_in().await
     }
 
+    pub async fn reconnect(&self, server: &str) -> Result<(), GatewayError> {
+        self.connection(server).ok_or_else(|| GatewayError::ServerNotFound(server.to_string()))?.reconnect().await
+    }
+
     pub async fn shutdown(&self) {
         self.stop.cancel();
         self.tasks.wait().await;
