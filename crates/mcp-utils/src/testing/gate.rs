@@ -26,9 +26,13 @@ impl Gate {
         let _ = state.wait_for(|state| state.reached).await;
     }
 
+    pub async fn drained(&self) {
+        self.state.closed().await;
+    }
+
     pub(crate) async fn pass(&self) {
-        self.state.send_modify(|state| state.reached = true);
         let mut state = self.state.subscribe();
+        self.state.send_modify(|state| state.reached = true);
         let _ = state.wait_for(|state| state.open).await;
     }
 }

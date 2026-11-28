@@ -7,6 +7,7 @@ use super::{
 };
 use crate::server::McpServer;
 use aether_auth::SigV4Signer;
+use futures::future::BoxFuture;
 use reqwest::header::HeaderMap;
 use rmcp::{
     ClientLifecycleMode, RoleClient,
@@ -34,6 +35,7 @@ pub enum Transport {
     Http { url: String, headers: HeaderMap, auth: HttpAuth },
     InProcess(McpServer),
     Unix(PathBuf),
+    Custom(CustomTransport),
 }
 
 #[derive(Debug, Clone)]
@@ -45,7 +47,31 @@ pub enum HttpAuth {
 
 pub(super) type ClientService = RunningService<RoleClient, Arc<Handler>>;
 
+#[derive(Clone)]
+pub struct CustomTransport(Arc<Connect>);
+
+type Connect = dyn Fn(Arc<Handler>) -> BoxFuture<'static, Result<ClientService>> + Send + Sync;
+
+impl std::fmt::Debug for CustomTransport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CustomTransport")
+    }
+}
+
 impl Transport {
+    pub fn custom<T: rmcp::transport::Transport<RoleClient> + 'static>(
+        open: impl Fn() -> Option<T> + Send + Sync + 'static,
+    ) -> Self {
+        Self::Custom(CustomTransport(Arc::new(move |handler| {
+            let transport = open();
+            Box::pin(async move {
+                let transport =
+                    transport.ok_or_else(|| ClientError::Disconnected { server: handler.server().into() })?;
+                serve(handler, transport).await
+            })
+        })))
+    }
+
     pub(crate) fn supports_oauth(&self, options: &ClientOptions) -> bool {
         options.oauth_prompts().is_some() && matches!(self, Self::Http { auth: HttpAuth::OAuth(_), .. })
     }
@@ -58,6 +84,7 @@ impl Transport {
             Self::Http { url, headers, auth } => connect_http(handler, url, headers, auth, options).await,
             Self::InProcess(server) => serve(handler, server.serve_in_memory()).await,
             Self::Unix(path) => connect_unix(handler, path).await,
+            Self::Custom(CustomTransport(open)) => open(handler).await,
         };
         match connected {
             Err(ClientError::Connect { server, source }) if supports_oauth && requires_authorization(&source) => {

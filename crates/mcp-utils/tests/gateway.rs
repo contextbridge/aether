@@ -279,6 +279,21 @@ async fn a_server_that_disconnects_is_reported_as_failed() {
     assert!(!gateway.statuses()[0].can_authenticate());
 }
 
+#[tokio::test]
+async fn reconnecting_discovers_the_server_again() {
+    let server = FakeMcpServer::math();
+    let state = server.state();
+    let gateway = ready(gateway(vec![ServerSpec::in_process("math", server)])).await;
+    let tools = gateway.servers()[0].tools().len();
+    state.add_tool(FakeTool::new("unannounced"));
+
+    gateway.reconnect("math").await.unwrap();
+    gateway.ready().await;
+
+    assert_eq!(gateway.servers()[0].tools().len(), tools + 1);
+    assert!(matches!(gateway.reconnect("missing").await, Err(GatewayError::ServerNotFound(_))));
+}
+
 fn gateway(servers: Vec<ServerSpec>) -> McpGateway {
     McpGateway::new(servers, &ClientOptions::default())
 }

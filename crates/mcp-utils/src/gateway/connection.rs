@@ -13,7 +13,7 @@ pub(super) struct Connection {
     name: String,
     supports_oauth: bool,
     state: watch::Receiver<ConnectionState>,
-    sign_ins: mpsc::UnboundedSender<Reply>,
+    commands: mpsc::UnboundedSender<Command>,
 }
 
 #[derive(Debug, Clone)]
@@ -33,9 +33,9 @@ impl Connection {
         tasks: &TaskTracker,
     ) -> Self {
         let (state, receiver) = watch::channel(ConnectionState::Connecting);
-        let (sign_ins, requests) = mpsc::unbounded_channel();
+        let (commands, requests) = mpsc::unbounded_channel();
         let supports_oauth = spec.transport.supports_oauth(options);
-        let connection = Self { name: spec.name.clone(), supports_oauth, state: receiver, sign_ins };
+        let connection = Self { name: spec.name.clone(), supports_oauth, state: receiver, commands };
         let task = ConnectionTask { spec, options: options.clone(), supports_oauth, state };
         tasks.spawn(task.run(requests, stop));
         connection
@@ -61,8 +61,14 @@ impl Connection {
 
     pub(super) async fn sign_in(&self) -> Result<(), GatewayError> {
         let (reply, outcome) = oneshot::channel();
-        self.sign_ins.send(reply).map_err(|_| GatewayError::Closed)?;
+        self.commands.send(Command::SignIn(reply)).map_err(|_| GatewayError::Closed)?;
         outcome.await.unwrap_or(Err(GatewayError::Closed))
+    }
+
+    pub(super) async fn reconnect(&self) -> Result<(), GatewayError> {
+        let (ack, restarted) = oneshot::channel();
+        self.commands.send(Command::Reconnect(ack)).map_err(|_| GatewayError::Closed)?;
+        restarted.await.map_err(|_| GatewayError::Closed)
     }
 
     pub(super) fn status(&self) -> McpServerStatusEntry {
@@ -104,6 +110,11 @@ impl ConnectionState {
     }
 }
 
+enum Command {
+    SignIn(Reply),
+    Reconnect(oneshot::Sender<()>),
+}
+
 type Reply = oneshot::Sender<Result<(), GatewayError>>;
 
 type Update = Result<ConnectedServer, GatewayError>;
@@ -121,18 +132,25 @@ struct ConnectionTask {
 }
 
 impl ConnectionTask {
-    async fn run(self, mut sign_ins: mpsc::UnboundedReceiver<Reply>, stop: CancellationToken) {
+    async fn run(self, mut commands: mpsc::UnboundedReceiver<Command>, stop: CancellationToken) {
         let mut pending = None;
         let mut connection = pin!(self.connection(Credentials::Existing));
         loop {
             tokio::select! {
                 () = stop.cancelled() => break,
                 Some(update) = connection.next() => self.settle(update, &mut pending),
-                Some(reply) = sign_ins.recv() => {
-                    if let Some(credentials) = self.sign_in(reply, &mut pending) {
-                        connection.set(self.connection(credentials));
+                Some(command) = commands.recv() => match command {
+                    Command::SignIn(reply) => {
+                        if let Some(credentials) = self.sign_in(reply, &mut pending) {
+                            connection.set(self.connection(credentials));
+                        }
                     }
-                }
+                    Command::Reconnect(ack) => {
+                        self.state.send_replace(ConnectionState::Connecting);
+                        connection.set(self.connection(Credentials::Existing));
+                        let _ = ack.send(());
+                    }
+                },
             }
         }
         let server = self.state.borrow().connected().cloned();
