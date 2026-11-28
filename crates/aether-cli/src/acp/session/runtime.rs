@@ -57,25 +57,20 @@ pub(crate) trait RuntimeFactory: Send + Sync {
         spec: &AgentSpec,
         initial_messages: Vec<ChatMessage>,
         usage_seed: Option<SessionUsageEvent>,
+        client_servers: Vec<ServerSpec>,
         elicitations: mpsc::Sender<Elicitation>,
     ) -> Result<AgentRuntime, SessionError>;
 }
 
 pub(crate) struct ProductionRuntimeFactory {
     cwd: PathBuf,
-    mcp_servers: Vec<ServerSpec>,
     agent_deps: AgentDeps,
     elicitation: ElicitationCapability,
 }
 
 impl ProductionRuntimeFactory {
-    pub(crate) fn new(
-        cwd: PathBuf,
-        mcp_servers: Vec<ServerSpec>,
-        agent_deps: AgentDeps,
-        elicitation: ElicitationCapability,
-    ) -> Self {
-        Self { cwd, mcp_servers, agent_deps, elicitation }
+    pub(crate) fn new(cwd: PathBuf, agent_deps: AgentDeps, elicitation: ElicitationCapability) -> Self {
+        Self { cwd, agent_deps, elicitation }
     }
 }
 
@@ -86,11 +81,12 @@ impl RuntimeFactory for ProductionRuntimeFactory {
         spec: &AgentSpec,
         initial_messages: Vec<ChatMessage>,
         usage_seed: Option<SessionUsageEvent>,
+        client_servers: Vec<ServerSpec>,
         elicitations: mpsc::Sender<Elicitation>,
     ) -> Result<AgentRuntime, SessionError> {
         let sink = ElicitationSink::new(elicitations, self.elicitation.clone());
         let runtime = RuntimeBuilder::from_spec(self.cwd.clone(), spec.clone())
-            .extra_servers(self.mcp_servers.clone())
+            .extra_servers(client_servers)
             .elicitation(sink)
             .agent_deps(self.agent_deps.clone())
             .resume_usage(usage_seed)

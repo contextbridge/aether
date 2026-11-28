@@ -24,7 +24,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::process::Command as ProcessCommand;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::{Instant, sleep_until};
 use tokio_util::sync::CancellationToken;
@@ -41,6 +41,8 @@ use super::prompts::{PromptQueue, SubmittedPrompt};
 use super::runtime::{AgentRuntime, RuntimeFactory};
 use crate::acp::protocol::commands::available_commands;
 use crate::acp::protocol::events::{NotificationMode, project_agent_event, stop_reason};
+use crate::acp::protocol::mcp::map_acp_mcp_servers;
+use crate::acp::protocol::mcp_transport::{AttachedClient, ClientLink};
 use crate::acp::protocol::replay::replay_to_client;
 use crate::acp::state::validate_prompt_support;
 use crate::output::print_message;
@@ -158,13 +160,18 @@ impl Drop for SessionHandle {
 
 #[derive(Clone)]
 pub(crate) struct SessionIo {
-    connection: Option<ConnectionTo<Client>>,
+    client: AttachedClient,
     session_id: SessionId,
 }
 
 impl SessionIo {
-    pub(crate) fn new(connection: Option<ConnectionTo<Client>>, session_id: SessionId) -> Self {
-        Self { connection, session_id }
+    pub(crate) fn new(
+        connection: Option<ConnectionTo<Client>>,
+        mcp_servers: &[acp::McpServer],
+        session_id: SessionId,
+    ) -> (Self, watch::Sender<Option<ClientLink>>) {
+        let (slot, client) = watch::channel(connection.map(|cx| ClientLink::new(cx, mcp_servers)));
+        (Self { client, session_id }, slot)
     }
 
     pub(crate) fn session_id(&self) -> &SessionId {
@@ -172,7 +179,7 @@ impl SessionIo {
     }
 
     pub(crate) fn for_session(&self, session_id: SessionId) -> Self {
-        Self { connection: self.connection.clone(), session_id }
+        Self { client: self.client.clone(), session_id }
     }
 
     pub(crate) fn send_update(&self, update: acp::SessionUpdate) {
@@ -184,8 +191,8 @@ impl SessionIo {
     }
 
     pub(crate) fn send(&self, notification: impl agent_client_protocol::JsonRpcNotification) {
-        if let Some(connection) = &self.connection {
-            notify(connection, notification);
+        if let Some(client) = self.client.borrow().as_ref() {
+            notify(client.cx(), notification);
         }
     }
 }
@@ -213,6 +220,7 @@ pub(crate) struct SessionActorInit {
 /// is serialized through the command channel.
 pub(crate) struct SessionActor {
     io: SessionIo,
+    client: watch::Sender<Option<ClientLink>>,
     git_diff: GitDiffService,
     cwd: PathBuf,
     mcp_servers: Vec<acp::McpServer>,
@@ -241,11 +249,12 @@ pub(crate) struct SessionActor {
 impl SessionActor {
     pub(crate) async fn spawn(init: SessionActorInit) -> Result<SessionHandle, SessionError> {
         let cancel = CancellationToken::new();
-        let io = SessionIo::new(init.connection, init.session_id.clone());
+        let (io, client) = SessionIo::new(init.connection, &init.mcp_servers, init.session_id.clone());
         let git_diff = GitDiffService::new(init.cwd.clone(), io.clone());
         let (elicitation_tx, elicitation_rx) = mpsc::channel(ELICITATION_CHANNEL_CAPACITY);
         let mut actor = SessionActor {
             io,
+            client,
             git_diff,
             cwd: init.cwd,
             mcp_servers: init.mcp_servers,
@@ -389,17 +398,20 @@ impl SessionActor {
 
         let spec = self.specs.get(target).ok_or_else(|| SessionError::AgentNotFound(target.display_name()))?;
         let usage_seed = last_session_usage(&self.transcript).cloned();
+        let client_servers = map_acp_mcp_servers(self.mcp_servers.clone(), &self.cwd, &self.client.subscribe());
+        let spawned =
+            self.runtime_factory.spawn(spec, messages, usage_seed, client_servers, self.elicitation_tx.clone());
         let runtime = tokio::select! {
             biased;
             () = self.cancel.cancelled() => return Err(SessionError::Cancelled),
-            runtime = self.runtime_factory.spawn(spec, messages, usage_seed, self.elicitation_tx.clone()) => runtime?,
+            runtime = spawned => runtime?,
         };
         self.runtimes.insert(target.clone(), runtime);
         Ok(())
     }
 
     fn reset_idle_deadline(&mut self) {
-        self.idle_deadline = if self.io.connection.is_none() && self.prompts.is_idle() {
+        self.idle_deadline = if self.client.borrow().is_none() && self.prompts.is_idle() {
             self.hooks.idle.as_ref().and_then(|idle| Instant::now().checked_add(idle.after))
         } else {
             None
@@ -419,12 +431,14 @@ impl SessionActor {
                 self.start_prompt(content, display_content, responder).await;
             }
             SessionCommand::Attach { connection, cwd, mcp_servers, replay, reply } => {
-                if self.cwd != cwd || self.mcp_servers != mcp_servers {
+                if self.cwd != cwd || !same_servers(&self.mcp_servers, &mcp_servers) {
                     let _ = reply
                         .send(Err(Error::invalid_params().data("live session cwd and MCP servers cannot be changed")));
                     return;
                 }
-                self.io.connection = Some(connection);
+                self.client.send_replace(Some(ClientLink::new(connection, &mcp_servers)));
+                self.mcp_servers = mcp_servers;
+                self.reconnect_client_servers().await;
                 self.reset_idle_deadline();
                 if replay {
                     replay_to_client(&self.transcript, &self.io);
@@ -439,7 +453,7 @@ impl SessionActor {
                 let _ = reply.send(Ok(self.config_options()));
             }
             SessionCommand::Detach { reply } => {
-                self.io.connection = None;
+                self.client.send_replace(None);
                 self.reset_idle_deadline();
                 let _ = reply.send(());
             }
@@ -618,6 +632,20 @@ impl SessionActor {
         }
     }
 
+    async fn reconnect_client_servers(&mut self) {
+        let hosted = self.mcp_servers.iter().filter_map(|server| match server {
+            acp::McpServer::Acp(server) => Some(&server.name),
+            _ => None,
+        });
+        for server in hosted {
+            for runtime in self.runtimes.values() {
+                if let Err(error) = runtime.mcp().reconnect(server).await {
+                    warn!(%error, server, "Failed to reconnect client MCP server");
+                }
+            }
+        }
+    }
+
     fn publish_active_mcps(&mut self) {
         let statuses = self.active_runtime().mcp().statuses();
         self.advertised_servers = None;
@@ -665,11 +693,19 @@ async fn run_idle_command(cwd: PathBuf, command: String) {
     }
 }
 
+fn same_servers(a: &[acp::McpServer], b: &[acp::McpServer]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(a, b)| match (a, b) {
+            (acp::McpServer::Acp(a), acp::McpServer::Acp(b)) => a.name == b.name && a.meta == b.meta,
+            _ => a == b,
+        })
+}
+
 fn on_elicitation(io: &SessionIo, elicitation: Elicitation) {
     match elicitation {
         Elicitation::Request(elicitation) => {
-            if let Some(connection) = &io.connection {
-                spawn_elicitation_request(connection, &io.session_id, elicitation);
+            if let Some(client) = io.client.borrow().as_ref() {
+                spawn_elicitation_request(client.cx(), &io.session_id, elicitation);
             }
         }
         Elicitation::Complete { server, id } => {

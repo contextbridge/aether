@@ -49,7 +49,8 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 
 # ACP
-agent-client-protocol = { version = "=5.0.0", features = ["unstable_auth_status", "unstable_protocol_v2", "unstable_session_set_title", "unstable_subagents"] }
+agent-client-protocol = { version = "=5.0.0", features = ["unstable_auth_status", "unstable_mcp_over_acp", "unstable_protocol_v2", "unstable_session_set_title", "unstable_subagents"] }
+agent-client-protocol-rmcp = { version = "=5.0.0", features = ["rmcp_3", "unstable_mcp_over_acp"] }
 tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"] }
 
 # MCP and API clients

@@ -188,7 +188,12 @@ impl AcpState {
         };
         let session_capabilities = acp::SessionCapabilities::new()
             .prompt(prompt_capabilities)
-            .mcp(McpCapabilities::new().stdio(acp::McpStdioCapabilities::new()).http(acp::McpHttpCapabilities::new()))
+            .mcp(
+                McpCapabilities::new()
+                    .stdio(acp::McpStdioCapabilities::new())
+                    .http(acp::McpHttpCapabilities::new())
+                    .acp(acp::McpAcpCapabilities::new()),
+            )
             .title(acp::SessionTitleCapabilities::new())
             .meta(Some(aether_capabilities.to_meta()));
 

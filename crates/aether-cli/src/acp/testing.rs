@@ -220,6 +220,10 @@ impl AcpTestHarness {
         self.runtime_control.lock().unwrap().extra_servers.push(server);
     }
 
+    pub fn script_llm(&self, provider: FakeLlmProvider) {
+        self.runtime_control.lock().unwrap().provider = Some(Arc::new(provider));
+    }
+
     pub fn add_stalled_mcp_server(&self) {
         self.runtime_control.lock().unwrap().stalled_server = true;
     }
@@ -811,6 +815,7 @@ struct FakeRuntimeControl {
     agent_prompts: watch::Sender<usize>,
     extra_servers: Vec<ServerSpec>,
     stalled_server: bool,
+    provider: Option<Arc<dyn StreamingModelProvider>>,
 }
 
 impl FakeRuntimeControl {
@@ -852,6 +857,7 @@ impl RuntimeFactory for FakeRuntimeFactory {
         spec: &AgentSpec,
         initial_messages: Vec<ChatMessage>,
         usage_seed: Option<SessionUsageEvent>,
+        client_servers: Vec<ServerSpec>,
         elicitations: mpsc::Sender<Elicitation>,
     ) -> Result<AgentRuntime, SessionError> {
         let pending = self.control.lock().unwrap().pending.take();
@@ -866,12 +872,13 @@ impl RuntimeFactory for FakeRuntimeFactory {
             .get(&spec.name)
             .or_else(|| self.agents.values().next())
             .ok_or_else(|| SessionError::AgentNotFound(spec.name.clone()))?;
-        let (servers, stalled_server) = {
+        let (servers, stalled_server, provider) = {
             let control = self.control.lock().unwrap();
-            (control.servers(def), control.stalled_server)
+            (control.servers(def), control.stalled_server, control.provider.clone())
         };
+        let servers = servers.into_iter().chain(client_servers).collect();
         let mut builder = RuntimeBuilder::from_spec(self.cwd.clone(), spec.clone())
-            .provider(def.provider.clone())
+            .provider(provider.unwrap_or_else(|| def.provider.clone()))
             .extra_servers(servers)
             .elicitation(ElicitationSink::form_and_url(elicitations))
             .resume_usage(usage_seed);
@@ -898,6 +905,7 @@ impl RuntimeFactory for StubRuntimeFactory {
         _spec: &AgentSpec,
         _initial_messages: Vec<ChatMessage>,
         _usage_seed: Option<SessionUsageEvent>,
+        _client_servers: Vec<ServerSpec>,
         elicitations: mpsc::Sender<Elicitation>,
     ) -> Result<AgentRuntime, SessionError> {
         let (runtime, mut stub_elicitations) =

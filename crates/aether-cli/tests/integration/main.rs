@@ -1,5 +1,6 @@
 mod acp_agent_switching;
 mod acp_cancellation;
+mod acp_client_mcp;
 mod acp_control_plane;
 mod acp_git_diff;
 mod acp_mcp_sign_in;

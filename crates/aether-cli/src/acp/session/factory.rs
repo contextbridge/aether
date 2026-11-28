@@ -22,7 +22,6 @@ use super::config::SessionConfigState;
 use super::hooks::SessionHooks;
 use super::model::{Modes, pick_default_model};
 use super::runtime::{ProductionRuntimeFactory, RuntimeFactory};
-use crate::acp::protocol::mcp::map_acp_mcp_servers;
 use crate::resolve::{InitialSessionSelection, resolve_agent_from_catalog};
 use crate::settings_args::SettingsSourceArgs;
 use aether_sessions::{SessionStore, SessionStoreError};
@@ -154,19 +153,8 @@ impl SessionFactory {
             .with_conversation_id(session_id)
     }
 
-    fn production_runtime_factory(
-        &self,
-        cwd: PathBuf,
-        mcp_servers: Vec<acp::McpServer>,
-        deps: AgentDeps,
-    ) -> Arc<dyn RuntimeFactory> {
-        let mcp_servers = map_acp_mcp_servers(mcp_servers, &cwd);
-        Arc::new(ProductionRuntimeFactory::new(
-            cwd,
-            mcp_servers,
-            deps,
-            self.elicitation.get().cloned().unwrap_or_default(),
-        ))
+    fn production_runtime_factory(&self, cwd: PathBuf, deps: AgentDeps) -> Arc<dyn RuntimeFactory> {
+        Arc::new(ProductionRuntimeFactory::new(cwd, deps, self.elicitation.get().cloned().unwrap_or_default()))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -182,10 +170,11 @@ impl SessionFactory {
         cx: Option<&ConnectionTo<Client>>,
     ) -> SessionActorInit {
         let agent_deps = self.session_deps(mode_catalog.specs.catalog(), session_id.0.as_ref());
-        let runtime_factory =
-            self.config.runtime_factory.clone().unwrap_or_else(|| {
-                self.production_runtime_factory(cwd.clone(), mcp_servers.clone(), agent_deps.clone())
-            });
+        let runtime_factory = self
+            .config
+            .runtime_factory
+            .clone()
+            .unwrap_or_else(|| self.production_runtime_factory(cwd.clone(), agent_deps.clone()));
         SessionActorInit {
             session_id,
             cwd,

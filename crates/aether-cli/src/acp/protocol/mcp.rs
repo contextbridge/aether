@@ -1,14 +1,15 @@
+use super::mcp_transport::{AttachedClient, client_mcp_transport};
 use aether_core::mcp::http_transport;
 use agent_client_protocol::v2::schema::{HttpHeader, McpServer};
 use mcp_utils::client::{HeaderMap, Transport};
 use mcp_utils::gateway::ServerSpec;
 use std::path::Path;
 
-pub(crate) fn map_acp_mcp_servers(servers: Vec<McpServer>, cwd: &Path) -> Vec<ServerSpec> {
+pub(crate) fn map_acp_mcp_servers(servers: Vec<McpServer>, cwd: &Path, client: &AttachedClient) -> Vec<ServerSpec> {
     servers
         .into_iter()
         .filter_map(|s| {
-            try_map_mcp_server(s, cwd).or_else(|| {
+            try_map_mcp_server(s, cwd, client).or_else(|| {
                 tracing::warn!("Unsupported ACP MCP transport or invalid HTTP headers, skipping server");
                 None
             })
@@ -16,8 +17,8 @@ pub(crate) fn map_acp_mcp_servers(servers: Vec<McpServer>, cwd: &Path) -> Vec<Se
         .collect()
 }
 
-fn try_map_mcp_server(server: McpServer, cwd: &Path) -> Option<ServerSpec> {
-    use McpServer::{Http, Stdio};
+fn try_map_mcp_server(server: McpServer, cwd: &Path, client: &AttachedClient) -> Option<ServerSpec> {
+    use McpServer::{Acp, Http, Stdio};
     let (name, transport) = match server {
         Stdio(stdio) => (
             stdio.name,
@@ -29,6 +30,7 @@ fn try_map_mcp_server(server: McpServer, cwd: &Path) -> Option<ServerSpec> {
             },
         ),
         Http(http) => (http.name, http_transport(http.url, header_map(&http.headers)?)),
+        Acp(acp) => (acp.name.clone(), client_mcp_transport(client.clone(), acp.name)),
         _ => return None,
     };
     Some(ServerSpec { name, transport })
@@ -45,7 +47,7 @@ mod tests {
     use mcp_utils::client::HttpAuth;
 
     fn map(servers: Vec<acp::McpServer>) -> Vec<ServerSpec> {
-        map_acp_mcp_servers(servers, Path::new("/workspace"))
+        map_acp_mcp_servers(servers, Path::new("/workspace"), &tokio::sync::watch::channel(None).1)
     }
 
     #[test]

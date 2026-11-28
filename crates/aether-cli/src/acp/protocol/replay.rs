@@ -69,7 +69,7 @@ mod tests {
         tokio::task::LocalSet::new().run_until(async {
             let (cx, mut peer) = foxfire_acp::testing::test_connection().await;
             let session_id = SessionId::new("test");
-            let io = SessionIo::new(Some(cx), session_id.clone());
+            let io = SessionIo::new(Some(cx), &[], session_id.clone()).0;
             let events = vec![
                 SessionEvent::User(UserEvent::Message {
                     message_id: "user".into(),
