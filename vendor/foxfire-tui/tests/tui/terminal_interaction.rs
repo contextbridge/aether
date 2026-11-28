@@ -1,0 +1,570 @@
+use super::support::*;
+use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+use foxfire_acp::ReasoningEffort;
+use foxfire_tui::error::AppError;
+
+const MODELS: &[(&str, &str)] = &[("a", "Alpha"), ("b", "Beta")];
+
+#[test]
+fn a_remote_mention_completes_from_the_agents_checkout_and_is_linked_for_it_to_read() {
+    let git = FakeGit::new("/workspace").with_untracked("remote.rs", "fn remote() {}\n");
+    let mut ui =
+        TestUiBuilder::new().session(SessionCoreConfigBuilder::remote_workspace).git(git).dimensions(120, 24).build();
+
+    ui.type_text("draft ");
+    ui.key(key(KeyCode::Char('@')));
+    ui.assert_viewport_contains("remote.rs");
+    ui.key(key(KeyCode::Enter));
+    assert_eq!(ui.app().composer().text(), "draft @remote.rs ");
+    ui.key(key(KeyCode::Enter));
+
+    let prompt = ui.agent().prompt.try_recv().expect("the agent received the prompt").prompt;
+    let link = acp::ResourceLink::new("remote.rs", "file:///workspace/remote.rs");
+    assert!(prompt.contains(&acp::ContentBlock::ResourceLink(link)), "the agent reads the file itself: {prompt:?}");
+}
+
+#[test]
+fn remote_git_review_opens() {
+    let git = FakeGit::new("/workspace").with_untracked("remote.rs", "fn remote() {}\n");
+    let mut ui =
+        TestUiBuilder::new().session(SessionCoreConfigBuilder::remote_workspace).git(git).dimensions(120, 24).build();
+    ui.key(ctrl('g'));
+
+    assert!(ui.app().core().git_review().is_some_and(|review| review.snapshot.is_some()));
+    ui.assert_viewport_contains("remote.rs");
+}
+
+#[test]
+fn remote_pasted_paths_remain_text_and_settings_remain_local() {
+    let mut ui = TestUiBuilder::new()
+        .session(SessionCoreConfigBuilder::remote_workspace)
+        .themes(&["local-theme.json"])
+        .dimensions(120, 24)
+        .build();
+    ui.terminal_event(crossterm::event::Event::Paste("/server/screenshot.png".into()));
+    assert_eq!(ui.app().composer().text(), "/server/screenshot.png");
+    ui.key(key(KeyCode::Enter));
+    assert_eq!(sent_prompts(&mut ui), ["/server/screenshot.png"]);
+    ui.complete_prompt(acp::StopReason::EndTurn);
+    ui.run_command("/settings");
+    assert!(ui.app().has_modal());
+    ui.key(key(KeyCode::Enter));
+    ui.type_text("local-theme");
+    ui.assert_viewport_contains("local-theme");
+}
+
+mod picker_click {
+    use super::*;
+
+    #[test]
+    fn session_picker_click_selects_the_visible_row_under_the_pointer() {
+        for (filter, row, resumed) in [("", 2, "bbb"), ("Alpha", 2, "ccc"), ("", 0, "aaa"), ("", 10, "ccc")] {
+            let mut ui = TestUi::with_dimensions(80, 24);
+            ui.open_session_picker(vec![
+                session_info("aaa", "/tmp", "Alpha Project", ""),
+                session_info("bbb", "/tmp", "Beta Project", ""),
+                session_info("ccc", "/tmp", "Alpha Config", ""),
+            ]);
+            ui.type_text(filter);
+            ui.draw();
+            ui.terminal_event(click(2, row));
+            assert!(ui.app().has_modal(), "a click selects without resuming");
+
+            ui.key(key(KeyCode::Enter));
+            assert_eq!(
+                resumed_session(&mut ui).as_deref(),
+                Some(resumed),
+                "clicking row {row} under filter {filter:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn session_picker_hover_leaves_the_selection_alone() {
+        let mut ui = TestUi::with_dimensions(80, 24);
+        ui.open_session_picker(vec![
+            session_info("aaa", "/tmp", "Alpha Project", ""),
+            session_info("bbb", "/tmp", "Beta Project", ""),
+        ]);
+        ui.draw();
+        ui.terminal_event(hover(2, 2));
+
+        ui.key(key(KeyCode::Enter));
+        assert_eq!(resumed_session(&mut ui).as_deref(), Some("aaa"));
+    }
+
+    #[test]
+    fn session_picker_click_requests_the_clicked_session_preview() {
+        let mut ui =
+            TestUiBuilder::new().session(SessionCoreConfigBuilder::session_preview).dimensions(120, 24).build();
+        ui.open_session_picker(vec![
+            session_info("sess-1", "/tmp/one", "Session One", ""),
+            session_info("sess-2", "/tmp/two", "Session Two", ""),
+        ]);
+        assert_eq!(ui.held::<Preview>().0.session_id, "sess-1");
+
+        let row = ui.viewport_row("Session Two").expect("second session row");
+        ui.terminal_event(click(2, row));
+
+        assert_eq!(ui.held::<Preview>().0.session_id, "sess-2", "the clicked session is previewed");
+    }
+
+    #[test]
+    fn model_selector_click_clamps_reasoning_to_the_clicked_model() {
+        let levels =
+            |levels: &[ReasoningEffort]| SelectOptionMeta { reasoning_levels: levels.to_vec(), ..Default::default() };
+        let opus = model_choice(
+            "anthropic:opus",
+            "Anthropic / Opus",
+            levels(&[ReasoningEffort::Low, ReasoningEffort::Medium, ReasoningEffort::High]),
+        );
+        let chat = model_choice("deepseek:chat", "DeepSeek / Chat", levels(&[ReasoningEffort::Low]));
+        let mut ui = TestUiBuilder::new()
+            .session(|session| {
+                session.config_options(vec![
+                    model_picker("anthropic:opus", vec![opus, chat]),
+                    reasoning_option("high", &["low", "medium", "high"]),
+                ])
+            })
+            .dimensions(80, 24)
+            .build();
+        open_settings_row(&mut ui, "Model");
+
+        ui.click_text("Chat");
+        ui.key(key(KeyCode::Esc));
+
+        assert_sets_config_option(&mut ui, "model", "anthropic:opus,deepseek:chat");
+        assert_sets_config_option(&mut ui, "reasoning_effort", "low");
+    }
+
+    #[test]
+    fn workspace_picker_click_moves_to_the_visible_row_under_the_pointer() {
+        for (filter, row, moved) in [("", 2, Some("/tmp/beta")), ("other", 1, Some("/tmp/other")), ("", 0, None)] {
+            let mut ui =
+                TestUiBuilder::new().session(SessionCoreConfigBuilder::workspace_move).dimensions(80, 24).build();
+            let paths = ["/tmp/alpha", "/tmp/beta", "/tmp/other"];
+            open_workspace_picker(&mut ui, paths.map(|path| workspace_entry(path, false)).to_vec());
+            ui.type_text(filter);
+            ui.draw();
+            ui.terminal_event(click(2, row));
+            assert_eq!(
+                moved_workspace(&mut ui).as_deref(),
+                moved.map(Path::new),
+                "clicking row {row} under filter {filter:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn mouse_owning_surfaces_scroll_their_own_selection() {
+    let surfaces: [(&str, Step, Step); 5] = [
+        (
+            "settings",
+            |ui| ui.run_command("/settings"),
+            |ui| {
+                ui.key(key(KeyCode::Enter));
+                ui.assert_viewport_contains("Beta");
+            },
+        ),
+        (
+            "session picker",
+            |ui| ui.open_session_picker(["a", "b", "c"].map(|id| acp::SessionInfo::new(id, "/tmp")).to_vec()),
+            |ui| {
+                ui.key(key(KeyCode::Enter));
+                assert_eq!(resumed_session(ui).as_deref(), Some("b"));
+            },
+        ),
+        (
+            "workspace picker",
+            |ui| open_workspace_picker(ui, ["/tmp/a", "/tmp/b"].map(|path| workspace_entry(path, false)).to_vec()),
+            |ui| {
+                ui.key(key(KeyCode::Enter));
+                assert_eq!(moved_workspace(ui).as_deref(), Some(Path::new("/tmp/b")));
+            },
+        ),
+        (
+            "command picker",
+            |ui| ui.type_text("/"),
+            |ui| {
+                ui.key(key(KeyCode::Tab));
+                assert!(ui.try_held::<ListSessions>().is_some());
+            },
+        ),
+        (
+            "prompt search",
+            |ui| search(ui, "h", vec![prompt_search_hit("hello", 0, 1), prompt_search_hit("hey", 0, 1)]),
+            |ui| assert_eq!(ui.app().composer().text(), "hey"),
+        ),
+    ];
+    let build = || {
+        TestUiBuilder::new()
+            .session(|session| session.config_options(vec![model_select("a", MODELS)]).workspace_move().prompt_search())
+            .dimensions(80, 24)
+            .build()
+    };
+    for (surface, open, assert_second_selected) in surfaces {
+        let mut ui = build();
+        assert!(!ui.app().needs_mouse_capture(), "the conversation leaves the mouse to the terminal");
+        open(&mut ui);
+        assert!(ui.app().needs_mouse_capture(), "{surface} should capture the mouse");
+        ui.key(key(KeyCode::Esc));
+        assert!(!ui.app().needs_mouse_capture(), "closing {surface} should release the mouse");
+
+        let mut ui = build();
+        open(&mut ui);
+        ui.draw();
+        for scroll in [scroll_down(2, 2), scroll_down(2, 2), scroll_up(2, 2)] {
+            ui.terminal_event(scroll);
+        }
+        assert_eq!(ui.bells(), 0, "{surface}");
+        assert!(ui.app().needs_mouse_capture(), "{surface} should stay open");
+        assert_second_selected(&mut ui);
+    }
+}
+
+#[test]
+fn every_surface_exits_on_double_ctrl_c_and_closes_when_the_connection_is_lost() {
+    let surfaces: [(&str, Step); 7] = [
+        ("conversation", |_| {}),
+        ("command picker", |ui| ui.type_text("/")),
+        ("session picker", |ui| ui.open_session_picker(vec![acp::SessionInfo::new("other", "/tmp")])),
+        ("workspace picker", |ui| open_workspace_picker(ui, vec![workspace_entry("/tmp/sandbox", false)])),
+        ("settings", |ui| ui.run_command("/settings")),
+        ("elicitation", |ui| {
+            ui.elicit(form_elicitation("test-server", "Approve?", ElicitationSchema::new()));
+        }),
+        ("artifact review", |ui| {
+            let meta = plan_meta("# Plan\nbody").to_meta();
+            ui.elicit(form_elicitation("review", "Review artifact", ElicitationSchema::new()).meta(meta));
+        }),
+    ];
+    let build = || TestUiBuilder::new().session(SessionCoreConfigBuilder::workspace_move).build();
+    for (surface, open) in surfaces {
+        let mut ui = build();
+        open(&mut ui);
+        ui.key(ctrl('c'));
+        assert!(ui.app().status_line_model().exit_confirmation, "{surface}: the first Ctrl+C arms exit");
+        assert!(ui.app().exit_result().is_none(), "{surface}");
+        ui.key(ctrl('c'));
+        assert!(matches!(ui.app().exit_result(), Some(Ok(()))), "{surface}: the second Ctrl+C exits");
+
+        let mut ui = build();
+        open(&mut ui);
+        ui.acp_event(AcpEvent::ConnectionClosed);
+        assert!(!ui.app().has_modal() && !ui.app().full_screen_active(), "{surface} should close");
+        assert!(!ui.app().needs_mouse_capture(), "{surface} should release the mouse");
+        assert!(matches!(ui.app().exit_result(), Some(Err(AppError::ConnectionLost))), "{surface}");
+    }
+}
+
+#[test]
+fn bell_rings_once_when_a_submitted_turn_ends_normally() {
+    let scenarios: [(&str, Step, usize); 5] = [
+        ("normal completion", |ui| ui.turn("hello", "done"), 1),
+        (
+            "cancellation",
+            |ui| {
+                ui.submit("hello");
+                ui.complete_prompt(acp::StopReason::Cancelled);
+            },
+            0,
+        ),
+        (
+            "prompt error",
+            |ui| {
+                ui.refuse_prompts(agent_error("internal error"));
+                ui.submit("hello");
+            },
+            0,
+        ),
+        (
+            "connection close",
+            |ui| {
+                ui.submit("hello");
+                ui.acp_event(AcpEvent::ConnectionClosed);
+            },
+            0,
+        ),
+        ("unsolicited completion", |ui| ui.complete_prompt(acp::StopReason::EndTurn), 0),
+    ];
+    for (scenario, run, expected) in scenarios {
+        let mut ui = TestUi::new();
+        run(&mut ui);
+        assert_eq!(ui.bells(), expected, "{scenario}");
+    }
+}
+
+mod resize {
+    use super::*;
+
+    #[test]
+    fn resize_preserves_composer_content() {
+        let mut app = TestUi::new();
+
+        app.terminal_event(crossterm::event::Event::Resize(120, 30));
+
+        app.type_text("hello resize");
+        assert_eq!(app.app().composer().text(), "hello resize");
+    }
+
+    #[test]
+    fn resize_no_duplicate_history() {
+        let mut ui = TestUiBuilder::new().dimensions(80, 20).build();
+
+        ui.submit("before resize");
+
+        ui.draw();
+        ui.terminal_event(crossterm::event::Event::Resize(120, 30));
+        ui.draw();
+
+        let viewport = buffer_text(ui.backend().buffer());
+        assert_eq!(viewport.matches("before resize").count(), 1);
+    }
+}
+
+mod event_routing {
+    use super::*;
+
+    #[test]
+    fn mouse_activation_uses_shared_settings_actions() {
+        use agent_client_protocol::v2::schema::{AuthMethod, AuthMethodAgent, SessionConfigOption};
+
+        fn settings_app(
+            options: Vec<SessionConfigOption>,
+            servers: Vec<McpServerStatusEntry>,
+            methods: Vec<AuthMethod>,
+        ) -> TestUi {
+            let mut ui = TestUiBuilder::new()
+                .session(|session| session.config_options(options).auth_methods(methods))
+                .dimensions(80, 24)
+                .build();
+            ui.acp_event(mcp_notification(servers));
+            ui
+        }
+
+        let mut ui = settings_app(vec![model_select("a", MODELS)], vec![], vec![]);
+        open_settings_row(&mut ui, "Model");
+        ui.click_text("Beta");
+        assert_sets_config_option(&mut ui, "model", "b");
+
+        let server = McpServerStatusEntry::new("linear", McpServerStatus::NeedsOAuth)
+            .with_auth_capability(McpServerAuthCapability::OAuth);
+        let mut ui = settings_app(vec![], vec![server], vec![]);
+        open_settings_row(&mut ui, "MCP Servers");
+        ui.click_text("linear");
+        assert_authenticates_mcp_server(&mut ui, "linear");
+
+        let methods = vec![AuthMethod::Agent(AuthMethodAgent::new("codex", "Codex"))];
+        let mut ui = settings_app(vec![], vec![], methods);
+        open_settings_row(&mut ui, "Provider Logins");
+        ui.click_text("Codex");
+        assert_eq!(ui.held::<Login>().0.method_id.0.as_ref(), "codex");
+    }
+
+    #[test]
+    fn form_modal_scroll_answers_the_choice_in_focus() {
+        let mut ui = TestUi::with_dimensions(80, 24);
+        let choices = StringPropertySchema::new().enum_values(vec!["first".into(), "second".into(), "third".into()]);
+        let schema = ElicitationSchema::new().property("choice", choices, false);
+        let response_rx = ui.elicit(form_elicitation("test", "Pick one", schema));
+        assert!(ui.app().needs_mouse_capture());
+
+        ui.draw();
+        for scroll in [scroll_down(2, 3), scroll_down(2, 3), scroll_up(2, 3)] {
+            ui.terminal_event(scroll);
+        }
+        ui.key(key(KeyCode::Enter));
+
+        let response = ui.answer_to(response_rx);
+        assert_eq!(accepted_content(&response), serde_json::json!({ "choice": "second" }));
+    }
+
+    /// A survey of many questions walks one page at a time; every question
+    /// must be reachable, not just the ones that fit the first screen.
+    #[test]
+    fn form_modal_walks_to_the_last_question() {
+        const QUESTIONS: usize = 40;
+
+        let mut ui = TestUi::with_dimensions(80, 24);
+        let mut schema = ElicitationSchema::new();
+        for index in 0..QUESTIONS {
+            schema = schema.property(format!("question_{index:02}"), BooleanPropertySchema::new(), false);
+        }
+
+        ui.elicit(form_elicitation("test", "Pick some", schema));
+
+        ui.draw();
+        let shows = |ui: &mut TestUi, needle: &str| buffer_text(ui.backend().buffer()).contains(needle);
+        assert!(shows(&mut ui, "question_00"), "the first question starts on screen");
+        assert!(!shows(&mut ui, "question_39"), "the last question starts on a later page");
+
+        for _ in 1..QUESTIONS {
+            ui.key(key(KeyCode::Tab));
+        }
+        ui.draw();
+
+        assert!(shows(&mut ui, "question_39"), "Tab reaches the last question");
+        assert!(shows(&mut ui, "✓"), "the review tab is reachable at the end of the strip");
+    }
+
+    /// A page with more options than the modal is tall has to scroll, or the
+    /// options below the fold can never be reached.
+    #[test]
+    fn form_modal_scrolls_the_focused_option_into_view() {
+        const OPTIONS: usize = 40;
+
+        let values = (0..OPTIONS).map(|index| format!("option_{index:02}")).collect::<Vec<_>>();
+        let schema =
+            ElicitationSchema::new().property("choice", StringPropertySchema::new().enum_values(values), false);
+
+        let mut ui = TestUi::with_dimensions(80, 24);
+        ui.elicit(form_elicitation("test", "Pick one", schema));
+
+        ui.draw();
+        let shows = |ui: &mut TestUi, needle: &str| buffer_text(ui.backend().buffer()).contains(needle);
+        assert!(shows(&mut ui, "option_00"), "the first option starts on screen");
+        assert!(!shows(&mut ui, "option_39"), "the last option starts below the fold");
+
+        for _ in 1..OPTIONS {
+            ui.key(key(KeyCode::Down));
+        }
+        ui.draw();
+
+        assert!(shows(&mut ui, "option_39"), "the focused option scrolled into view");
+        assert!(!shows(&mut ui, "option_00"), "the options above it scrolled away");
+    }
+
+    /// The modal is drawn centred inside the viewport, so its options sit an
+    /// arbitrary number of rows down. A click has to hit the option under the
+    /// pointer rather than one counted from the top of the screen.
+    #[test]
+    fn form_modal_click_answers_the_option_under_the_pointer() {
+        let mut ui = TestUi::with_dimensions(80, 24);
+        let schema = ElicitationSchema::new()
+            .property("alpha", BooleanPropertySchema::new().default_value(false), false)
+            .property("bravo", BooleanPropertySchema::new().default_value(false), false);
+
+        let response_rx = ui.elicit(form_elicitation("test", "Pick one", schema));
+
+        ui.draw();
+
+        let screen = buffer_text(ui.backend().buffer());
+        let yes = screen.lines().position(|row| row.contains("1  Yes")).expect("the first option should be on screen");
+        ui.terminal_event(click(20, u16::try_from(yes).unwrap()));
+
+        ui.key(key(KeyCode::Enter));
+        ui.key(key(KeyCode::Enter));
+        ui.key(key(KeyCode::Enter));
+
+        let response = ui.answer_to(response_rx);
+        assert_eq!(accepted_content(&response), serde_json::json!({ "alpha": true, "bravo": false }));
+    }
+
+    /// An option is as many rows as it was drawn on, so clicking a wrapped
+    /// continuation row hits the option rather than falling between two.
+    #[test]
+    fn form_modal_click_hits_every_row_an_option_occupies() {
+        let mut ui = TestUi::with_dimensions(80, 24);
+        let schema = ElicitationSchema::new().property(
+            "choice",
+            StringPropertySchema::new().enum_values(vec![
+                "a-very-long-option-title-that-certainly-wraps-onto-a-second-row".to_string(),
+                "short".to_string(),
+            ]),
+            false,
+        );
+
+        let response_rx = ui.elicit(form_elicitation("test", "Pick one", schema));
+
+        ui.draw();
+
+        let needle = "certainly-wraps";
+        for row in buffer_text(ui.backend().buffer())
+            .lines()
+            .enumerate()
+            .filter(|(_, row)| row.contains(needle) || row.contains("onto-a-second-row"))
+            .map(|(row, _)| row)
+            .collect::<Vec<_>>()
+        {
+            ui.terminal_event(click(20, u16::try_from(row).unwrap()));
+        }
+        ui.key(key(KeyCode::Enter));
+
+        let response = ui.answer_to(response_rx);
+        assert_eq!(
+            accepted_content(&response),
+            serde_json::json!({
+                "choice": "a-very-long-option-title-that-certainly-wraps-onto-a-second-row"
+            })
+        );
+    }
+}
+
+mod refocus_click {
+    use agent_client_protocol::v2::schema::{AuthMethod, AuthMethodAgent};
+    use crossterm::event::Event;
+
+    use super::*;
+
+    fn codex_logged_in_via_browser() -> TestUi {
+        let methods = vec![AuthMethod::Agent(AuthMethodAgent::new("codex", "Codex"))];
+        let mut ui = TestUiBuilder::new().session(|session| session.auth_methods(methods)).dimensions(80, 24).build();
+        open_settings_row(&mut ui, "Provider Logins");
+
+        ui.click_text("Codex");
+        ui.terminal_event(Event::FocusLost);
+        ui.answer::<Login>(Ok(acp::LoginAuthResponse::new()));
+        ui.draw();
+        ui
+    }
+
+    #[test]
+    fn click_after_refocusing_can_log_in_again() {
+        let mut ui = codex_logged_in_via_browser();
+        ui.terminal_event(Event::FocusGained);
+        ui.click_text("Codex");
+        ui.click_text("Codex");
+        assert_eq!(std::iter::from_fn(|| ui.try_held::<Login>()).count(), 1);
+    }
+
+    #[test]
+    fn click_after_refocusing_from_the_keyboard_is_not_swallowed() {
+        let mut ui = codex_logged_in_via_browser();
+        ui.terminal_event(Event::FocusGained);
+        ui.key(key(KeyCode::Up));
+        ui.click_text("Codex");
+        assert_eq!(std::iter::from_fn(|| ui.try_held::<Login>()).count(), 1);
+    }
+}
+
+fn mouse_event(kind: MouseEventKind, column: u16, row: u16) -> crossterm::event::Event {
+    crossterm::event::Event::Mouse(MouseEvent { kind, column, row, modifiers: KeyModifiers::NONE })
+}
+
+fn scroll_down(column: u16, row: u16) -> crossterm::event::Event {
+    mouse_event(MouseEventKind::ScrollDown, column, row)
+}
+
+fn scroll_up(column: u16, row: u16) -> crossterm::event::Event {
+    mouse_event(MouseEventKind::ScrollUp, column, row)
+}
+
+fn hover(column: u16, row: u16) -> crossterm::event::Event {
+    mouse_event(MouseEventKind::Moved, column, row)
+}
+
+fn click(column: u16, row: u16) -> crossterm::event::Event {
+    mouse_event(MouseEventKind::Down(MouseButton::Left), column, row)
+}
+
+fn resumed_session(ui: &mut TestUi) -> Option<String> {
+    ui.try_held::<Resume>().map(|(request, _)| request.session_id.0.to_string())
+}
+
+fn moved_workspace(ui: &mut TestUi) -> Option<PathBuf> {
+    match ui.try_held::<MoveWorkspace>()?.0.target {
+        WorkspaceMoveTarget::Existing { path } => Some(path),
+        WorkspaceMoveTarget::New { .. } => None,
+    }
+}
