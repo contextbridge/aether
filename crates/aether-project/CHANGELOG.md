@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.4](https://github.com/contextbridge/aether/compare/aether-project-v0.6.3...aether-project-v0.6.4) - 2026-11-28
+
+### Other
+
+- remove the artifact review mcp server ([#707](https://github.com/contextbridge/aether/pull/707))
+
 ## [0.6.3](https://github.com/contextbridge/aether/compare/aether-project-v0.6.2...aether-project-v0.6.3) - 2026-11-23
 
 ### Other

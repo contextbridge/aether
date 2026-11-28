@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.1](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.8.0...aether-mcp-utils-v0.8.1) - 2026-11-28
+
+### Added
+
+- mcp over acp, live tool list updates and auth challenges ([#708](https://github.com/contextbridge/aether/pull/708))
+- serve and load skills through the MCP skills extension ([#705](https://github.com/contextbridge/aether/pull/705))
+- *(acp)* report MCP tool kinds live and on replay ([#699](https://github.com/contextbridge/aether/pull/699))
+
 ## [0.8.0](https://github.com/contextbridge/aether/compare/aether-mcp-utils-v0.7.17...aether-mcp-utils-v0.8.0) - 2026-11-17
 
 ### Other
