@@ -291,6 +291,22 @@ async fn concurrent_new_sessions_leave_one_live_session() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn new_session_startup_failure_reports_its_cause() {
+    AcpTestHarness::run(|harness| async move {
+        let mut startup = harness.pause_next_runtime();
+        let new_session =
+            harness.client_cx.send_request(NewSessionRequest::new(AbsolutePath::new("/tmp"))).block_task();
+        startup.wait_until_started().await;
+        startup.finish(false);
+
+        let error = new_session.await.expect_err("startup failure rejects the session");
+        let data = error.data.expect("error carries the startup failure").to_string();
+        assert!(data.contains("injected startup failure"), "{data}");
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn concurrent_resumes_of_one_session_share_one_actor() {
     AcpTestHarness::run(|harness| async move {
         harness.append_stored_session("stored", "2026-05-01T00:00:00Z");

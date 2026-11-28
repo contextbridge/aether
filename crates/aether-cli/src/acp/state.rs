@@ -278,7 +278,7 @@ impl AcpState {
         let session_id = init.session_id.clone();
         let commands = active.replace(session_id, SessionActor::spawn(init)).await.map_err(|e| {
             error!("Failed to start session actor: {e}");
-            Error::internal_error()
+            Error::internal_error().data(e.to_string())
         })?;
         Ok((config_options, commands))
     }
